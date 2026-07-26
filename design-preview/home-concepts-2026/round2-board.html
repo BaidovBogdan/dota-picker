@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Counterpick — Round 02 Board</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        min-width: 2140px;
+        min-height: 1040px;
+        color: #eceae3;
+        background: #0c0e0d;
+        font-family: Arial, sans-serif;
+      }
+
+      body {
+        margin: 0;
+        padding: 28px 34px 34px;
+        background:
+          radial-gradient(circle at 50% -30%, rgba(124, 133, 126, 0.17), transparent 48%),
+          #0c0e0d;
+      }
+
+      header {
+        display: flex;
+        height: 96px;
+        align-items: flex-start;
+        justify-content: space-between;
+        border-bottom: 1px solid #303531;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 42px;
+        line-height: 0.92;
+        letter-spacing: -0.04em;
+        text-transform: uppercase;
+      }
+
+      header p {
+        margin: 5px 0 0;
+        color: #8e938f;
+        font-family: monospace;
+        font-size: 11px;
+        letter-spacing: 0.08em;
+      }
+
+      main {
+        display: grid;
+        grid-template-columns: repeat(5, 390px);
+        justify-content: space-between;
+        gap: 24px;
+        padding-top: 22px;
+      }
+
+      figure {
+        margin: 0;
+      }
+
+      iframe {
+        display: block;
+        width: 390px;
+        height: 844px;
+        background: #000;
+        border: 1px solid #343a36;
+        box-shadow: 0 18px 42px rgba(0, 0, 0, 0.42);
+      }
+
+      figcaption {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 10px;
+        padding-top: 11px;
+      }
+
+      figcaption strong {
+        font-size: 14px;
+        text-transform: uppercase;
+      }
+
+      figcaption span {
+        color: #8e938f;
+        font-family: monospace;
+        font-size: 9px;
+      }
+
+      .held {
+        color: #f04432;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div>
+        <h1>Counterpick / Home / Round 02</h1>
+        <p>ЧЕТЫРЕ НОВЫХ АРТ-ДИРЕКЦИИ · ВАРИАНТ 02 СОХРАНЁН · 390 × 844</p>
+      </div>
+      <p>DESIGN ROUND 02 · 23 JUL 2026</p>
+    </header>
+    <main>
+      <figure>
+        <iframe
+          src="round2.html?export=1&amp;concept=last-pick"
+          title="Last Pick Clock"
+        ></iframe>
+        <figcaption><strong>01 / Last Pick Clock</strong><span>TIME</span></figcaption>
+      </figure>
+      <figure>
+        <iframe
+          src="round2.html?export=1&amp;concept=broadcast"
+          title="TI Broadcast"
+        ></iframe>
+        <figcaption><strong class="held">02 / TI Broadcast</strong><span>HELD</span></figcaption>
+      </figure>
+      <figure>
+        <iframe
+          src="round2.html?export=1&amp;concept=dota"
+          title="Dota Draft Chamber"
+        ></iframe>
+        <figcaption><strong>03 / Dota Draft Chamber</strong><span>DOTA</span></figcaption>
+      </figure>
+      <figure>
+        <iframe
+          src="round2.html?export=1&amp;concept=contact"
+          title="Hero Contact Sheet"
+        ></iframe>
+        <figcaption><strong>04 / Hero Contact Sheet</strong><span>SCAN</span></figcaption>
+      </figure>
+      <figure>
+        <iframe
+          src="round2.html?export=1&amp;concept=lan"
+          title="LAN Room 2005"
+        ></iframe>
+        <figcaption><strong>05 / LAN Room ’05</strong><span>LEGACY</span></figcaption>
+      </figure>
+    </main>
+  </body>
+</html>

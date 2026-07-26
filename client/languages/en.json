@@ -1,0 +1,10 @@
+{
+  "ios": {
+    "CFBundleDisplayName": "Counterpick",
+    "NSCameraUsageDescription": "Allow Counterpick to photograph a draft and recognize heroes.",
+    "NSPhotoLibraryUsageDescription": "Allow Counterpick to select a draft screenshot and recognize heroes."
+  },
+  "android": {
+    "app_name": "Counterpick"
+  }
+}

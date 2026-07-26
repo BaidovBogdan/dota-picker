@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: dota_picker
+      POSTGRES_USER: dota_picker
+      POSTGRES_PASSWORD: dota_picker
+    ports:
+      - "5432:5432"
+    volumes:
+      - dota_picker_postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dota_picker -d dota_picker"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  dota_picker_postgres:

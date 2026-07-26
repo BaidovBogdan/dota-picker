@@ -1,0 +1,13 @@
+node_modules/
+.sdk-migration-backup/
+.expo/
+dist/
+web-build/
+output/
+*.log
+.env
+.env.*
+!.env.example
+expo-env.d.ts
+ios/
+android/

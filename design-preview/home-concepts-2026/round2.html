@@ -1,0 +1,844 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Второй раунд дизайн-концепций главного экрана Dota Picker: четыре новых направления и сохранённый TI Broadcast"
+    />
+    <title>Counterpick — дизайн-раунд 02</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800;900&family=Cinzel:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=Oswald:wght@500;600;700&family=Rajdhani:wght@500;600;700&family=VT323&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="round2.css" />
+  </head>
+  <body>
+    <svg class="icon-sprite" aria-hidden="true">
+      <symbol id="i-scan" viewBox="0 0 24 24">
+        <path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3" />
+        <path d="M8 12h8" />
+      </symbol>
+      <symbol id="i-camera" viewBox="0 0 24 24">
+        <path d="M4 8.5h3l1.4-2h7.2l1.4 2h3v10H4z" />
+        <circle cx="12" cy="13.5" r="3.2" />
+      </symbol>
+      <symbol id="i-history" viewBox="0 0 24 24">
+        <path d="M5 8a8 8 0 1 1-1 6" />
+        <path d="M5 4v4h4M12 8v5l3 2" />
+      </symbol>
+      <symbol id="i-user" viewBox="0 0 24 24">
+        <circle cx="12" cy="8" r="3.5" />
+        <path d="M5 20c.7-4 3-6 7-6s6.3 2 7 6" />
+      </symbol>
+      <symbol id="i-chevron" viewBox="0 0 24 24">
+        <path d="m9 5 7 7-7 7" />
+      </symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24">
+        <path d="M12 5v14M5 12h14" />
+      </symbol>
+      <symbol id="i-crosshair" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="6" />
+        <path d="M12 2v4M12 18v4M2 12h4M18 12h4" />
+      </symbol>
+      <symbol id="i-arrow" viewBox="0 0 24 24">
+        <path d="M4 12h15M14 6l6 6-6 6" />
+      </symbol>
+      <symbol id="i-map" viewBox="0 0 24 24">
+        <path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3z" />
+        <path d="M9 3v15M15 6v15" />
+      </symbol>
+      <symbol id="i-keyboard" viewBox="0 0 24 24">
+        <rect x="3" y="5" width="18" height="14" rx="1" />
+        <path d="M6 9h1M10 9h1M14 9h1M18 9h1M6 13h1M10 13h1M14 13h4M7 16h10" />
+      </symbol>
+    </svg>
+
+    <div class="studio studio--round2">
+      <header class="studio__header">
+        <div>
+          <p class="studio__eyebrow">COUNTERPICK / DESIGN ROUND 02</p>
+          <h1>Четыре новых.<br />Второй остаётся.</h1>
+        </div>
+        <div class="studio__status">
+          <span>CONCEPT 02 HELD</span>
+          <span>4 NEW DIRECTIONS</span>
+          <span>APP CODE UNTOUCHED</span>
+        </div>
+      </header>
+
+      <nav class="concept-tabs" role="tablist" aria-label="Выбор дизайн-концепции">
+        <button
+          class="concept-tab is-active"
+          type="button"
+          role="tab"
+          aria-selected="true"
+          aria-controls="concept-last-pick"
+          data-concept="last-pick"
+        >
+          <span>01</span>
+          <strong>Last Pick Clock</strong>
+        </button>
+        <button
+          class="concept-tab"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          aria-controls="concept-broadcast"
+          data-concept="broadcast"
+        >
+          <span>02</span>
+          <strong>TI Broadcast</strong>
+        </button>
+        <button
+          class="concept-tab"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          aria-controls="concept-dota"
+          data-concept="dota"
+        >
+          <span>03</span>
+          <strong>Dota Draft Chamber</strong>
+        </button>
+        <button
+          class="concept-tab"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          aria-controls="concept-contact"
+          data-concept="contact"
+        >
+          <span>04</span>
+          <strong>Hero Contact Sheet</strong>
+        </button>
+        <button
+          class="concept-tab"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          aria-controls="concept-lan"
+          data-concept="lan"
+        >
+          <span>05</span>
+          <strong>LAN Room ’05</strong>
+        </button>
+      </nav>
+
+      <main class="studio__stage">
+        <aside class="concept-copy">
+          <section class="concept-copy__item is-active" data-copy="last-pick">
+            <p class="concept-copy__number">01 / 05 · NEW</p>
+            <h2>Last Pick Clock</h2>
+            <p>
+              Главный экран как турнирный таймер: не набор карточек, а один момент давления
+              перед последним пиком.
+            </p>
+            <dl>
+              <div><dt>Сигнатура</dt><dd>Пять пиков замыкают круг таймера</dd></div>
+              <div><dt>Характер</dt><dd>Precise / tense / industrial</dd></div>
+              <div><dt>Не делаем</dt><dd>Неон, спидометр и dashboard-виджеты</dd></div>
+            </dl>
+          </section>
+          <section class="concept-copy__item" data-copy="broadcast">
+            <p class="concept-copy__number">02 / 05 · HELD</p>
+            <h2>TI Broadcast</h2>
+            <p>
+              Тот самый второй вариант без изменений: жёсткая редакционная сетка,
+              турнирный lower third и большая спортивная типографика.
+            </p>
+            <dl>
+              <div><dt>Сигнатура</dt><dd>Редакционный hero cut и live ticker</dd></div>
+              <div><dt>Характер</dt><dd>Editorial / esports / immediate</dd></div>
+              <div><dt>Статус</dt><dd>Оставлен для прямого сравнения</dd></div>
+            </dl>
+          </section>
+          <section class="concept-copy__item" data-copy="dota">
+            <p class="concept-copy__number">03 / 05 · NEW</p>
+            <h2>Dota Draft Chamber</h2>
+            <p>
+              Dota-native направление на языке настоящего pick phase: плотная линия
+              портретов, strategy map, Radiant/Dire и lock-in вместо псевдофэнтези.
+            </p>
+            <dl>
+              <div><dt>Сигнатура</dt><dd>Герои раскладываются прямо по линиям карты</dd></div>
+              <div><dt>Характер</dt><dd>Authentic / tactical / in-world</dd></div>
+              <div><dt>Ассеты</dt><dd>Официальные Valve hero art, logo и strategy map</dd></div>
+            </dl>
+          </section>
+          <section class="concept-copy__item" data-copy="contact">
+            <p class="concept-copy__number">04 / 05 · NEW</p>
+            <h2>Hero Contact Sheet</h2>
+            <p>
+              Экран строится вокруг самой сильной функции продукта — распознавания
+              скриншота. Драфт проявляется как контактный лист фотоплёнки.
+            </p>
+            <dl>
+              <div><dt>Сигнатура</dt><dd>Красная линия проявляет найденных героев</dd></div>
+              <div><dt>Характер</dt><dd>Photographic / raw / utilitarian</dd></div>
+              <div><dt>Не делаем</dt><dd>Polaroid, стикеры и декоративную «редакционность»</dd></div>
+            </dl>
+          </section>
+          <section class="concept-copy__item" data-copy="lan">
+            <p class="concept-copy__number">05 / 05 · NEW</p>
+            <h2>LAN Room ’05</h2>
+            <p>
+              Не киберпанк, а физическая вещь из старой LAN-комнаты: ABS-пластик, CRT,
+              функциональные клавиши и одна тяжёлая READY.
+            </p>
+            <dl>
+              <div><dt>Сигнатура</dt><dd>Контрпик запускается как аппаратная команда</dd></div>
+              <div><dt>Характер</dt><dd>Nostalgic / tactile / underground</dd></div>
+              <div><dt>Не делаем</dt><dd>Синий неон, Windows 95 и нечитаемый glitch</dd></div>
+            </dl>
+          </section>
+        </aside>
+
+        <div class="phone-frame">
+          <div class="phone-frame__hardware" aria-hidden="true">
+            <span></span>
+          </div>
+
+          <section
+            class="phone concept concept--last-pick is-active"
+            id="concept-last-pick"
+            role="tabpanel"
+            aria-label="Концепция Last Pick Clock"
+            data-panel="last-pick"
+          >
+            <header class="lp-top">
+              <div class="lp-index"><span>CP</span><strong>DRAFT TIMER</strong></div>
+              <div class="lp-patch">ALL PICK<br /><strong>7.41D</strong></div>
+              <button class="lp-quota demo-action" type="button" data-demo="Лимит разборов">
+                <span>03</span><small>LEFT</small>
+              </button>
+            </header>
+
+            <section class="lp-clock" aria-label="Таймер последнего пика">
+              <div class="lp-clock__rail"></div>
+              <div class="lp-clock__center">
+                <span>LAST PICK</span>
+                <strong>00:27</strong>
+                <small>THREE ENEMIES LOCKED</small>
+              </div>
+              <button class="lp-node lp-node--1 demo-action" type="button" data-demo="Pudge выбран">
+                <img
+                  src="https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/pudge.png"
+                  alt="Pudge"
+                />
+                <span>01</span>
+              </button>
+              <button class="lp-node lp-node--2 demo-action" type="button" data-demo="Axe выбран">
+                <img
+                  src="https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/axe.png"
+                  alt="Axe"
+                />
+                <span>02</span>
+              </button>
+              <button class="lp-node lp-node--3 demo-action" type="button" data-demo="Disruptor выбран">
+                <img
+                  src="https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/disruptor.png"
+                  alt="Disruptor"
+                />
+                <span>03</span>
+              </button>
+              <button
+                class="lp-node lp-node--4 lp-node--empty demo-action"
+                type="button"
+                aria-label="Добавить соперника в слот 4"
+                data-demo="Добавить соперника"
+              >
+                <svg><use href="#i-plus"></use></svg><span>04</span>
+              </button>
+              <button
+                class="lp-node lp-node--5 lp-node--empty demo-action"
+                type="button"
+                aria-label="Добавить соперника в слот 5"
+                data-demo="Добавить соперника"
+              >
+                <svg><use href="#i-plus"></use></svg><span>05</span>
+              </button>
+            </section>
+
+            <section class="lp-board">
+              <div class="lp-board__label">
+                <span>ENEMY LOCKS</span><strong>03 / 05</strong>
+              </div>
+              <div class="lp-board__line">
+                <i></i><i></i><i></i><i class="is-open"></i><i class="is-open"></i>
+              </div>
+              <p><span>YOUR POSITION</span><strong>02 / MID</strong></p>
+            </section>
+
+            <section class="lp-decision">
+              <p><span>COUNTER WINDOW</span>Время выбрать ответ.</p>
+              <button class="lp-manual demo-action" type="button" data-demo="Собрать вручную">
+                MANUAL <svg><use href="#i-arrow"></use></svg>
+              </button>
+            </section>
+
+            <button class="lp-primary demo-action" type="button" data-demo="Сканировать драфт">
+              <span><small>FAST INPUT</small>СКАНИРОВАТЬ ДРАФТ</span>
+              <svg><use href="#i-scan"></use></svg>
+            </button>
+
+            <nav class="lp-nav" aria-label="Основная навигация">
+              <button class="is-active demo-action" type="button" data-demo="Драфт">
+                <strong>01</strong><span>DRAFT</span>
+              </button>
+              <button class="demo-action" type="button" data-demo="История">
+                <strong>02</strong><span>HISTORY</span>
+              </button>
+              <button class="demo-action" type="button" data-demo="Профиль">
+                <strong>03</strong><span>PROFILE</span>
+              </button>
+            </nav>
+          </section>
+
+          <section
+            class="phone concept concept--broadcast"
+            id="concept-broadcast"
+            role="tabpanel"
+            aria-label="Концепция TI Broadcast"
+            data-panel="broadcast"
+            hidden
+          >
+            <header class="bc-top">
+              <div class="bc-wordmark">
+                <span>COUNTER</span><strong>PICK</strong>
+              </div>
+              <div class="bc-live"><i></i> LIVE / 7.41D</div>
+              <button class="bc-count demo-action" type="button" data-demo="Открыть лимиты">
+                3—3
+              </button>
+            </header>
+
+            <section class="bc-hero">
+              <div class="bc-hero__type">
+                <p>THE PICK PHASE</p>
+                <h2>DRAFT<br />DESK</h2>
+                <div class="bc-role-tag"><span>YOUR ROLE</span><strong>MID / 02</strong></div>
+              </div>
+              <div class="bc-hero__portrait">
+                <div class="bc-hero__plate">PLAYER 02</div>
+                <img
+                  src="https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/queenofpain.png"
+                  alt="Queen of Pain"
+                />
+                <p>MAKE THE<br />LAST PICK<br />COUNT.</p>
+              </div>
+            </section>
+
+            <div class="bc-ticker" aria-label="Актуальная строка данных">
+              <div>
+                <span>PATCH 7.41D</span>
+                <span>DATA FRESH 18M</span>
+                <span>ANCIENT V</span>
+                <span>PATCH 7.41D</span>
+              </div>
+            </div>
+
+            <section class="bc-opponents">
+              <div class="bc-opponents__head">
+                <div>
+                  <span>ON THE BOARD</span>
+                  <strong>Соперники · 3/5</strong>
+                </div>
+                <button class="demo-action" type="button" data-demo="Изменить соперников">
+                  EDIT
+                </button>
+              </div>
+              <div class="bc-opponents__row">
+                <div class="bc-card">
+                  <img
+                    src="https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/pudge.png"
+                    alt="Pudge"
+                  />
+                  <span>01</span>
+                </div>
+                <div class="bc-card">
+                  <img
+                    src="https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/axe.png"
+                    alt="Axe"
+                  />
+                  <span>02</span>
+                </div>
+                <div class="bc-card">
+                  <img
+                    src="https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/disruptor.png"
+                    alt="Disruptor"
+                  />
+                  <span>03</span>
+                </div>
+                <button
+                  class="bc-card bc-card--empty demo-action"
+                  type="button"
+                  aria-label="Добавить соперника в слот 4"
+                  data-demo="Добавить"
+                >
+                  <svg><use href="#i-plus"></use></svg><span>04</span>
+                </button>
+                <button
+                  class="bc-card bc-card--empty demo-action"
+                  type="button"
+                  aria-label="Добавить соперника в слот 5"
+                  data-demo="Добавить"
+                >
+                  <svg><use href="#i-plus"></use></svg><span>05</span>
+                </button>
+              </div>
+            </section>
+
+            <div class="bc-actions">
+              <button class="bc-main demo-action" type="button" data-demo="Сканировать драфт">
+                <span>СКАНИРОВАТЬ<br />ДРАФТ</span>
+                <svg><use href="#i-scan"></use></svg>
+              </button>
+              <button class="bc-manual demo-action" type="button" data-demo="Собрать вручную">
+                <span>MANUAL<br />ENTRY</span>
+                <svg><use href="#i-arrow"></use></svg>
+              </button>
+            </div>
+
+            <button
+              class="bc-resume demo-action"
+              type="button"
+              data-demo="Продолжить последний драфт"
+            >
+              <span><small>LAST DRAFT / 18M AGO</small>Продолжить незаконченный разбор</span>
+              <strong>03—05</strong>
+              <svg><use href="#i-arrow"></use></svg>
+            </button>
+
+            <nav class="bc-nav" aria-label="Основная навигация">
+              <button class="is-active demo-action" type="button" data-demo="Драфт">
+                <span>01</span><strong>ДРАФТ</strong>
+              </button>
+              <button class="demo-action" type="button" data-demo="История">
+                <span>02</span><strong>ИСТОРИЯ</strong>
+              </button>
+              <button class="demo-action" type="button" data-demo="Профиль">
+                <span>03</span><strong>ПРОФИЛЬ</strong>
+              </button>
+            </nav>
+          </section>
+
+          <section
+            class="phone concept concept--dota"
+            id="concept-dota"
+            role="tabpanel"
+            aria-label="Концепция Dota Draft Chamber"
+            data-panel="dota"
+            hidden
+          >
+            <header class="dc-top">
+              <div class="dc-brand">
+                <img
+                  src="https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/global/dota2_logo_symbol.png"
+                  alt=""
+                />
+                <div><strong>COUNTERPICK</strong><span>COMPANION / ALL PICK</span></div>
+              </div>
+              <button class="dc-patch demo-action" type="button" data-demo="Версия данных">
+                7.41D
+              </button>
+            </header>
+
+            <section class="dc-draft">
+              <div class="dc-draft__head"><span>DIRE DRAFT</span><strong>03 / 05</strong></div>
+              <div class="dc-slots">
+                <button class="dc-slot demo-action" type="button" data-demo="Pudge">
+                  <img
+                    src="https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/pudge.png"
+                    alt="Pudge"
+                  />
+                  <span>POS ?</span>
+                </button>
+                <button class="dc-slot demo-action" type="button" data-demo="Axe">
+                  <img
+                    src="https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/axe.png"
+                    alt="Axe"
+                  />
+                  <span>OFF</span>
+                </button>
+                <button class="dc-slot demo-action" type="button" data-demo="Disruptor">
+                  <img
+                    src="https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/disruptor.png"
+                    alt="Disruptor"
+                  />
+                  <span>SUP</span>
+                </button>
+                <button
+                  class="dc-slot dc-slot--open demo-action"
+                  type="button"
+                  aria-label="Добавить героя в слот 4"
+                  data-demo="Добавить героя"
+                >
+                  <svg><use href="#i-plus"></use></svg><span>EMPTY</span>
+                </button>
+                <button
+                  class="dc-slot dc-slot--open demo-action"
+                  type="button"
+                  aria-label="Добавить героя в слот 5"
+                  data-demo="Добавить героя"
+                >
+                  <svg><use href="#i-plus"></use></svg><span>EMPTY</span>
+                </button>
+              </div>
+            </section>
+
+            <section class="dc-map">
+              <div class="dc-map__image"></div>
+              <div class="dc-map__top">
+                <span><svg><use href="#i-map"></use></svg> STRATEGY MAP</span>
+                <strong>ROLE PREDICTION</strong>
+              </div>
+              <button class="dc-pin dc-pin--pudge demo-action" type="button" data-demo="Pudge — safe lane">
+                <img
+                  src="https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/pudge.png"
+                  alt="Pudge"
+                />
+              </button>
+              <button class="dc-pin dc-pin--axe demo-action" type="button" data-demo="Axe — off lane">
+                <img
+                  src="https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/axe.png"
+                  alt="Axe"
+                />
+              </button>
+              <button class="dc-pin dc-pin--disruptor demo-action" type="button" data-demo="Disruptor — support">
+                <img
+                  src="https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/disruptor.png"
+                  alt="Disruptor"
+                />
+              </button>
+              <div class="dc-lane dc-lane--radiant">RADIANT / MID</div>
+              <div class="dc-lane dc-lane--dire">DIRE / SAFE</div>
+            </section>
+
+            <section class="dc-read">
+              <div><span>DRAFT READ</span><strong>MID LANE OPEN</strong></div>
+              <p>Три героя дают слабый ответ на мобильного burst-мидера.</p>
+            </section>
+
+            <section class="dc-suggestions">
+              <div class="dc-suggestions__label">
+                <span>YOUR ROLE</span><strong>POS 02</strong><small>ANCIENT V</small>
+              </div>
+              <button class="dc-hero demo-action" type="button" data-demo="Void Spirit">
+                <img
+                  src="https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/void_spirit.png"
+                  alt="Void Spirit"
+                />
+                <span>89</span>
+              </button>
+              <button class="dc-hero demo-action" type="button" data-demo="Queen of Pain">
+                <img
+                  src="https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/queenofpain.png"
+                  alt="Queen of Pain"
+                />
+                <span>86</span>
+              </button>
+              <button class="dc-hero demo-action" type="button" data-demo="Storm Spirit">
+                <img
+                  src="https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/storm_spirit.png"
+                  alt="Storm Spirit"
+                />
+                <span>81</span>
+              </button>
+            </section>
+
+            <div class="dc-actions">
+              <button class="dc-primary demo-action" type="button" data-demo="Анализировать драфт">
+                <span>ANALYZE DRAFT</span><svg><use href="#i-arrow"></use></svg>
+              </button>
+              <button
+                class="dc-camera demo-action"
+                type="button"
+                aria-label="Сканировать скриншот"
+                data-demo="Сканировать скриншот"
+              >
+                <svg><use href="#i-camera"></use></svg>
+              </button>
+            </div>
+
+            <nav class="dc-nav" aria-label="Основная навигация">
+              <button class="is-active demo-action" type="button" data-demo="Драфт">
+                <svg><use href="#i-crosshair"></use></svg><span>DRAFT</span>
+              </button>
+              <button class="demo-action" type="button" data-demo="История">
+                <svg><use href="#i-history"></use></svg><span>HISTORY</span>
+              </button>
+              <button class="demo-action" type="button" data-demo="Профиль">
+                <svg><use href="#i-user"></use></svg><span>PROFILE</span>
+              </button>
+            </nav>
+          </section>
+
+          <section
+            class="phone concept concept--contact"
+            id="concept-contact"
+            role="tabpanel"
+            aria-label="Концепция Hero Contact Sheet"
+            data-panel="contact"
+            hidden
+          >
+            <header class="cs-top">
+              <div><span>ROLL 07</span><strong>DRAFT SCAN</strong></div>
+              <p>ISO 400<br />FRAME 03/05</p>
+              <button class="cs-quota demo-action" type="button" data-demo="Лимит разборов">
+                3 EXP
+              </button>
+            </header>
+
+            <section class="cs-sheet" aria-label="Контактный лист героев">
+              <div class="cs-sprockets cs-sprockets--left"></div>
+              <div class="cs-sprockets cs-sprockets--right"></div>
+              <div class="cs-grid">
+                <button class="cs-frame demo-action" type="button" data-demo="Pudge распознан">
+                  <img
+                    src="https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/pudge.png"
+                    alt="Pudge"
+                  />
+                  <span>07A / PUDGE</span><i>96%</i>
+                </button>
+                <button class="cs-frame demo-action" type="button" data-demo="Axe распознан">
+                  <img
+                    src="https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/axe.png"
+                    alt="Axe"
+                  />
+                  <span>07B / AXE</span><i>99%</i>
+                </button>
+                <button class="cs-frame demo-action" type="button" data-demo="Disruptor распознан">
+                  <img
+                    src="https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/disruptor.png"
+                    alt="Disruptor"
+                  />
+                  <span>07C / DISRUPTOR</span><i>94%</i>
+                </button>
+                <button class="cs-frame demo-action" type="button" data-demo="Phantom Assassin">
+                  <img
+                    src="https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/phantom_assassin.png"
+                    alt="Phantom Assassin"
+                  />
+                  <span>08A / CANDIDATE</span><i>82</i>
+                </button>
+                <button class="cs-frame cs-frame--focus demo-action" type="button" data-demo="Queen of Pain">
+                  <img
+                    src="https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/queenofpain.png"
+                    alt="Queen of Pain"
+                  />
+                  <span>08B / MID</span><i>89</i>
+                </button>
+                <button class="cs-frame demo-action" type="button" data-demo="Invoker">
+                  <img
+                    src="https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/invoker.png"
+                    alt="Invoker"
+                  />
+                  <span>08C / CANDIDATE</span><i>78</i>
+                </button>
+                <button class="cs-frame demo-action" type="button" data-demo="Shadow Fiend">
+                  <img
+                    src="https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/nevermore.png"
+                    alt="Shadow Fiend"
+                  />
+                  <span>09A / CANDIDATE</span><i>74</i>
+                </button>
+                <button class="cs-frame demo-action" type="button" data-demo="Lina">
+                  <img
+                    src="https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/lina.png"
+                    alt="Lina"
+                  />
+                  <span>09B / CANDIDATE</span><i>72</i>
+                </button>
+                <button class="cs-frame cs-frame--import demo-action" type="button" data-demo="Импортировать скриншот">
+                  <svg><use href="#i-camera"></use></svg>
+                  <strong>NEW<br />FRAME</strong>
+                  <span>09C / IMPORT</span>
+                </button>
+              </div>
+              <div class="cs-scanline"><span>DETECTED 03</span></div>
+            </section>
+
+            <section class="cs-decode">
+              <div><span>DEVELOPMENT NOTE</span><strong>3 HEROES FOUND</strong></div>
+              <p>PUDGE / AXE / DISRUPTOR<br />POS 02 · ANCIENT V</p>
+            </section>
+
+            <div class="cs-actions">
+              <button class="cs-primary demo-action" type="button" data-demo="Проявить драфт">
+                <span>DEVELOP<br />DRAFT</span><svg><use href="#i-arrow"></use></svg>
+              </button>
+              <button class="cs-manual demo-action" type="button" data-demo="Собрать вручную">
+                <svg><use href="#i-keyboard"></use></svg><span>MANUAL</span>
+              </button>
+            </div>
+
+            <nav class="cs-nav" aria-label="Основная навигация">
+              <button class="is-active demo-action" type="button" data-demo="Сканирование">A / SCAN</button>
+              <button class="demo-action" type="button" data-demo="История">B / ARCHIVE</button>
+              <button class="demo-action" type="button" data-demo="Профиль">C / ID</button>
+            </nav>
+          </section>
+
+          <section
+            class="phone concept concept--lan"
+            id="concept-lan"
+            role="tabpanel"
+            aria-label="Концепция LAN Room 2005"
+            data-panel="lan"
+            hidden
+          >
+            <header class="lan-top">
+              <div class="lan-screw lan-screw--left"></div>
+              <div>
+                <span>DOTA PICKER</span>
+                <strong>LAN TERMINAL / MK.II</strong>
+              </div>
+              <p><i></i> LINK<br /><b>03/03</b></p>
+              <div class="lan-screw lan-screw--right"></div>
+            </header>
+
+            <section class="lan-screen">
+              <div class="lan-screen__bar">
+                <span>COUNTERPICK.EXE</span><span>PATCH_7.41D</span><span>18:42</span>
+              </div>
+              <div class="lan-portraits">
+                <button class="demo-action" type="button" data-demo="Pudge">
+                  <img
+                    src="https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/pudge.png"
+                    alt="Pudge"
+                  /><span>F1</span>
+                </button>
+                <button class="demo-action" type="button" data-demo="Axe">
+                  <img
+                    src="https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/axe.png"
+                    alt="Axe"
+                  /><span>F2</span>
+                </button>
+                <button class="demo-action" type="button" data-demo="Disruptor">
+                  <img
+                    src="https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/disruptor.png"
+                    alt="Disruptor"
+                  /><span>F3</span>
+                </button>
+                <button
+                  class="lan-portrait--empty demo-action"
+                  type="button"
+                  aria-label="Добавить героя в слот F4"
+                  data-demo="Добавить героя"
+                >
+                  <svg><use href="#i-plus"></use></svg><span>F4</span>
+                </button>
+                <button
+                  class="lan-portrait--empty demo-action"
+                  type="button"
+                  aria-label="Добавить героя в слот F5"
+                  data-demo="Добавить героя"
+                >
+                  <svg><use href="#i-plus"></use></svg><span>F5</span>
+                </button>
+              </div>
+              <div class="lan-terminal">
+                <p>&gt; ENEMY_SLOTS........ 03/05<br />&gt; YOUR_POSITION...... MID/02<br />&gt; RANK_PROFILE....... ANCIENT_V</p>
+                <h2>READY TO<br />COUNTER?</h2>
+                <span class="lan-cursor">_</span>
+              </div>
+              <div class="lan-screen__foot">
+                <span>F1 HELP</span><span>F10 QUIT</span><strong>MEM 640K OK</strong>
+              </div>
+            </section>
+
+            <section class="lan-keys">
+              <button class="lan-key demo-action" type="button" data-demo="Импорт скриншота">
+                <span>F1</span><strong>IMPORT</strong><small>SCREEN</small>
+              </button>
+              <button class="lan-key demo-action" type="button" data-demo="Добавить героя">
+                <span>F2</span><strong>HERO</strong><small>ADD</small>
+              </button>
+              <button class="lan-key demo-action" type="button" data-demo="Очистить драфт">
+                <span>F3</span><strong>CLEAR</strong><small>DRAFT</small>
+              </button>
+            </section>
+
+            <button class="lan-ready demo-action" type="button" data-demo="Запустить контрпик">
+              <span>ENTER</span><strong>READY</strong><small>PRESS TO ANALYZE</small>
+            </button>
+
+            <footer class="lan-status">
+              <button class="is-active demo-action" type="button" data-demo="Драфт"><i></i>DRAFT</button>
+              <button class="demo-action" type="button" data-demo="История"><i></i>LOG</button>
+              <button class="demo-action" type="button" data-demo="Профиль"><i></i>USER</button>
+              <span>NO CARRIER<br />LOCAL MODE</span>
+            </footer>
+          </section>
+
+          <div class="demo-toast" role="status" aria-live="polite"></div>
+        </div>
+
+        <aside class="concept-palette">
+          <section class="concept-palette__item is-active" data-palette="last-pick">
+            <p>PALETTE / MATERIAL</p>
+            <div class="swatches">
+              <i style="--swatch: #f1f2ed"></i><i style="--swatch: #101112"></i
+              ><i style="--swatch: #ed3b2f"></i><i style="--swatch: #b9bdb7"></i
+              ><i style="--swatch: #5b5f5b"></i>
+            </div>
+            <p>BARLOW CONDENSED<br />IBM PLEX MONO</p>
+            <p>PICK CLOCK · SIGNAL INK · SCOREBOARD</p>
+          </section>
+          <section class="concept-palette__item" data-palette="broadcast">
+            <p>PALETTE / MATERIAL</p>
+            <div class="swatches">
+              <i style="--swatch: #f1f0e9"></i><i style="--swatch: #111111"></i
+              ><i style="--swatch: #f04432"></i><i style="--swatch: #2049d8"></i
+              ><i style="--swatch: #c9d7ff"></i>
+            </div>
+            <p>OSWALD<br />IBM PLEX SANS / MONO</p>
+            <p>BROADCAST GRID · NEWS INK · WIPE</p>
+          </section>
+          <section class="concept-palette__item" data-palette="dota">
+            <p>PALETTE / MATERIAL</p>
+            <div class="swatches">
+              <i style="--swatch: #111719"></i><i style="--swatch: #c7493a"></i
+              ><i style="--swatch: #64a899"></i><i style="--swatch: #c5b79d"></i
+              ><i style="--swatch: #293437"></i>
+            </div>
+            <p>RAJDHANI<br />IBM PLEX SANS / MONO</p>
+            <p>HERO SELECT · STRATEGY MAP · STEEL</p>
+          </section>
+          <section class="concept-palette__item" data-palette="contact">
+            <p>PALETTE / MATERIAL</p>
+            <div class="swatches">
+              <i style="--swatch: #ece9e1"></i><i style="--swatch: #0a0a0a"></i
+              ><i style="--swatch: #f04436"></i><i style="--swatch: #8d8b85"></i
+              ><i style="--swatch: #d5d1c7"></i>
+            </div>
+            <p>IBM PLEX SANS<br />IBM PLEX MONO</p>
+            <p>CONTACT PRINT · CROP MARK · PROCESS RED</p>
+          </section>
+          <section class="concept-palette__item" data-palette="lan">
+            <p>PALETTE / MATERIAL</p>
+            <div class="swatches">
+              <i style="--swatch: #c9c1ae"></i><i style="--swatch: #151a14"></i
+              ><i style="--swatch: #9bbf69"></i><i style="--swatch: #d37a35"></i
+              ><i style="--swatch: #827b6d"></i>
+            </div>
+            <p>VT323<br />IBM PLEX MONO</p>
+            <p>ABS PLASTIC · CRT PHOSPHOR · KEYCAP</p>
+          </section>
+        </aside>
+      </main>
+
+      <footer class="studio__footer">
+        <span>№2 сохранён буквально · четыре остальных собраны с нуля</span>
+        <span>Выбор направления → редизайн главной и остальных экранов приложения</span>
+      </footer>
+    </div>
+
+    <script src="round2.js"></script>
+  </body>
+</html>

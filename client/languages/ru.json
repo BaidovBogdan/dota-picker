@@ -1,0 +1,10 @@
+{
+  "ios": {
+    "CFBundleDisplayName": "Counterpick",
+    "NSCameraUsageDescription": "Разрешите сделать фото драфта для распознавания героев.",
+    "NSPhotoLibraryUsageDescription": "Разрешите выбрать скриншот драфта для распознавания героев."
+  },
+  "android": {
+    "app_name": "Counterpick"
+  }
+}
