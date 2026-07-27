@@ -1,0 +1,8 @@
+node_modules
+dist
+.astro
+.visual-qa
+.playwright-cli
+output/playwright
+preview.stdout.log
+preview.stderr.log

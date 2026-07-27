@@ -1,0 +1,152 @@
+---
+import BrandMark from "./BrandMark.astro";
+import ReleaseAction from "./ReleaseAction.astro";
+import {
+  draftEnemies,
+  draftRecommendations
+} from "./marketing-data";
+
+type Props = {
+  actionHref: string;
+  actionLabel: string;
+  hasAction: boolean;
+  hasDownload: boolean;
+};
+
+const {
+  actionHref,
+  actionLabel,
+  hasAction,
+  hasDownload
+} = Astro.props;
+---
+
+<section class="hero-section" id="top" aria-labelledby="hero-title">
+  <div class="hero-grain" aria-hidden="true"></div>
+  <div class="hero-mark-field" aria-hidden="true" data-motion="hero-mark">
+    <canvas data-decision-field></canvas>
+    <BrandMark class="hero-mark" />
+  </div>
+
+  <div class="hero-copy">
+    <p class="hero-context" data-motion="hero-context">COUNTERPICK FOR WINDOWS</p>
+    <h1
+      class="hero-title w-full max-w-[86rem]"
+      id="hero-title"
+      data-motion="hero-title"
+    >
+      <span>THE DRAFT MOVES.</span>
+      <span>YOUR ANSWER APPEARS.</span>
+    </h1>
+    <p class="hero-subhead" data-motion="hero-subhead">
+      Counterpick follows the live Dota 2 draft and surfaces three role-aware,
+      data-backed options in an in-game overlay. No screenshots, no typing, no
+      alt-tab.
+    </p>
+    <div class="hero-actions" data-motion="hero-actions">
+      {
+        hasAction ? (
+          <ReleaseAction
+            class="button button--primary"
+            href={actionHref}
+            label={actionLabel}
+          />
+        ) : (
+          <p class="release-status release-status--hero">
+            <span></span>
+            Windows release in development
+          </p>
+        )
+      }
+      <a class="button button--secondary" href="#decision">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="m9 6 9 6-9 6V6Z" />
+        </svg>
+        <span>See the draft resolve</span>
+      </a>
+    </div>
+    {
+      hasDownload && (
+        <p class="hero-microcopy" data-motion="hero-actions">
+          Start free. Choose Pro when you need it every game.
+        </p>
+      )
+    }
+  </div>
+
+  <div class="hero-proof" data-motion="hero-proof" aria-label="Example Counterpick flow">
+    <div class="hero-proof__draft">
+      <span>Live draft</span>
+      <div>
+        {
+          draftEnemies.slice(0, 4).map((hero, index) => (
+            <img
+              src={`/heroes/icons/${hero.slug}.png`}
+              alt={hero.name}
+              width="64"
+              height="64"
+              style={`--proof-index:${index}`}
+            />
+          ))
+        }
+      </div>
+    </div>
+
+    <div class="hero-proof__current" aria-hidden="true">
+      <BrandMark />
+      <i></i>
+    </div>
+
+    <div class="hero-proof__answers">
+      <span>Three recommendations</span>
+      <div>
+        {
+          draftRecommendations.map((hero, index) => (
+            <figure style={`--proof-index:${index}`}>
+              <img
+                src={`/heroes/icons/${hero.slug}.png`}
+                alt={hero.name}
+                width="64"
+                height="64"
+              />
+              <figcaption>
+                <strong>{hero.name}</strong>
+                <small>{index === 0 ? "Lead" : "Alternative"}</small>
+              </figcaption>
+            </figure>
+          ))
+        }
+      </div>
+    </div>
+  </div>
+
+  <a class="hero-scroll" href="#how-it-works" aria-label="Continue to how it works">
+    <span>Follow the decision</span>
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 5v14m0 0 5-5m-5 5-5-5" />
+    </svg>
+  </a>
+</section>
+
+<div class="candidate-marquee" aria-label="Signals used by Counterpick">
+  <div class="candidate-marquee__track">
+    {
+      [0, 1].map((copy) => (
+        <div aria-hidden={copy === 1 ? "true" : undefined}>
+          <span>LIVE DRAFT</span>
+          <i></i>
+          <span>ROLE FIT</span>
+          <i></i>
+          <span>CURRENT META</span>
+          <i></i>
+          <span>MATCHUP EVIDENCE</span>
+          <i></i>
+          <span>TEAM NEED</span>
+          <i></i>
+          <span>THREE PICKS</span>
+          <i></i>
+        </div>
+      ))
+    }
+  </div>
+</div>

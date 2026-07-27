@@ -1,0 +1,137 @@
+---
+import { draftEnemies } from "./marketing-data";
+
+const candidateNames = [
+  "VIPER",
+  "PUCK",
+  "LINA",
+  "JUGGERNAUT",
+  "SVEN",
+  "DISRUPTOR",
+  "SHADOW SHAMAN",
+  "CRYSTAL MAIDEN"
+];
+---
+
+<section class="interest-section" id="how-it-works" aria-labelledby="interest-title">
+  <div class="interest-current" aria-hidden="true">
+    <span></span>
+  </div>
+
+  <div class="section-shell interest-heading">
+    <p class="quiet-context">Built for the desktop flow</p>
+    <h2 id="interest-title">
+      JUST LAUNCH IT.
+      <span>KEEP DRAFTING.</span>
+    </h2>
+    <p>
+      Counterpick is built around one uninterrupted loop: open the app, start
+      Dota 2, and stay in the draft while the visible picks become context.
+    </p>
+  </div>
+
+  <div class="section-shell">
+    <div class="signal-surface grid-flow-dense" data-motion="signal-surface">
+      <article class="signal-cell signal-cell--draft">
+        <div class="signal-cell__copy">
+          <h3>It reads the changing draft.</h3>
+          <p>
+            Enemy locks enter the decision field as they appear. Nothing to
+            upload, type, or search.
+          </p>
+        </div>
+        <div class="detected-roster" aria-label="Example detected enemy draft">
+          {
+            draftEnemies.map((hero, index) => (
+              <figure style={`--roster-index:${index}`}>
+                <img
+                  src={`/heroes/icons/${hero.slug}.png`}
+                  alt={hero.name}
+                  width="64"
+                  height="64"
+                  loading="lazy"
+                  decoding="async"
+                />
+                <figcaption>{hero.name}</figcaption>
+              </figure>
+            ))
+          }
+        </div>
+        <div class="draft-scan" aria-hidden="true"></div>
+      </article>
+
+      <article class="signal-cell signal-cell--role">
+        <div class="role-orbit" aria-hidden="true">
+          <span>P1</span>
+          <span class="is-active">P2</span>
+          <span>P3</span>
+          <span>P4</span>
+          <span>P5</span>
+        </div>
+        <h3>Your role changes the answer.</h3>
+      </article>
+
+      <article class="signal-cell signal-cell--meta">
+        <div class="meta-pulse" aria-hidden="true">
+          <span></span>
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+        <h3>The current meta shapes the field.</h3>
+      </article>
+
+      <article class="signal-cell signal-cell--collapse">
+        <div class="signal-cell__copy">
+          <h3>Eight possibilities narrow to three.</h3>
+          <p>Matchup, role, team need, meta, and reliability decide what survives.</p>
+        </div>
+        <div class="candidate-collapse" aria-hidden="true">
+          <div class="candidate-collapse__pool">
+            {candidateNames.map((name, index) => <span style={`--candidate-index:${index}`}>{name}</span>)}
+          </div>
+          <svg viewBox="0 0 320 120" preserveAspectRatio="none">
+            <path d="M4 13 C110 13 132 50 216 50 L316 50" />
+            <path d="M4 60 C118 60 144 60 216 60 L316 60" />
+            <path d="M4 107 C110 107 132 70 216 70 L316 70" />
+          </svg>
+          <div class="candidate-collapse__final">
+            <strong>VIPER</strong>
+            <strong>PUCK</strong>
+            <strong>LINA</strong>
+          </div>
+        </div>
+      </article>
+    </div>
+  </div>
+
+  <div class="section-shell workflow">
+    <div class="workflow-heading">
+      <h2>The setup is the shortest part.</h2>
+      <p>No screenshots. No hero search. No alt-tab.</p>
+    </div>
+    <div class="workflow-accordion" data-motion="workflow-accordion">
+      <article tabindex="0">
+        <span aria-hidden="true">OPEN</span>
+        <div>
+          <h3>Launch Counterpick</h3>
+          <p>Open the desktop app before you queue.</p>
+        </div>
+      </article>
+      <article tabindex="0">
+        <span aria-hidden="true">QUEUE</span>
+        <div>
+          <h3>Accept your match</h3>
+          <p>Keep playing Dota normally while the draft unfolds.</p>
+        </div>
+      </article>
+      <article tabindex="0">
+        <span aria-hidden="true">CHOOSE</span>
+        <div>
+          <h3>Pick with context</h3>
+          <p>Choose from three explained options inside the game.</p>
+        </div>
+      </article>
+    </div>
+  </div>
+</section>

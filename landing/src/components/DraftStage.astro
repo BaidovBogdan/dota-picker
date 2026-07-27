@@ -1,0 +1,251 @@
+---
+import BrandMark from "./BrandMark.astro";
+import {
+  draftEnemies,
+  draftRecommendations
+} from "./marketing-data";
+
+const candidates = [
+  { name: "Viper", slug: "viper" },
+  { name: "Puck", slug: "puck" },
+  { name: "Lina", slug: "lina" },
+  { name: "Juggernaut", slug: "juggernaut" },
+  { name: "Sven", slug: "sven" },
+  { name: "Disruptor", slug: "disruptor" },
+  { name: "Shadow Shaman", slug: "shadow_shaman" },
+  { name: "Crystal Maiden", slug: "crystal_maiden" }
+];
+---
+
+<section class="draft-story" id="decision" aria-labelledby="decision-title">
+  <div class="draft-pin" data-motion="draft-pin">
+    <div class="draft-story__ambient" aria-hidden="true">
+      <BrandMark class="story-ambient-mark" />
+    </div>
+
+    <div class="draft-narrative">
+      <div class="draft-narrative__heading">
+        <p class="quiet-context">One live draft</p>
+        <h2 id="decision-title">
+          EIGHT CANDIDATES.
+          <span>THREE LINES YOU CAN DEFEND.</span>
+        </h2>
+      </div>
+
+      <div class="story-steps" aria-live="polite">
+        <article class="story-step story-step--detected" data-story-step="detected">
+          <strong>The draft becomes context.</strong>
+          <p>
+            Visible enemy picks and your active role enter the field as the
+            timer moves.
+          </p>
+        </article>
+        <article class="story-step story-step--ranked" data-story-step="ranked">
+          <strong>Evidence narrows the field.</strong>
+          <p>
+            Matchups, role fit, current meta, team need, and reliability remove
+            the weak lines.
+          </p>
+        </article>
+        <article class="story-step story-step--resolved" data-story-step="resolved">
+          <strong>You still make the pick.</strong>
+          <p>
+            Counterpick presents one lead recommendation and two alternatives,
+            with the reasoning kept visible.
+          </p>
+        </article>
+      </div>
+
+      <div class="story-progress" aria-hidden="true">
+        <span></span>
+      </div>
+    </div>
+
+    <div
+      class="experience-stage"
+      data-motion="experience-stage"
+      data-scene="draft"
+    >
+      <div class="media-layer">
+        <div class="game-world" aria-hidden="true">
+          <div class="game-world__river"></div>
+          <div class="game-world__lane game-world__lane--one"></div>
+          <div class="game-world__lane game-world__lane--two"></div>
+          <div class="game-world__lane game-world__lane--three"></div>
+          <div class="game-world__tower game-world__tower--one"></div>
+          <div class="game-world__tower game-world__tower--two"></div>
+          <div class="game-world__fog"></div>
+        </div>
+
+        <div class="draft-hud">
+          <div class="draft-hud__top">
+            <span>DOTA 2 · ALL PICK</span>
+            <span class="interface-preview">Interface preview</span>
+          </div>
+
+          <div class="enemy-locks" aria-label="Detected enemy heroes">
+            {
+              draftEnemies.map((hero, index) => (
+                <figure style={`--lock-index:${index}`}>
+                  <img
+                    src={`/heroes/icons/${hero.slug}.png`}
+                    alt={hero.name}
+                    width="64"
+                    height="64"
+                    loading="lazy"
+                    decoding="async"
+                  />
+                  <figcaption>{hero.name}</figcaption>
+                </figure>
+              ))
+            }
+          </div>
+
+          <div class="draft-clock" aria-label="Example pick timer: 27 seconds">
+            <BrandMark class="draft-clock__mark" />
+            <strong>00:27</strong>
+            <span>Pick phase</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="overlay-layer">
+        <aside class="counterpick-overlay" aria-label="Counterpick recommendation overlay">
+          <header>
+            <div>
+              <BrandMark class="counterpick-overlay__mark" />
+              <span>COUNTERPICK</span>
+            </div>
+            <span class="overlay-live">
+              <i></i>
+              Live
+            </span>
+          </header>
+
+          <div class="recommendation-stack">
+            {
+              draftRecommendations.map((hero, index) => (
+                <article
+                  class:list={[
+                    "recommendation-card",
+                    index === 0 && "is-lead"
+                  ]}
+                  style={`--recommendation-index:${index}`}
+                >
+                  <span class="recommendation-rank">{index + 1}</span>
+                  <img
+                    src={`/heroes/${hero.slug}.webp`}
+                    alt=""
+                    width="256"
+                    height="144"
+                    loading="lazy"
+                    decoding="async"
+                  />
+                  <div>
+                    <strong>{hero.name}</strong>
+                    <small>{index === 0 ? "Lead recommendation" : "Alternative line"}</small>
+                  </div>
+                  <span class="recommendation-score">{hero.score}</span>
+                </article>
+              ))
+            }
+          </div>
+
+          <div class="overlay-reason">
+            <p>
+              <span>Why Viper</span>
+              Punishes the melee front line and keeps your mid timing intact.
+            </p>
+            <p>
+              <span>Watch for</span>
+              Low mobility if the lane collapses early.
+            </p>
+          </div>
+        </aside>
+      </div>
+
+      <div class="narrative-layer" aria-hidden="true">
+        <div class="ranking-board" data-ranking-board>
+          <header class="ranking-board__heading">
+            <div>
+              <span>Live shortlist</span>
+              <strong>Ranking this draft</strong>
+            </div>
+            <p>
+              <strong>8</strong>
+              candidates
+              <i></i>
+              <strong>3</strong>
+              explained picks
+            </p>
+          </header>
+
+          <div class="ranking-board__body">
+            <div class="ranking-pool" data-ranking-pool>
+              <span>Candidate pool</span>
+              <div>
+                {
+                  candidates.map((hero, index) => (
+                    <figure
+                      data-finalist={index < 3 ? "true" : "false"}
+                      style={`--field-index:${index}`}
+                    >
+                      <img
+                        src={`/heroes/icons/${hero.slug}.png`}
+                        alt=""
+                        width="64"
+                        height="64"
+                        loading="lazy"
+                        decoding="async"
+                      />
+                      <figcaption>{hero.name}</figcaption>
+                    </figure>
+                  ))
+                }
+              </div>
+            </div>
+
+            <div class="ranking-core" data-ranking-core>
+              <BrandMark class="ranking-core__mark" />
+              <strong>5 signals</strong>
+              <span>Matchup · role · meta · team · reliability</span>
+            </div>
+
+            <div class="ranking-shortlist" data-ranking-shortlist>
+              <span>Three recommendations</span>
+              <div>
+                {
+                  candidates.slice(0, 3).map((hero, index) => (
+                    <figure>
+                      <strong>0{index + 1}</strong>
+                      <img
+                        src={`/heroes/icons/${hero.slug}.png`}
+                        alt=""
+                        width="64"
+                        height="64"
+                        loading="lazy"
+                        decoding="async"
+                      />
+                      <figcaption>
+                        <span>{hero.name}</span>
+                        <small>{index === 0 ? "Lead line" : "Alternative"}</small>
+                      </figcaption>
+                    </figure>
+                  ))
+                }
+              </div>
+            </div>
+          </div>
+
+          <div class="ranking-signals">
+            <span data-ranking-signal>Matchup</span>
+            <span data-ranking-signal>Role</span>
+            <span data-ranking-signal>Meta</span>
+            <span data-ranking-signal>Team need</span>
+            <span data-ranking-signal>Reliability</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>

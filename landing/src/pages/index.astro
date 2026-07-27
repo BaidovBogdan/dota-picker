@@ -1,0 +1,110 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+import BrandMark from "../components/BrandMark.astro";
+import ConversionEnd from "../components/ConversionEnd.astro";
+import DecisionReel from "../components/DecisionReel.astro";
+import DraftStage from "../components/DraftStage.astro";
+import Hero from "../components/Hero.astro";
+import ReleaseAction from "../components/ReleaseAction.astro";
+import SignalSurface from "../components/SignalSurface.astro";
+
+const normalizeReleaseUrl = (value: string | undefined) => {
+  const candidate = value?.trim() ?? "";
+  if (!candidate) return "";
+  if (candidate.startsWith("/") && !candidate.startsWith("//")) return candidate;
+
+  try {
+    const url = new URL(candidate);
+    return url.protocol === "https:" || url.protocol === "http:"
+      ? url.toString()
+      : "";
+  } catch {
+    return "";
+  }
+};
+
+const downloadUrl = normalizeReleaseUrl(import.meta.env.PUBLIC_DOWNLOAD_URL);
+const betaUrl = normalizeReleaseUrl(import.meta.env.PUBLIC_BETA_URL);
+const hasDownload = downloadUrl.length > 0;
+const hasBeta = betaUrl.length > 0;
+const hasAction = hasDownload || hasBeta;
+const actionHref = hasDownload
+  ? downloadUrl
+  : hasBeta
+    ? betaUrl
+    : "#release";
+const actionLabel = hasDownload
+  ? "Download for Windows"
+  : hasBeta
+    ? "Join the Windows beta"
+    : "Windows release in development";
+const title =
+  "Counterpick — The draft moves. Your answer appears.";
+const description =
+  "Counterpick follows the live Dota 2 draft and brings three role-aware, data-backed picks into a clear in-game overlay.";
+---
+
+<BaseLayout title={title} description={description}>
+  <div class="site-root">
+    <a class="skip-link" href="#main-content">Skip to content</a>
+
+    <div class="page-orbit" data-motion="page-orbit" aria-hidden="true">
+      <div class="page-orbit__spinner">
+        <BrandMark class="page-orbit__mark" />
+      </div>
+    </div>
+
+    <header class="site-nav" data-motion="site-nav">
+      <a class="site-nav__brand" href="#top" aria-label="Counterpick home">
+        <BrandMark />
+        <span>COUNTERPICK</span>
+      </a>
+
+      <nav class="site-nav__links" aria-label="Primary navigation">
+        <a href="#how-it-works">How it works</a>
+        <a href="#plans">Plans</a>
+        <a href="#questions">Questions</a>
+      </nav>
+
+      {
+        hasAction ? (
+          <ReleaseAction
+            class="site-nav__action"
+            compact
+            href={actionHref}
+            label={actionLabel}
+          />
+        ) : (
+          <span class="site-nav__status">
+            <i></i>
+            Windows release in development
+          </span>
+        )
+      }
+    </header>
+
+    <main class="overflow-x-hidden w-full max-w-full" id="main-content">
+      <Hero
+        actionHref={actionHref}
+        actionLabel={actionLabel}
+        hasAction={hasAction}
+        hasDownload={hasDownload}
+      />
+      <SignalSurface />
+      <DraftStage />
+      <DecisionReel />
+      <ConversionEnd
+        actionHref={actionHref}
+        actionLabel={actionLabel}
+        hasAction={hasAction}
+        hasDownload={hasDownload}
+      />
+    </main>
+  </div>
+
+  <script>
+    import { initLanding } from "../scripts/motion";
+
+    initLanding();
+  </script>
+</BaseLayout>

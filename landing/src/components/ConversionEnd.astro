@@ -1,0 +1,188 @@
+---
+import BrandMark from "./BrandMark.astro";
+import ReleaseAction from "./ReleaseAction.astro";
+import { faqItems } from "./marketing-data";
+
+type Props = {
+  actionHref: string;
+  actionLabel: string;
+  hasAction: boolean;
+  hasDownload: boolean;
+};
+
+const {
+  actionHref,
+  actionLabel,
+  hasAction,
+  hasDownload
+} = Astro.props;
+---
+
+<section class="pricing-section" id="plans" aria-labelledby="plans-title">
+  <div class="pricing-current" aria-hidden="true">
+    <span></span>
+    <span></span>
+  </div>
+
+  <div class="section-shell pricing-heading">
+    <p class="quiet-context">Start with the complete decision loop</p>
+    <h2 id="plans-title">
+      TRY IT FREE.
+      <span>GO PRO EVERY QUEUE.</span>
+    </h2>
+    <p>
+      Free and Pro use the same recommendation engine. Pro simply keeps it
+      ready for draft after draft.
+    </p>
+  </div>
+
+  <div class="section-shell plan-paths">
+    <article class="plan-path plan-path--free" tabindex="0">
+      <div class="plan-path__name">
+        <span>Free</span>
+        <strong>$0</strong>
+      </div>
+      <div class="plan-path__body">
+        <h3>Feel the full loop before you subscribe.</h3>
+        <ul>
+          <li>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg>
+            Three draft analyses to start
+          </li>
+          <li>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg>
+            One returns every 24 hours, up to three
+          </li>
+          <li>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg>
+            Three ranked and explained recommendations
+          </li>
+        </ul>
+      </div>
+    </article>
+
+    <article class="plan-path plan-path--pro" tabindex="0">
+      <div class="plan-path__name">
+        <span>Pro</span>
+        <strong>Launch pricing</strong>
+      </div>
+      <div class="plan-path__body">
+        <h3>Make Counterpick part of every ranked routine.</h3>
+        <ul>
+          <li>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg>
+            Up to 100 draft analyses every 24 hours
+          </li>
+          <li>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg>
+            The same transparent recommendation engine
+          </li>
+          <li>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg>
+            Monthly and annual purchase options
+          </li>
+        </ul>
+      </div>
+    </article>
+  </div>
+
+  <div class="section-shell pricing-action">
+    {
+      hasAction ? (
+        <ReleaseAction
+          class="button button--light"
+          href={actionHref}
+          label={actionLabel}
+        />
+      ) : (
+        <p class="release-status">
+          <span></span>
+          Windows release in development
+        </p>
+      )
+    }
+    <p>
+      {hasDownload
+        ? "Free plan included. Upgrade inside the app."
+        : "Plans and verified release details will be published with the Windows build."}
+    </p>
+  </div>
+</section>
+
+<section class="faq-section" id="questions" aria-labelledby="questions-title">
+  <div class="section-shell faq-layout">
+    <div class="faq-heading">
+      <p class="quiet-context">Clear before you install</p>
+      <h2 id="questions-title">QUESTIONS WORTH ASKING.</h2>
+      <p>
+        Counterpick is explicit about what exists, what the engine considers,
+        and what will be verified with the Windows build.
+      </p>
+    </div>
+    <div class="faq-list">
+      {
+        faqItems.map((item) => (
+          <details>
+            <summary>
+              <span>{item.question}</span>
+              <i aria-hidden="true"></i>
+            </summary>
+            <p>{item.answer}</p>
+          </details>
+        ))
+      }
+    </div>
+  </div>
+</section>
+
+<section class="final-cta" id="release" aria-labelledby="release-title">
+  <div class="final-cta__mark" aria-hidden="true" data-motion="final-mark">
+    <BrandMark />
+  </div>
+  <div class="final-cta__copy">
+    <p class="quiet-context">Counterpick for Windows</p>
+    <h2 id="release-title">
+      THE TIMER MOVES.
+      <span>MOVE WITH IT.</span>
+    </h2>
+    <p>
+      Launch Counterpick, open Dota 2, and meet the next decision inside the
+      draft.
+    </p>
+    {
+      hasAction ? (
+        <ReleaseAction
+          class="button button--dark"
+          href={actionHref}
+          label={actionLabel}
+        />
+      ) : (
+        <p class="release-status release-status--dark">
+          <span></span>
+          Windows release in development
+        </p>
+      )
+    }
+  </div>
+</section>
+
+<footer class="site-footer">
+  <div class="site-footer__brand">
+    <BrandMark />
+    <div>
+      <strong>COUNTERPICK</strong>
+      <span>An in-game draft decision layer for Dota 2.</span>
+    </div>
+  </div>
+  <nav aria-label="Footer navigation">
+    <a href="#how-it-works">How it works</a>
+    <a href="#plans">Plans</a>
+    <a href="#questions">Questions</a>
+    <a href="#top">Back to top</a>
+  </nav>
+  <p>
+    Counterpick is an independent project and is not affiliated with or
+    endorsed by Valve Corporation. Dota 2 and related imagery are trademarks
+    or property of their respective owners.
+  </p>
+</footer>

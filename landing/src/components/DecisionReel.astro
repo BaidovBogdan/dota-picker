@@ -1,0 +1,204 @@
+---
+import BrandMark from "./BrandMark.astro";
+import {
+  draftRecommendations,
+  scenarios,
+  scoringSignals
+} from "./marketing-data";
+
+const pngPortraits = new Set([
+  "antimage",
+  "crystal_maiden",
+  "disruptor",
+  "sven"
+]);
+const portraitPath = (slug: string) =>
+  `/heroes/${slug}.${pngPortraits.has(slug) ? "png" : "webp"}`;
+---
+
+<section class="evidence-section" aria-labelledby="evidence-title">
+  <div class="section-shell evidence-heading">
+    <p class="quiet-context">Made for the exact draft in front of you</p>
+    <h2 id="evidence-title">
+      NOT A TIER LIST.
+      <span>THIS DRAFT.</span>
+    </h2>
+    <p>
+      The same engine changes its answer when your role, the enemy lineup, or
+      the shape of the fight changes.
+    </p>
+  </div>
+
+  <div class="section-shell decision-reel" data-decision-reel>
+    <div class="decision-reel__viewport">
+      {
+        scenarios.map((scenario, scenarioIndex) => {
+          const lead = scenario.recommendations[0];
+          const alternatives = scenario.recommendations.slice(1);
+
+          return (
+            <article
+              class="decision-slide"
+              data-decision-slide={scenarioIndex}
+              data-title={scenario.title}
+              hidden={scenarioIndex !== 0}
+            >
+              <div class="decision-slide__context">
+                <div class="decision-slide__role">
+                  <span>Playing</span>
+                  <strong>{scenario.role}</strong>
+                </div>
+                <div class="decision-slide__enemies" aria-label="Enemy heroes">
+                  {scenario.enemies.map((hero, index) => (
+                    <figure style={`--enemy-index:${index}`}>
+                      <img
+                        src={`/heroes/icons/${hero.slug}.png`}
+                        alt={hero.name}
+                        width="64"
+                        height="64"
+                        loading="lazy"
+                        decoding="async"
+                      />
+                    </figure>
+                  ))}
+                </div>
+                <p>{scenario.situation}</p>
+              </div>
+
+              <div class="decision-slide__lead">
+                <div class="decision-slide__portrait">
+                  <img
+                    src={portraitPath(lead.slug)}
+                    alt={lead.name}
+                    width="256"
+                    height="144"
+                    loading="lazy"
+                    decoding="async"
+                  />
+                  <span>{lead.score}</span>
+                </div>
+                <div class="decision-slide__answer">
+                  <span>Lead recommendation</span>
+                  <h3>{lead.name}</h3>
+                  <p>{lead.reason}</p>
+                  <small>{lead.risk}</small>
+                </div>
+              </div>
+
+              <div class="decision-slide__alternatives">
+                {alternatives.map((hero) => (
+                  <div>
+                    <img
+                      src={portraitPath(hero.slug)}
+                      alt=""
+                      width="256"
+                      height="144"
+                      loading="lazy"
+                      decoding="async"
+                    />
+                    <span>
+                      <strong>{hero.name}</strong>
+                      <small>{hero.score}</small>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </article>
+          );
+        })
+      }
+    </div>
+
+    <div class="decision-reel__footer">
+      <div class="decision-reel__copy" aria-live="polite">
+        <span data-reel-position>1 / {scenarios.length}</span>
+        <strong data-reel-title>{scenarios[0].title}</strong>
+      </div>
+      <div class="decision-reel__controls">
+        <button type="button" data-reel-previous aria-label="Previous draft">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m15 5-7 7 7 7" />
+          </svg>
+        </button>
+        <button type="button" data-reel-next aria-label="Next draft">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m9 5 7 7-7 7" />
+          </svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-shell engine-trust">
+    <div class="engine-trust__copy">
+      <h3>DATA BUILDS THE POOL. AI CAN ONLY BREAK A CLOSE CALL.</h3>
+      <p>
+        The deterministic engine ranks candidates from matchup evidence, role
+        fit, current-patch meta, team fit, and sample reliability. AI may
+        separate close options; it does not invent the pool.
+      </p>
+    </div>
+    <div
+      class="decision-trace"
+      role="group"
+      aria-label="Five evidence signals narrow the candidate pool to a lead recommendation"
+    >
+      <header class="decision-trace__heading">
+        <span>How the shortlist forms</span>
+        <strong>Five signals shape one defensible lead.</strong>
+      </header>
+
+      <div class="decision-trace__body">
+        <div class="decision-trace__inputs">
+          {
+            scoringSignals.map((signal, index) => (
+              <div
+                class="decision-trace__input"
+                style={`--trace-index:${index}`}
+              >
+                <i></i>
+                <span>{signal.label}</span>
+              </div>
+            ))
+          }
+        </div>
+
+        <svg
+          class="decision-trace__routes"
+          viewBox="0 0 1000 400"
+          preserveAspectRatio="none"
+          aria-hidden="true"
+        >
+          <path class="decision-trace__route decision-trace__route--input" pathLength="1" d="M300 40 C405 40 405 200 470 200" />
+          <path class="decision-trace__route decision-trace__route--input" pathLength="1" d="M300 120 C415 120 415 200 470 200" />
+          <path class="decision-trace__route decision-trace__route--input" pathLength="1" d="M300 200 C410 200 425 200 470 200" />
+          <path class="decision-trace__route decision-trace__route--input" pathLength="1" d="M300 280 C415 280 415 200 470 200" />
+          <path class="decision-trace__route decision-trace__route--input" pathLength="1" d="M300 360 C405 360 405 200 470 200" />
+          <path class="decision-trace__route decision-trace__route--output" pathLength="1" d="M530 200 C610 200 640 200 700 200" />
+        </svg>
+
+        <div class="decision-trace__core">
+          <BrandMark class="decision-trace__mark" />
+          <strong>8 → 3</strong>
+          <span>ranked options</span>
+        </div>
+
+        <div class="decision-trace__result">
+          <span>Lead line</span>
+          <div>
+            <img
+              src={`/heroes/icons/${draftRecommendations[0].slug}.png`}
+              alt=""
+              width="64"
+              height="64"
+              loading="lazy"
+              decoding="async"
+            />
+            <strong>{draftRecommendations[0].name}</strong>
+          </div>
+          <p>Punishes the melee front line in this draft.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>

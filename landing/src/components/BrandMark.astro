@@ -1,0 +1,63 @@
+---
+type Props = {
+  class?: string;
+  title?: string;
+};
+
+const { class: className = "", title } = Astro.props;
+const blackSegments = [
+  "M477 193A306 306 0 0 1 538 191L514 272 490 289Z",
+  "M407 210A306 306 0 0 1 458 196L476 298 467 338 454 327Z",
+  "M341 243A306 306 0 0 1 388 217L427 301 406 329Z",
+  "M286 291A306 306 0 0 1 325 254L415 364 391 382Z",
+  "M241 353A306 306 0 0 1 273 305L340 357 344 404Z",
+  "M215 427A306 306 0 0 1 232 372L315 408 332 444 301 446Z",
+  "M211 446A306 306 0 0 0 209 505L329 500 331 488 308 463Z",
+  "M210 525A306 306 0 0 0 223 583L283 565 310 551 278 519Z",
+  "M230 602A306 306 0 0 0 259 656L322 618 349 596 300 579Z",
+  "M270 673A306 306 0 0 0 307 713L367 662 374 641 338 629Z",
+  "M322 726A306 306 0 0 0 359 752L413 685 380 675Z",
+  "M375 762A306 306 0 0 0 406 776L442 733 449 705 422 704Z",
+  "M424 783A306 306 0 0 0 468 794L493 757 497 731 484 731 466 761 449 754Z",
+  "M488 797A306 306 0 0 0 523 800L534 776 529 752 512 753 510 766Z",
+  "M544 799A306 306 0 0 0 578 795L575 775 556 774Z",
+  "M605 788A306 306 0 0 0 627 782L624 779 613 787Z"
+];
+
+const redSegments = [
+  "M563 195A306 306 0 0 1 724 266L592 395 543 379 531 298Z",
+  "M754 297A306 306 0 0 1 819 547L646 495 608 409Z",
+  "M809 583A306 306 0 0 1 673 758L605 586 643 523Z"
+];
+---
+
+<svg
+  class:list={["brand-mark", className]}
+  viewBox="131 112 768 768"
+  role={title ? "img" : undefined}
+  aria-hidden={title ? undefined : "true"}
+  aria-label={title}
+>
+  <g class="brand-mark__field">
+    {
+      blackSegments.map((path, index) => (
+        <path
+          class="brand-mark__shard"
+          d={path}
+          style={`--mark-index:${index}`}
+        />
+      ))
+    }
+  </g>
+  <g class="brand-mark__answers">
+    {
+      redSegments.map((path, index) => (
+        <path
+          class="brand-mark__answer"
+          d={path}
+          style={`--mark-index:${index}`}
+        />
+      ))
+    }
+  </g>
+</svg>
