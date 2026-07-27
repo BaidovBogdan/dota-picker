@@ -67,6 +67,18 @@ const statusTone: Record<AnalysisStatus, 'positive' | 'negative' | 'warning'> = 
   processing: 'warning',
 };
 
+const rankLabel = [
+  'Не указан',
+  'Рекрут',
+  'Страж',
+  'Рыцарь',
+  'Герой',
+  'Легенда',
+  'Властелин',
+  'Божество',
+  'Титан',
+] as const;
+
 export function AnalysesPage({
   analyses,
   users,
@@ -88,6 +100,9 @@ export function AnalysesPage({
       const matchesQuery = !normalizedQuery
         || analysis.id.toLowerCase().includes(normalizedQuery)
         || analysis.recommendation?.toLowerCase().includes(normalizedQuery)
+        || analysis.recommendations.some((hero) => hero.toLowerCase().includes(normalizedQuery))
+        || analysis.enemyHeroes.some((hero) => hero.toLowerCase().includes(normalizedQuery))
+        || analysis.allyHeroes.some((hero) => hero.toLowerCase().includes(normalizedQuery))
         || analysis.errorCode?.toLowerCase().includes(normalizedQuery)
         || user?.displayName.toLowerCase().includes(normalizedQuery)
         || user?.email?.toLowerCase().includes(normalizedQuery);
@@ -112,14 +127,17 @@ export function AnalysesPage({
 
   const exportAnalyses = () => {
     downloadCsv('counterpick-checks.csv', [
-      ['ID', 'Пользователь', 'Статус', 'Источник', 'Рекомендация', 'Позиция', 'Патч', 'Длительность', 'Создан'],
+      ['ID', 'Пользователь', 'Статус', 'Источник', 'Рекомендации', 'Соперники', 'Союзники', 'Позиция', 'Ранг', 'Патч', 'Длительность', 'Создан'],
       ...filteredAnalyses.map((analysis) => [
         analysis.id,
         usersById.get(analysis.userId)?.email ?? analysis.userId,
         analysis.status,
         analysis.source,
-        analysis.recommendation ?? '',
+        analysis.recommendations.join(', '),
+        analysis.enemyHeroes.join(', '),
+        analysis.allyHeroes.join(', '),
         analysis.position,
+        analysis.rank ?? '',
         analysis.patch,
         analysis.durationMs ?? '',
         analysis.createdAt,
@@ -258,7 +276,7 @@ export function AnalysesPage({
                       </td>
                       <td>
                         <StatusBadge tone={statusTone[analysis.status]}>
-                          {analysis.confidence
+                          {analysis.confidence !== null
                             ? formatPercent(analysis.confidence * 100, 0)
                             : statusLabel[analysis.status]}
                         </StatusBadge>
@@ -342,7 +360,7 @@ export function AnalysesPage({
                   />
                   <figcaption>
                     <span>Распознано героев</span>
-                    <strong>{selectedAnalysis.detectedHeroes.length}</strong>
+                    <strong>{selectedAnalysis.enemyHeroes.length + selectedAnalysis.allyHeroes.length}</strong>
                   </figcaption>
                 </figure>
               </section>
@@ -361,18 +379,55 @@ export function AnalysesPage({
               </section>
             ) : null}
 
+            {selectedAnalysis.recommendations.length ? (
+              <section className="drawer-section">
+                <div className="drawer-section__heading">
+                  <h3>Три рекомендации</h3>
+                  <span>{selectedAnalysis.recommendations.length}</span>
+                </div>
+                <div className="recommendation-stack">
+                  {selectedAnalysis.recommendations.map((hero, index) => (
+                    <div key={hero}>
+                      <span>{index + 1}</span>
+                      <p><strong>{hero}</strong><small>{index === 0 ? 'Основной выбор' : 'Альтернатива'}</small></p>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ) : null}
+
             <section className="drawer-section">
               <div className="drawer-section__heading">
-                <h3>Распознанный драфт</h3>
-                <span>{selectedAnalysis.detectedHeroes.length}</span>
+                <h3>{selectedAnalysis.source === 'photo' ? 'Распознанный драфт' : 'Введённый драфт'}</h3>
+                <span>{selectedAnalysis.enemyHeroes.length + selectedAnalysis.allyHeroes.length}</span>
               </div>
-              <div className="hero-chip-grid">
-                {selectedAnalysis.detectedHeroes.map((hero, index) => (
-                  <div key={`${hero}-${index}`}>
-                    <span>{String(index + 1).padStart(2, '0')}</span>
-                    <strong>{hero}</strong>
+              <div className="draft-team-stack">
+                <div>
+                  <span className="draft-team-stack__label">Соперники · {selectedAnalysis.enemyHeroes.length}</span>
+                  <div className="hero-chip-grid">
+                    {selectedAnalysis.enemyHeroes.map((hero, index) => (
+                      <div key={`enemy-${hero}-${index}`}>
+                        <span>{String(index + 1).padStart(2, '0')}</span>
+                        <strong>{hero}</strong>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                </div>
+                <div>
+                  <span className="draft-team-stack__label">Союзники · {selectedAnalysis.allyHeroes.length}</span>
+                  {selectedAnalysis.allyHeroes.length ? (
+                    <div className="hero-chip-grid">
+                      {selectedAnalysis.allyHeroes.map((hero, index) => (
+                        <div key={`ally-${hero}-${index}`}>
+                          <span>{String(index + 1).padStart(2, '0')}</span>
+                          <strong>{hero}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <span className="draft-team-stack__empty">Не указаны — это допустимо</span>
+                  )}
+                </div>
               </div>
             </section>
 
@@ -381,7 +436,9 @@ export function AnalysesPage({
               <dl>
                 <div><dt>Источник</dt><dd>{selectedAnalysis.source === 'photo' ? 'Фото' : 'Вручную'}</dd></div>
                 <div><dt>Длительность</dt><dd>{formatDuration(selectedAnalysis.durationMs)}</dd></div>
-                <div><dt>Уверенность</dt><dd>{selectedAnalysis.confidence ? formatPercent(selectedAnalysis.confidence * 100, 0) : '—'}</dd></div>
+                <div><dt>Уверенность</dt><dd>{selectedAnalysis.confidence !== null ? formatPercent(selectedAnalysis.confidence * 100, 0) : '—'}</dd></div>
+                <div><dt>Ранг</dt><dd>{rankLabel[selectedAnalysis.rank ?? 0]}</dd></div>
+                <div><dt>Позиция</dt><dd>P{selectedAnalysis.position}</dd></div>
                 <div><dt>Патч</dt><dd>{selectedAnalysis.patch}</dd></div>
                 <div><dt>Модельная стоимость</dt><dd>${selectedAnalysis.costUsd.toFixed(4)}</dd></div>
                 <div><dt>Ошибка</dt><dd>{selectedAnalysis.errorCode ?? '—'}</dd></div>

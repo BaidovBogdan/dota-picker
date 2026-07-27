@@ -1,9 +1,9 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { usePreventRemove } from '@react-navigation/native';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Stack } from 'expo-router';
+import { usePreventRemove } from 'expo-router/react-navigation';
 import { useMemo, useState } from 'react';
-import { Platform, TouchableOpacity, View } from 'react-native';
+import { Platform, Pressable, View } from 'react-native';
 
 import { Screen } from '@/components/layout/screen';
 import { AppText } from '@/components/ui/app-text';
@@ -183,12 +183,11 @@ export default function PlansScreen() {
             {plansQuery.data.map((plan, index) => {
               const active = plan.packageId === selected?.packageId;
               return (
-                <TouchableOpacity
+                <Pressable
                   key={plan.packageId}
                   accessibilityRole="radio"
                   accessibilityState={{ checked: active }}
                   accessibilityLabel={t('plans.choose', { plan: plan.title })}
-                  activeOpacity={0.76}
                   disabled={busy}
                   onPress={() => setSelectedId(plan.packageId)}
                   style={{
@@ -252,7 +251,7 @@ export default function PlansScreen() {
                       {plan.price}
                     </AppText>
                   </View>
-                </TouchableOpacity>
+                </Pressable>
               );
             })}
           </View>

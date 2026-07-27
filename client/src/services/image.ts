@@ -16,16 +16,24 @@ export async function prepareDraftPhoto(uri: string) {
     const longest = Math.max(width, height);
     const scale = longest > MAX_EDGE ? MAX_EDGE / longest : 1;
     const context = ImageManipulator.manipulate(uri);
-    if (scale < 1) {
-      context.resize({ width: Math.round(width * scale), height: Math.round(height * scale) });
+    try {
+      if (scale < 1) {
+        context.resize({ width: Math.round(width * scale), height: Math.round(height * scale) });
+      }
+      const rendered = await context.renderAsync();
+      try {
+        const result = await rendered.saveAsync({
+          compress: 0.78,
+          format: SaveFormat.JPEG,
+        });
+        preparedUri = result.uri;
+        return result.uri;
+      } finally {
+        rendered.release();
+      }
+    } finally {
+      context.release();
     }
-    const rendered = await context.renderAsync();
-    const result = await rendered.saveAsync({
-      compress: 0.78,
-      format: SaveFormat.JPEG,
-    });
-    preparedUri = result.uri;
-    return result.uri;
   } finally {
     if (preparedUri !== uri) revokeWebObjectUrl(uri);
   }

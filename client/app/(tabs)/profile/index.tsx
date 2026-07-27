@@ -1,7 +1,8 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { router, Stack } from 'expo-router';
+import { useQuery } from '@tanstack/react-query';
+import { type Href, router, Stack } from 'expo-router';
 import { useState } from 'react';
-import { ScrollView, TouchableOpacity, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, useWindowDimensions, View } from 'react-native';
 
 import { showNativeAlert } from '@/components/feedback/native-alert';
 import { AppText } from '@/components/ui/app-text';
@@ -10,6 +11,8 @@ import { Panel } from '@/components/ui/panel';
 import { useTranslation } from '@/i18n';
 import { nativeLargeHeaderOptions } from '@/navigation/native-header';
 import { bootstrapGuestSession, deleteAccount, logout } from '@/services/api/auth';
+import { resetDevelopmentQuota } from '@/services/api/dota';
+import { getAccountReviewsPage } from '@/services/api/reviews';
 import {
   confirmBillingStatus,
   loginBilling,
@@ -45,20 +48,30 @@ const languageOptions: {
 export default function ProfileScreen() {
   const session = useAppStore((state) => state.session);
   const attempts = useAppStore((state) => state.attempts);
+  const serverAttempts = useAppStore((state) => state.serverAttempts);
   const historyCount = useAppStore((state) => state.history.length);
   const guestId = useAppStore((state) => state.guestId);
   const clearHistory = useAppStore((state) => state.clearHistory);
   const themeMode = useAppStore((state) => state.themeMode);
   const languageMode = useAppStore((state) => state.languageMode);
+  const wishlistByOwnerScope = useAppStore((state) => state.wishlistByOwnerScope);
   const setThemeMode = useAppStore((state) => state.setThemeMode);
   const setLanguageMode = useAppStore((state) => state.setLanguageMode);
   const [busy, setBusy] = useState(false);
+  const [resettingAttempts, setResettingAttempts] = useState(false);
   const { width } = useWindowDimensions();
   const { colors } = useAppTheme();
   const { t } = useTranslation();
   const isRegistered = session?.kind === 'registered';
   const isPro = session?.plan === 'pro';
   const horizontalGutter = width >= 700 ? layout.tabletGutter : layout.phoneGutter;
+  const ownerScope = getSessionScope(session, guestId);
+  const wishlistCount = ownerScope ? (wishlistByOwnerScope[ownerScope]?.length ?? 0) : 0;
+  const reviewsQuery = useQuery({
+    queryKey: ['reviews-summary', session?.userId],
+    queryFn: () => getAccountReviewsPage({ limit: 1 }),
+    enabled: Boolean(session?.userId),
+  });
 
   const showMessage = (title: string, message: string) =>
     showNativeAlert(title, message, [{ text: t('common.confirm') }]);
@@ -115,6 +128,21 @@ export default function ProfileScreen() {
       );
     } finally {
       setBusy(false);
+    }
+  };
+
+  const resetAttempts = async () => {
+    setResettingAttempts(true);
+    try {
+      await resetDevelopmentQuota();
+      showMessage(t('profile.resetAttempts'), t('profile.resetAttemptsSuccess'));
+    } catch (error) {
+      showMessage(
+        t('profile.resetAttempts'),
+        error instanceof Error ? error.message : t('errors.tryAgain'),
+      );
+    } finally {
+      setResettingAttempts(false);
     }
   };
 
@@ -267,6 +295,27 @@ export default function ProfileScreen() {
           style={{ marginTop: 12 }}
         />
 
+        <SectionHeader title={t('wishlist.title')} body={t('wishlist.profileBody')} />
+        <SettingsRow
+          icon="heart-outline"
+          label={t('wishlist.open')}
+          body={t('wishlist.count', { count: wishlistCount })}
+          onPress={() => router.push('/wishlist' as Href)}
+        />
+
+        <SectionHeader title={t('review.mine')} body={t('review.profileBody')} />
+        <SettingsRow
+          icon="star-outline"
+          label={t('review.mine')}
+          body={
+            reviewsQuery.isError
+              ? t('review.loadError')
+              : t('review.count', { count: reviewsQuery.data?.total ?? 0 })
+          }
+          onPress={() => router.push('/(tabs)/profile/reviews' as Href)}
+          loading={reviewsQuery.isPending}
+        />
+
         <SectionHeader title={t('profile.theme')} body={t('profile.themeBody')} />
         <ChoiceGrid
           value={themeMode}
@@ -281,15 +330,33 @@ export default function ProfileScreen() {
           onChange={(value) => setLanguageMode(value as LanguageMode)}
         />
 
-        <SectionHeader title={t('profile.lottieLab')} body={t('profile.lottieLabBody')} />
-        <Button
-          label={t('profile.lottieLabButton')}
-          icon="play-circle-outline"
-          tone="secondary"
-          onPress={() => router.push('/(tabs)/profile/lottie-lab')}
-        />
+        {__DEV__ ? (
+          <>
+            <SectionHeader title={t('profile.lottieLab')} body={t('profile.lottieLabBody')} />
+            <Button
+              label={t('profile.lottieLabButton')}
+              icon="play-circle-outline"
+              tone="secondary"
+              onPress={() => router.push('/(tabs)/profile/lottie-lab')}
+            />
+          </>
+        ) : null}
 
         <SectionHeader title={t('profile.data')} body={t('profile.clearHistoryBody')} />
+        {__DEV__ ? (
+          <SettingsRow
+            icon="refresh-circle-outline"
+            label={t('profile.resetAttempts')}
+            body={t('profile.resetAttemptsBody')}
+            onPress={() => void resetAttempts()}
+            loading={resettingAttempts}
+            disabled={
+              resettingAttempts ||
+              (serverAttempts?.remaining ?? attempts.remaining) ===
+                (serverAttempts?.maximum ?? attempts.maximum)
+            }
+          />
+        ) : null}
         <SettingsRow
           icon="time-outline"
           label={t('profile.clearHistory')}
@@ -311,6 +378,13 @@ export default function ProfileScreen() {
         {isRegistered ? (
           <>
             <SectionHeader title={t('profile.registered')} body={session?.email ?? ''} />
+            <SettingsRow
+              icon="key-outline"
+              label={t('profile.changePassword')}
+              body={t('profile.changePasswordBody')}
+              onPress={() => router.push('/change-password')}
+              disabled={busy}
+            />
             <SettingsRow
               icon="log-out-outline"
               label={t('profile.signOut')}
@@ -408,12 +482,11 @@ function ChoiceGrid({
       {options.map((option, index) => {
         const active = option.value === value;
         return (
-          <TouchableOpacity
+          <Pressable
             key={option.value}
             accessibilityRole="radio"
             accessibilityState={{ checked: active }}
             accessibilityLabel={t(option.labelKey)}
-            activeOpacity={0.74}
             onPress={() => onChange(option.value)}
             style={{
               flex: 1,
@@ -448,7 +521,7 @@ function ChoiceGrid({
             >
               {t(option.labelKey)}
             </AppText>
-          </TouchableOpacity>
+          </Pressable>
         );
       })}
     </View>
@@ -462,6 +535,7 @@ function SettingsRow({
   onPress,
   danger = false,
   disabled = false,
+  loading = false,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
@@ -469,17 +543,18 @@ function SettingsRow({
   onPress: () => void;
   danger?: boolean;
   disabled?: boolean;
+  loading?: boolean;
 }) {
   const { colors } = useAppTheme();
   const accent = danger ? colors.live : colors.cobalt;
+  const isDisabled = disabled;
 
   return (
-    <TouchableOpacity
+    <Pressable
       accessibilityRole="button"
       accessibilityLabel={label}
-      accessibilityState={{ disabled }}
-      activeOpacity={0.72}
-      disabled={disabled}
+      accessibilityState={{ disabled: isDisabled, busy: loading }}
+      disabled={isDisabled}
       onPress={onPress}
       style={{
         minHeight: body ? 72 : 58,
@@ -491,7 +566,7 @@ function SettingsRow({
         borderColor: colors.outline,
         backgroundColor: colors.surface,
         overflow: 'hidden',
-        opacity: disabled ? 0.36 : 1,
+        opacity: isDisabled ? 0.36 : 1,
       }}
     >
       <View
@@ -530,8 +605,12 @@ function SettingsRow({
           borderColor: colors.outline,
         }}
       >
-        <Ionicons name="arrow-forward" size={18} color={accent} />
+        {loading ? (
+          <ActivityIndicator size="small" color={accent} />
+        ) : (
+          <Ionicons name="arrow-forward" size={18} color={accent} />
+        )}
       </View>
-    </TouchableOpacity>
+    </Pressable>
   );
 }

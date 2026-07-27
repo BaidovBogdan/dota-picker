@@ -1,7 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Image } from 'expo-image';
 import { useState } from 'react';
-import { TouchableOpacity, View } from 'react-native';
+import { Pressable, View } from 'react-native';
 
 import { AppText } from '@/components/ui/app-text';
 import { useTranslation } from '@/i18n';
@@ -17,6 +17,7 @@ type Props = {
   label?: string | undefined;
   showName?: boolean;
   slotNumber?: string;
+  transitionMs?: number;
 };
 
 export function HeroPortrait({
@@ -27,6 +28,7 @@ export function HeroPortrait({
   label,
   showName = true,
   slotNumber,
+  transitionMs = 120,
 }: Props) {
   const { colors } = useAppTheme();
   const { t } = useTranslation();
@@ -67,8 +69,10 @@ export function HeroPortrait({
           source={{ uri: hero.imageUrl }}
           style={{ width: '100%', height: '100%' }}
           contentFit="cover"
-          cachePolicy="memory-disk"
-          transition={120}
+          cachePolicy="disk"
+          enforceEarlyResizing
+          recyclingKey={String(hero.id)}
+          transition={transitionMs}
           onError={() => setFailedImageUrl(hero.imageUrl)}
         />
       ) : hero ? (
@@ -127,26 +131,24 @@ export function HeroPortrait({
   return (
     <View style={{ alignItems: 'center', width: size }}>
       {onPress ? (
-        <TouchableOpacity
+        <Pressable
           accessibilityRole="button"
           accessibilityLabel={
             hero ? t('draft.editHero', { name: hero.name }) : (label ?? t('draft.addHero'))
           }
-          activeOpacity={0.72}
           hitSlop={3}
           onPress={onPress}
           style={{ width: size, height: size }}
         >
           {portrait}
-        </TouchableOpacity>
+        </Pressable>
       ) : (
         portrait
       )}
       {hero && onRemove ? (
-        <TouchableOpacity
+        <Pressable
           accessibilityRole="button"
           accessibilityLabel={t('draft.removeHero', { name: hero.name })}
-          activeOpacity={0.7}
           hitSlop={8}
           onPress={onRemove}
           style={{
@@ -165,7 +167,7 @@ export function HeroPortrait({
           }}
         >
           <Ionicons name="close" size={15} color="#FFFFFF" />
-        </TouchableOpacity>
+        </Pressable>
       ) : null}
       {hero && showName ? (
         <AppText

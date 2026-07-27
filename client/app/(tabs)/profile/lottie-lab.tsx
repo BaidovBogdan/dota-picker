@@ -1,12 +1,15 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { Stack } from 'expo-router';
+import PauseIcon from '@expo/material-symbols/pause.xml';
+import PlayIcon from '@expo/material-symbols/play_arrow.xml';
+import ReplayIcon from '@expo/material-symbols/replay.xml';
+import { router, Stack, useIsFocused } from 'expo-router';
 import LottieView from 'lottie-react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Platform, ScrollView, useWindowDimensions, View } from 'react-native';
 
 import { lottieLabSections, type LottieLabEntry } from '@/components/feedback/lottie-lab-registry';
 import { AppText } from '@/components/ui/app-text';
-import { IconButton } from '@/components/ui/icon-button';
+import { Button } from '@/components/ui/button';
 import { useReducedMotion } from '@/hooks/use-reduced-motion';
 import { useTranslation } from '@/i18n';
 import { layout, shape } from '@/theme/tokens';
@@ -21,6 +24,7 @@ type PlaybackCommand = {
 
 export default function LottieLabScreen() {
   const reducedMotion = useReducedMotion();
+  const isFocused = useIsFocused();
   const [playback, setPlayback] = useState<PlaybackCommand>({ kind: 'play', sequence: 0 });
   const { width } = useWindowDimensions();
   const { colors } = useAppTheme();
@@ -43,59 +47,28 @@ export default function LottieLabScreen() {
           title: t('lottieLab.title'),
           headerLargeTitleEnabled: false,
           headerBackButtonDisplayMode: 'minimal',
-          unstable_headerRightItems: () => [
-            {
-              type: 'button',
-              label: t('lottieLab.play'),
-              accessibilityLabel: t('lottieLab.play'),
-              icon: { type: 'sfSymbol', name: 'play.fill' },
-              disabled: reducedMotion || playing,
-              onPress: () => control('play'),
-            },
-            {
-              type: 'button',
-              label: t('lottieLab.pause'),
-              accessibilityLabel: t('lottieLab.pause'),
-              icon: { type: 'sfSymbol', name: 'pause.fill' },
-              disabled: reducedMotion || !playing,
-              onPress: () => control('pause'),
-            },
-            {
-              type: 'button',
-              label: t('lottieLab.replay'),
-              accessibilityLabel: t('lottieLab.replay'),
-              icon: { type: 'sfSymbol', name: 'arrow.counterclockwise' },
-              disabled: reducedMotion,
-              onPress: () => control('replay'),
-            },
-          ],
-          headerRight: () => (
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-              <IconButton
-                name="play"
-                label={t('lottieLab.play')}
-                disabled={reducedMotion || playing}
-                onPress={() => control('play')}
-                size={32}
-              />
-              <IconButton
-                name="pause"
-                label={t('lottieLab.pause')}
-                disabled={reducedMotion || !playing}
-                onPress={() => control('pause')}
-                size={32}
-              />
-              <IconButton
-                name="refresh"
-                label={t('lottieLab.replay')}
-                disabled={reducedMotion}
-                onPress={() => control('replay')}
-                size={32}
-              />
-            </View>
-          ),
         }}
       />
+      <Stack.Toolbar placement="right">
+        <Stack.Toolbar.Button
+          accessibilityLabel={t('lottieLab.play')}
+          icon={process.env.EXPO_OS === 'ios' ? 'play.fill' : PlayIcon}
+          disabled={reducedMotion || playing}
+          onPress={() => control('play')}
+        />
+        <Stack.Toolbar.Button
+          accessibilityLabel={t('lottieLab.pause')}
+          icon={process.env.EXPO_OS === 'ios' ? 'pause.fill' : PauseIcon}
+          disabled={reducedMotion || !playing}
+          onPress={() => control('pause')}
+        />
+        <Stack.Toolbar.Button
+          accessibilityLabel={t('lottieLab.replay')}
+          icon={process.env.EXPO_OS === 'ios' ? 'arrow.counterclockwise' : ReplayIcon}
+          disabled={reducedMotion}
+          onPress={() => control('replay')}
+        />
+      </Stack.Toolbar>
 
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
@@ -147,6 +120,14 @@ export default function LottieLabScreen() {
           </View>
         </View>
 
+        <Button
+          label={t('lottieLab.usage.analysis')}
+          icon="pulse-outline"
+          tone="secondary"
+          onPress={() => router.push('/(tabs)/profile/loader-preview')}
+          style={{ marginTop: 12 }}
+        />
+
         {reducedMotion ? (
           <View
             accessibilityRole="alert"
@@ -193,6 +174,7 @@ export default function LottieLabScreen() {
               {section.entries.map((entry) => (
                 <AnimationCard
                   key={entry.id}
+                  active={isFocused}
                   entry={entry}
                   playback={playback}
                   reducedMotion={reducedMotion}
@@ -207,10 +189,12 @@ export default function LottieLabScreen() {
 }
 
 function AnimationCard({
+  active,
   entry,
   playback,
   reducedMotion,
 }: {
+  active: boolean;
   entry: LottieLabEntry;
   playback: PlaybackCommand;
   reducedMotion: boolean;
@@ -225,7 +209,7 @@ function AnimationCard({
   useEffect(() => {
     const current = animation.current;
     if (!current) return;
-    if (reducedMotion) {
+    if (!active || reducedMotion) {
       current.pause();
       return;
     }
@@ -235,7 +219,7 @@ function AnimationCard({
     }
     if (playback.kind === 'replay') current.reset();
     current.play();
-  }, [playback.kind, playback.sequence, reducedMotion]);
+  }, [active, playback.kind, playback.sequence, reducedMotion]);
 
   return (
     <View
@@ -305,7 +289,7 @@ function AnimationCard({
               renderMode="AUTOMATIC"
               style={{ width: 118, height: 118 }}
               webStyle={{ width: 118, height: 118 }}
-              {...(reducedMotion
+              {...(reducedMotion || !active
                 ? Platform.OS === 'web'
                   ? { autoPlay: false, loop: false }
                   : {

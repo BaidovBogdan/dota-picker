@@ -9,6 +9,58 @@ export const credentialsSchema = z.object({
   password: passwordSchema,
 });
 
+export const otpCodeSchema = z.string().regex(/^\d{4}$/);
+
+export const otpVerificationSchema = z.object({
+  challengeId: z.uuid(),
+  code: otpCodeSchema,
+});
+
+export const verifiedCredentialsSchema = credentialsSchema.extend(otpVerificationSchema.shape);
+
+export const publicOtpRequestSchema = z.discriminatedUnion('purpose', [
+  z.object({
+    purpose: z.literal('register'),
+    email: emailSchema,
+  }),
+  z.object({
+    purpose: z.literal('login'),
+    email: emailSchema,
+    password: passwordSchema,
+  }),
+  z.object({
+    purpose: z.literal('password_reset'),
+    email: emailSchema,
+  }),
+]);
+
+export const authenticatedOtpRequestSchema = z.discriminatedUnion('purpose', [
+  z.object({
+    purpose: z.literal('upgrade_guest'),
+    email: emailSchema,
+  }),
+  z.object({
+    purpose: z.literal('password_change'),
+  }),
+]);
+
+export const otpChallengeResponseSchema = z.object({
+  challengeId: z.uuid(),
+  purpose: z.enum(['register', 'login', 'upgrade_guest', 'password_reset', 'password_change']),
+  expiresAt: z.iso.datetime(),
+  retryAfterSeconds: z.number().int().nonnegative(),
+});
+
+export const passwordResetSchema = otpVerificationSchema.extend({
+  email: emailSchema,
+  newPassword: passwordSchema,
+});
+
+export const passwordChangeSchema = otpVerificationSchema.extend({
+  currentPassword: passwordSchema,
+  newPassword: passwordSchema,
+});
+
 export const guestAuthSchema = z.object({
   deviceId: z.string().min(16).max(128),
 });

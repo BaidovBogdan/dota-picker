@@ -115,6 +115,31 @@ export class QuotaService {
     });
   }
 
+  public async reset(accountId: string, now = new Date()): Promise<QuotaView> {
+    return this.db.transaction(async (tx) => {
+      const account = await this.lockAccount(tx, accountId);
+      const plan = this.effectivePlan(account.plan, account.planExpiresAt, now);
+      const policy = this.policy(plan);
+      await tx
+        .update(accounts)
+        .set({
+          plan,
+          planExpiresAt: plan === 'free' ? null : account.planExpiresAt,
+          planProductId: plan === 'free' ? null : account.planProductId,
+          quotaBalance: policy.max,
+          quotaRefreshedAt: now,
+          updatedAt: now,
+        })
+        .where(eq(accounts.id, accountId));
+      return this.toView(
+        plan,
+        { balance: policy.max, nextRefillAt: null },
+        policy,
+        plan === 'pro' ? account.planExpiresAt : null,
+      );
+    });
+  }
+
   public async refund(accountId: string, analysisId: string, now = new Date()): Promise<void> {
     await this.db.transaction(async (tx) => {
       const account = await this.lockAccount(tx, accountId);

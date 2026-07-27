@@ -1,49 +1,59 @@
 import { useQuery } from '@tanstack/react-query';
 import * as ImagePicker from 'expo-image-picker';
-import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Animated, Platform, ScrollView, ToastAndroid, TouchableOpacity, View } from 'react-native';
+import { router, useIsFocused } from 'expo-router';
+import { useEffect, useMemo, useState } from 'react';
+import { Animated, Platform, ToastAndroid, View } from 'react-native';
 
 import { DraftBoard } from '@/components/draft/draft-board';
-import { PositionPicker } from '@/components/draft/position-picker';
 import { showNativeAlert } from '@/components/feedback/native-alert';
 import { OfflineBanner } from '@/components/feedback/offline-banner';
-import {
-  FLOATING_ACTION_BAR_BOTTOM_INSET,
-  FloatingActionBar,
-} from '@/components/layout/floating-action-bar';
 import { Screen } from '@/components/layout/screen';
 import { TopBar } from '@/components/layout/top-bar';
+import { MetaDiscoverySection } from '@/components/meta/meta-discovery-section';
 import { MetaHeroMasthead, PersonalTicker } from '@/components/meta/meta-hero-masthead';
 import { AttemptsChip } from '@/components/quota/attempts-chip';
 import { AppText } from '@/components/ui/app-text';
-import { ranks } from '@/data/options';
 import { useDraftAccessGuard } from '@/hooks/use-draft-access';
 import { useTranslation } from '@/i18n';
-import { getMetaSnapshot, syncQuota } from '@/services/api/dota';
+import {
+  getMetaSnapshot,
+  isMetaSnapshotIncomplete,
+  META_SNAPSHOT_COLLECTING_RETRY_MS,
+  META_SNAPSHOT_STALE_RETRY_MS,
+  syncQuota,
+} from '@/services/api/dota';
 import { prepareDraftPhoto } from '@/services/image';
 import { useAppStore } from '@/store/app-store';
-import { layout, shape } from '@/theme/tokens';
+import { layout } from '@/theme/tokens';
 import { useAppTheme } from '@/theme/use-app-theme';
-import { createId } from '@/utils/id';
 
 export default function PickerScreen() {
   const session = useAppStore((state) => state.session);
-  const draft = useAppStore((state) => state.draft);
+  const draftRank = useAppStore((state) => state.draft.rank);
+  const draftPosition = useAppStore((state) => state.draft.position);
   const attempts = useAppStore((state) => state.attempts);
   const history = useAppStore((state) => state.history);
-  const setRank = useAppStore((state) => state.setRank);
   const setPhoto = useAppStore((state) => state.setPhoto);
+  const isFocused = useIsFocused();
   const metaQuery = useQuery({
-    queryKey: ['meta-hero', session?.userId, draft.rank],
-    queryFn: () => getMetaSnapshot(draft.rank),
-    enabled: Boolean(session),
-    staleTime: 15 * 60 * 1000,
+    queryKey: ['meta-snapshot', session?.userId, draftRank],
+    queryFn: () => getMetaSnapshot(draftRank),
+    enabled: Boolean(session) && isFocused,
+    staleTime: (query) => {
+      if (isMetaSnapshotIncomplete(query.state.data)) return 0;
+      return query.state.data?.isStale ? META_SNAPSHOT_STALE_RETRY_MS : 15 * 60 * 1_000;
+    },
+    refetchInterval: (query) => {
+      if (!isFocused) return false;
+      if (isMetaSnapshotIncomplete(query.state.data)) return META_SNAPSHOT_COLLECTING_RETRY_MS;
+      return query.state.data?.isStale ? META_SNAPSHOT_STALE_RETRY_MS : false;
+    },
+    refetchOnMount: (query) => (isMetaSnapshotIncomplete(query.state.data) ? 'always' : true),
   });
   useQuery({
     queryKey: ['quota', session?.userId],
     queryFn: syncQuota,
-    enabled: Boolean(session),
+    enabled: Boolean(session) && isFocused,
   });
   const [photoBusy, setPhotoBusy] = useState(false);
   const [photoError, setPhotoError] = useState<string | null>(null);
@@ -51,45 +61,33 @@ export default function PickerScreen() {
     title: string;
     message: string;
   } | null>(null);
-  const [validation, setValidation] = useState<string | null>(null);
-  const [analysisStarting, setAnalysisStarting] = useState(false);
-  const analysisLock = useRef(false);
   const draftAccess = useDraftAccessGuard();
-  const scrollY = useRef(new Animated.Value(0)).current;
-  const onScroll = useRef(
-    Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
-      useNativeDriver: true,
-    }),
-  ).current;
-  const headerDividerOpacity = scrollY.interpolate({
-    inputRange: [0, 8, 28],
-    outputRange: [0, 0.2, 1],
-    extrapolate: 'clamp',
-  });
+  const [scrollY] = useState(() => new Animated.Value(0));
+  const onScroll = useMemo(
+    () =>
+      Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
+        useNativeDriver: true,
+      }),
+    [scrollY],
+  );
+  const headerDividerOpacity = useMemo(
+    () =>
+      scrollY.interpolate({
+        inputRange: [0, 8, 28],
+        outputRange: [0, 0.2, 1],
+        extrapolate: 'clamp',
+      }),
+    [scrollY],
+  );
   const { colors } = useAppTheme();
   const { t } = useTranslation();
   const isRegistered = session?.kind === 'registered';
   const latest = isRegistered ? history[0] : undefined;
-  const role = latest?.draft.position ?? draft.position;
+  const role = latest?.draft.position ?? draftPosition;
   const roleEyebrow = latest ? t('home.lastAnalysis') : t('home.yourRole');
   const roleValue = role ? `${t(`position.${role}`)} / P${role}` : t('home.noRole');
-  const currentRank = latest?.draft.rank ?? draft.rank;
+  const currentRank = latest?.draft.rank ?? draftRank;
   const patch = metaQuery.data?.patch ?? latest?.patch ?? '—';
-
-  useFocusEffect(
-    useCallback(
-      () => () => {
-        analysisLock.current = false;
-        setAnalysisStarting(false);
-      },
-      [],
-    ),
-  );
-
-  useEffect(() => {
-    setValidation(null);
-  }, [attempts.remaining, draft.enemies.length, draft.position]);
-
   useEffect(() => {
     if (!photoErrorAlert) return;
     showNativeAlert(photoErrorAlert.title, photoErrorAlert.message, [
@@ -125,7 +123,7 @@ export default function PickerScreen() {
           return;
         }
         setPhotoErrorAlert({
-          title: source === 'camera' ? t('draft.camera') : t('home.scanDraft'),
+          title: source === 'camera' ? t('draft.camera') : t('draft.gallery'),
           message,
         });
       }, 800);
@@ -134,57 +132,20 @@ export default function PickerScreen() {
     }
   };
 
-  const analyze = () => {
-    if (analysisLock.current) return;
-    if (draftAccess.status !== 'allowed') {
-      setValidation(null);
-      draftAccess.requestAccess();
-      return;
-    }
-    if (!draft.position) {
-      setValidation(t('home.needPosition'));
-      showNativeAlert(t('home.analyze'), t('home.needPosition'), [{ text: t('common.confirm') }]);
-      return;
-    }
-    if (draft.enemies.length === 0) {
-      setValidation(t('home.needEnemy'));
-      showNativeAlert(t('home.analyze'), t('home.needEnemy'), [{ text: t('common.confirm') }]);
-      return;
-    }
-    setValidation(null);
-    analysisLock.current = true;
-    setAnalysisStarting(true);
-    router.push({
-      pathname: '/analysis',
-      params: { idempotencyKey: createId('manual') },
-    });
-  };
-
   return (
     <Screen
       showGrid
-      bottomInset={FLOATING_ACTION_BAR_BOTTOM_INSET + layout.tabBarHeight}
+      gridHeaderInset={66}
+      bottomInset={layout.tabBarHeight}
       onScroll={onScroll}
       scrollEventThrottle={16}
       stickyHeader={
-        <>
-          <TopBar
-            title="Counterpick"
-            eyebrow={`${t('brand.live')} · ${patch}`}
-            trailing={<AttemptsChip />}
-            dividerOpacity={headerDividerOpacity}
-          />
-          <FloatingActionBar
-            label={t('home.analyze')}
-            icon="git-compare-outline"
-            loading={analysisStarting}
-            disabled={analysisStarting || draftAccess.status === 'pending'}
-            onPress={analyze}
-            bottomOffset={layout.tabBarHeight}
-            accessibilityHint={t('home.analyzeHint')}
-            testID="draft-analyze"
-          />
-        </>
+        <TopBar
+          title="Counterpick"
+          eyebrow={`${t('brand.live')} · ${patch}`}
+          trailing={<AttemptsChip />}
+          dividerOpacity={headerDividerOpacity}
+        />
       }
     >
       <OfflineBanner />
@@ -199,9 +160,9 @@ export default function PickerScreen() {
           ]}
         />
       ) : null}
-
-      <View style={{ marginTop: 10 }}>
+      <View style={{ marginTop: 12 }}>
         <DraftBoard
+          captureOnly
           capture={{
             busy: photoBusy,
             onCamera: () => void pickPhoto('camera'),
@@ -226,124 +187,7 @@ export default function PickerScreen() {
         </View>
       ) : null}
 
-      {draft.enemies.length > 0 || draft.allies.length > 0 || draft.position ? (
-        <TouchableOpacity
-          accessibilityRole="button"
-          accessibilityLabel={t('home.resume')}
-          activeOpacity={0.74}
-          onPress={analyze}
-          style={{
-            minHeight: 64,
-            marginTop: 8,
-            paddingHorizontal: 11,
-            flexDirection: 'row',
-            alignItems: 'center',
-            borderWidth: 2,
-            borderRadius: shape.card,
-            borderColor: colors.outline,
-            backgroundColor: colors.surface,
-            overflow: 'hidden',
-          }}
-        >
-          <View style={{ width: 5, alignSelf: 'stretch', backgroundColor: colors.live }} />
-          <View style={{ flex: 1, minWidth: 0, marginLeft: 9, paddingRight: 8 }}>
-            <AppText
-              variant="data"
-              color={colors.textMuted}
-              style={{ fontSize: 8, lineHeight: 11 }}
-            >
-              {t('home.progress', { current: draft.enemies.length, maximum: 5 })}
-            </AppText>
-            <AppText
-              variant="inscription"
-              numberOfLines={2}
-              adjustsFontSizeToFit
-              minimumFontScale={0.7}
-              maxFontSizeMultiplier={1.5}
-              style={{ fontSize: 16, lineHeight: 18 }}
-            >
-              {t('home.resume')}
-            </AppText>
-          </View>
-          <AppText variant="display" color={colors.cobalt} style={{ fontSize: 27, lineHeight: 29 }}>
-            {String(draft.enemies.length).padStart(2, '0')}—05
-          </AppText>
-        </TouchableOpacity>
-      ) : null}
-
-      <View
-        style={{
-          marginTop: 14,
-          paddingTop: 11,
-          borderTopWidth: 2,
-          borderColor: colors.outline,
-        }}
-      >
-        <AppText variant="data" color={colors.textMuted} style={{ marginBottom: 7 }}>
-          01 / {t('position.title')}
-        </AppText>
-        <PositionPicker />
-      </View>
-
-      <View
-        style={{
-          marginTop: 14,
-          paddingTop: 11,
-          borderTopWidth: 2,
-          borderColor: colors.outline,
-        }}
-      >
-        <AppText variant="data" color={colors.textMuted} style={{ marginBottom: 7 }}>
-          02 / {t('rank.title')}
-        </AppText>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={{ gap: 8 }}
-        >
-          {ranks.map((rank) => {
-            const active = draft.rank === rank.value;
-            return (
-              <TouchableOpacity
-                key={rank.labelKey}
-                accessibilityRole="radio"
-                accessibilityState={{ checked: active }}
-                activeOpacity={0.74}
-                onPress={() => setRank(rank.value)}
-                style={{
-                  minHeight: 48,
-                  justifyContent: 'center',
-                  paddingHorizontal: 14,
-                  borderWidth: 2,
-                  borderRadius: shape.compact,
-                  borderColor: active ? colors.cobalt : colors.outline,
-                  backgroundColor: active ? colors.cobalt : colors.surface,
-                }}
-              >
-                <AppText variant="data" color={active ? '#FFFFFF' : colors.textMuted}>
-                  {t(rank.labelKey)}
-                </AppText>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
-      </View>
-
-      {validation ? (
-        <View
-          style={{
-            marginTop: 14,
-            padding: 10,
-            borderLeftWidth: 5,
-            borderColor: colors.live,
-            backgroundColor: colors.surface,
-          }}
-        >
-          <AppText accessibilityRole="alert" variant="caption" color={colors.danger}>
-            {validation}
-          </AppText>
-        </View>
-      ) : null}
+      <MetaDiscoverySection snapshot={metaQuery.data} loading={metaQuery.isPending} />
     </Screen>
   );
 }

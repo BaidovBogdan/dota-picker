@@ -37,6 +37,10 @@ const apiErrorKeys: Record<string, string> = {
   INVALID_CREDENTIALS: 'errors.invalidCredentials',
   ACCOUNT_EXISTS: 'errors.accountExists',
   ACCOUNT_CONFLICT: 'errors.accountConflict',
+  OTP_INVALID: 'errors.invalidOtp',
+  OTP_EXPIRED: 'errors.expiredOtp',
+  OTP_ATTEMPTS_EXHAUSTED: 'errors.otpAttemptsExhausted',
+  RATE_LIMITED: 'errors.rateLimited',
   TOKEN_INVALID: 'errors.authRequired',
   TOKEN_REUSED: 'errors.authRequired',
   QUOTA_EXHAUSTED: 'errors.quotaExhausted',
@@ -59,6 +63,8 @@ const REFRESH_EXCLUDED_PATHS = new Set([
   '/auth/guest',
   '/auth/login',
   '/auth/logout',
+  '/auth/otp/request',
+  '/auth/password/reset',
   '/auth/refresh',
   '/auth/register',
 ]);
@@ -153,6 +159,15 @@ async function parseResponse<T>(response: Response): Promise<T> {
   }
 
   return payload as T;
+}
+
+async function readResponseErrorCode(response: Response) {
+  const payload = (await response
+    .clone()
+    .json()
+    .catch(() => null)) as { code?: unknown; error?: { code?: unknown } } | null;
+  const code = payload?.error?.code ?? payload?.code;
+  return typeof code === 'string' ? code : null;
 }
 
 function validatePayload<T>(payload: unknown, schema: ZodType<T>) {
@@ -286,10 +301,17 @@ export async function apiRequest<T>(path: string, options: RequestOptions<T> = {
       !REFRESH_EXCLUDED_PATHS.has(routePath) &&
       isAuthGenerationCurrent(requestGeneration)
     ) {
-      const refreshedToken = await refreshAccessToken(requestGeneration);
-      if (signal?.aborted)
-        throw new ApiError(translate('errors.cancelled'), 0, 'REQUEST_CANCELLED');
-      if (refreshedToken) response = await request(refreshedToken);
+      const responseCode = await readResponseErrorCode(response);
+      if (
+        responseCode === null ||
+        responseCode === 'TOKEN_INVALID' ||
+        responseCode === 'AUTH_REQUIRED'
+      ) {
+        const refreshedToken = await refreshAccessToken(requestGeneration);
+        if (signal?.aborted)
+          throw new ApiError(translate('errors.cancelled'), 0, 'REQUEST_CANCELLED');
+        if (refreshedToken) response = await request(refreshedToken);
+      }
     }
     const payload = await parseResponse<unknown>(response);
     return schema ? validatePayload(payload, schema) : (payload as T);

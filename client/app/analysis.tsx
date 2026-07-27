@@ -1,6 +1,6 @@
-import { usePreventRemove } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
 import { router, useLocalSearchParams, useNavigation } from 'expo-router';
+import { usePreventRemove } from 'expo-router/react-navigation';
 import { useEffect, useRef, useState } from 'react';
 import { View } from 'react-native';
 
@@ -138,9 +138,8 @@ export default function AnalysisScreen() {
   const navigation = useNavigation();
   const handled = useRef(false);
   const allowNavigation = useRef(false);
-  const quotaAccepted = useRef(false);
   const [launchUserId] = useState(userId);
-  const [isSaving, setIsSaving] = useState(false);
+  const [quotaAccepted, setQuotaAccepted] = useState(false);
   const [persistenceError, setPersistenceError] = useState(false);
   const [saveAttempt, setSaveAttempt] = useState(0);
   const { t } = useTranslation();
@@ -150,7 +149,7 @@ export default function AnalysisScreen() {
     idempotencyKey.length <= 128
       ? idempotencyKey
       : null;
-  const accessStatus = quotaAccepted.current
+  const accessStatus = quotaAccepted
     ? 'allowed'
     : resolveDraftAccess({
         remaining: attempts.remaining,
@@ -178,13 +177,14 @@ export default function AnalysisScreen() {
     ],
     queryFn: ({ signal }) => {
       if (!actionKey || !launchUserId) throw new Error(t('analysis.error'));
-      quotaAccepted.current = true;
+      setQuotaAccepted(true);
       return analyzeDraft(draft, actionKey, { expectedUserId: launchUserId, signal });
     },
     enabled: valid,
     networkMode: 'always',
     retry: false,
   });
+  const isSaving = Boolean(query.data && !persistenceError);
 
   usePreventRemove(valid && (query.isFetching || isSaving), ({ data }) => {
     if (allowNavigation.current) navigation.dispatch(data.action);
@@ -195,20 +195,16 @@ export default function AnalysisScreen() {
     if (useAppStore.getState().session?.userId !== launchUserId) return;
     let active = true;
     handled.current = true;
-    setIsSaving(true);
-    setPersistenceError(false);
     saveAnalysis(query.data, actionKey ?? undefined);
     void flushAppPersistence()
       .then(() => {
         if (!active || useAppStore.getState().session?.userId !== launchUserId) return;
         allowNavigation.current = true;
-        setIsSaving(false);
         router.replace({ pathname: '/result/[id]', params: { id: query.data.id } });
       })
       .catch(() => {
         if (!active) return;
         handled.current = false;
-        setIsSaving(false);
         setPersistenceError(true);
       });
     return () => {

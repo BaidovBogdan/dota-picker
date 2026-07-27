@@ -26,7 +26,4 @@ export const nativeHeaderOptions = (colors: HeaderColors) =>
 export const nativeLargeHeaderOptions = (colors: HeaderColors) =>
   ({
     ...nativeHeaderOptions(colors),
-    headerTransparent: false,
-    headerStyle: { backgroundColor: colors.background },
-    headerLargeStyle: { backgroundColor: colors.background },
   }) as const;

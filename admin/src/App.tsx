@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
+  BarChart3,
   Bell,
   ChevronDown,
   Command,
   LayoutDashboard,
   Menu,
+  MessageSquareText,
   ScanSearch,
   Search,
   Server,
@@ -15,21 +17,28 @@ import {
 import { ConfirmDialog, IconButton, Toast, UserAvatar } from './components/ui';
 import {
   dailyMetrics,
+  heroDetails,
   initialActivity,
   initialAnalyses,
+  initialReviews,
   initialUsers,
+  metaSnapshots,
 } from './data/mock-data';
 import { downloadCsv } from './lib/format';
 import { AnalysesPage } from './pages/analyses';
+import { MetaPage } from './pages/meta';
 import { OverviewPage } from './pages/overview';
+import { ReviewsPage } from './pages/reviews';
 import { SystemPage } from './pages/system';
 import { UsersPage } from './pages/users';
-import type { AdminAnalysis, AdminUser, PageId } from './types';
+import type { AdminAnalysis, AdminReview, AdminUser, PageId } from './types';
 
 const navigation = [
   { id: 'overview', label: 'Обзор', icon: LayoutDashboard },
   { id: 'users', label: 'Пользователи', icon: Users },
   { id: 'analyses', label: 'Проверки', icon: ScanSearch },
+  { id: 'reviews', label: 'Отзывы', icon: MessageSquareText },
+  { id: 'meta', label: 'Мета', icon: BarChart3 },
   { id: 'system', label: 'Система', icon: Activity },
 ] satisfies Array<{ id: PageId; label: string; icon: typeof LayoutDashboard }>;
 
@@ -42,6 +51,7 @@ export function App() {
   const [page, setPage] = useState<PageId>(pageFromHash);
   const [users, setUsers] = useState<AdminUser[]>(initialUsers);
   const [analyses, setAnalyses] = useState<AdminAnalysis[]>(initialAnalyses);
+  const [reviews, setReviews] = useState<AdminReview[]>(initialReviews);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [selectedAnalysisId, setSelectedAnalysisId] = useState<string | null>(null);
   const [deleteCandidate, setDeleteCandidate] = useState<AdminUser | null>(null);
@@ -118,6 +128,7 @@ export function App() {
     if (!deleteCandidate) return;
     setUsers((current) => current.filter((user) => user.id !== deleteCandidate.id));
     setAnalyses((current) => current.filter((analysis) => analysis.userId !== deleteCandidate.id));
+    setReviews((current) => current.filter((review) => review.userId !== deleteCandidate.id));
     setSelectedUserId(null);
     setDeleteCandidate(null);
     notify('Пользователь и связанные демо-данные удалены');
@@ -245,6 +256,20 @@ export function App() {
               onCloseAnalysis={() => setSelectedAnalysisId(null)}
               onNotify={notify}
             />
+          ) : null}
+          {page === 'reviews' ? (
+            <ReviewsPage
+              reviews={reviews}
+              users={users}
+              analyses={analyses}
+              onDelete={(review) => {
+                setReviews((current) => current.filter((item) => item.id !== review.id));
+                notify('Отзыв удалён из демо-набора');
+              }}
+            />
+          ) : null}
+          {page === 'meta' ? (
+            <MetaPage snapshots={metaSnapshots} heroDetails={heroDetails} />
           ) : null}
           {page === 'system' ? <SystemPage analyses={analyses} onNotify={notify} /> : null}
         </div>

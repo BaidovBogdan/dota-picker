@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 export function createOpaqueToken() {
   return randomBytes(48).toString('base64url');
@@ -10,6 +10,12 @@ export function sha256(value: string) {
 
 export function hmacSha256(secret: string, value: string) {
   return createHmac('sha256', secret).update(value).digest('hex');
+}
+
+export function secureEqualHex(left: string, right: string) {
+  const leftBuffer = Buffer.from(left, 'hex');
+  const rightBuffer = Buffer.from(right, 'hex');
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
 }
 
 export function stableStringify(value: unknown): string {

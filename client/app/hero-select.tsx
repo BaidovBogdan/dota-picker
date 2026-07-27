@@ -3,7 +3,7 @@ import { FlashList } from '@shopify/flash-list';
 import { useQuery } from '@tanstack/react-query';
 import { Redirect, router, Stack, useLocalSearchParams } from 'expo-router';
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
-import { TouchableOpacity, View } from 'react-native';
+import { Pressable, View } from 'react-native';
 
 import { MessageState, Skeleton } from '@/components/feedback/states';
 import { HeroPortrait } from '@/components/hero/hero-portrait';
@@ -225,10 +225,9 @@ export default function HeroSelectScreen() {
         renderItem={({ item, index }) => {
           const fits = Boolean(draft.position && item.positions.includes(draft.position));
           return (
-            <TouchableOpacity
+            <Pressable
               accessibilityRole="button"
               accessibilityLabel={t('heroSelect.choose', { name: item.name })}
-              activeOpacity={0.72}
               onPress={() => select(item)}
               style={{
                 minHeight: 78,
@@ -248,7 +247,7 @@ export default function HeroSelectScreen() {
               >
                 {String(index + 1).padStart(2, '0')}
               </AppText>
-              <HeroPortrait hero={item} size={56} showName={false} />
+              <HeroPortrait hero={item} size={56} showName={false} transitionMs={0} />
               <View style={{ flex: 1 }}>
                 <AppText variant="inscription" numberOfLines={1}>
                   {item.name}
@@ -278,7 +277,7 @@ export default function HeroSelectScreen() {
               ) : (
                 <Ionicons name="arrow-forward" size={20} color={colors.textMuted} />
               )}
-            </TouchableOpacity>
+            </Pressable>
           );
         }}
       />

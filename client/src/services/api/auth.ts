@@ -36,6 +36,13 @@ const authResponseSchema = z.object({
   account: backendAccountSchema,
 });
 
+const otpChallengeResponseSchema = z.object({
+  challengeId: z.uuid(),
+  purpose: z.enum(['register', 'login', 'upgrade_guest', 'password_reset', 'password_change']),
+  expiresAt: z.iso.datetime(),
+  retryAfterSeconds: z.number().int().nonnegative(),
+});
+
 const accountResponseSchema = z.union([
   backendAccountSchema,
   z.object({ account: backendAccountSchema }),
@@ -44,6 +51,26 @@ const accountResponseSchema = z.union([
 type BackendQuota = z.infer<typeof backendQuotaSchema>;
 type BackendAccount = z.infer<typeof backendAccountSchema>;
 type AuthResponse = z.infer<typeof authResponseSchema>;
+type OtpChallengeResponse = z.infer<typeof otpChallengeResponseSchema>;
+
+export type AuthenticationOtpChallenge = OtpChallengeResponse & {
+  flow: 'login' | 'register' | 'upgrade_guest';
+  email: string;
+  password: string;
+  generation: number;
+  previousScope: string | null;
+};
+
+export type PasswordResetOtpChallenge = OtpChallengeResponse & {
+  purpose: 'password_reset';
+  email: string;
+  generation: number;
+};
+
+export type PasswordChangeOtpChallenge = OtpChallengeResponse & {
+  purpose: 'password_change';
+  generation: number;
+};
 
 const mapQuota = (quota: BackendQuota): Attempts => ({
   remaining: quota.remaining,
@@ -114,11 +141,11 @@ export async function bootstrapGuestSession(deviceId: string) {
   return acceptAuth(response, generation);
 }
 
-export async function authenticate(input: {
+export async function requestAuthenticationOtp(input: {
   mode: 'login' | 'register';
   email: string;
   password: string;
-}) {
+}): Promise<AuthenticationOtpChallenge> {
   const email = input.email.trim().toLowerCase();
   const generation = beginAuthTransition();
   const initialStore = useAppStore.getState();
@@ -130,9 +157,43 @@ export async function authenticate(input: {
   const canUpgradeGuest =
     input.mode === 'register' && session?.kind === 'guest' && (await hasAuthCredentials());
   if (!isAuthGenerationCurrent(generation)) throw staleAuthError();
-  const path = canUpgradeGuest ? '/auth/upgrade-guest' : `/auth/${input.mode}`;
-  if (input.mode === 'register' && previousScope) {
-    useAppStore.getState().setPendingRegistration({ ownerScope: previousScope, email });
+  const flow = canUpgradeGuest ? 'upgrade_guest' : input.mode;
+  const path = canUpgradeGuest ? '/auth/otp/request-authenticated' : '/auth/otp/request';
+  const body =
+    flow === 'upgrade_guest'
+      ? { purpose: flow, email }
+      : flow === 'login'
+        ? { purpose: flow, email, password: input.password }
+        : { purpose: flow, email };
+  const response = await apiRequest<OtpChallengeResponse>(path, {
+    method: 'POST',
+    body: JSON.stringify(body),
+    schema: otpChallengeResponseSchema,
+  });
+  if (!isAuthGenerationCurrent(generation)) throw staleAuthError();
+  if (response.purpose !== flow) {
+    throw new ApiError(translate('errors.incompatibleResponse'), 502, 'API_CONTRACT_ERROR');
+  }
+  return {
+    ...response,
+    flow,
+    email,
+    password: input.password,
+    generation,
+    previousScope,
+  };
+}
+
+export async function completeAuthenticationOtp(
+  challenge: AuthenticationOtpChallenge,
+  code: string,
+) {
+  if (!isAuthGenerationCurrent(challenge.generation)) throw staleAuthError();
+  if (challenge.flow !== 'login' && challenge.previousScope) {
+    useAppStore.getState().setPendingRegistration({
+      ownerScope: challenge.previousScope,
+      email: challenge.email,
+    });
     try {
       await flushAppPersistence();
     } catch {
@@ -140,27 +201,124 @@ export async function authenticate(input: {
       throw new ApiError(translate('errors.storage'), 0, 'STORAGE_ERROR');
     }
   }
+  if (!isAuthGenerationCurrent(challenge.generation)) throw staleAuthError();
+  const path =
+    challenge.flow === 'upgrade_guest' ? '/auth/upgrade-guest' : `/auth/${challenge.flow}`;
   let response: AuthResponse;
   try {
     response = await apiRequest<AuthResponse>(path, {
       method: 'POST',
-      body: JSON.stringify({ email, password: input.password }),
+      body: JSON.stringify({
+        email: challenge.email,
+        password: challenge.password,
+        challengeId: challenge.challengeId,
+        code,
+      }),
       schema: authResponseSchema,
     });
   } catch (error) {
-    const store = useAppStore.getState();
     if (
+      challenge.flow !== 'login' &&
       error instanceof ApiError &&
       error.status >= 400 &&
       error.status < 500 &&
-      store.pendingRegistration?.ownerScope === previousScope &&
-      store.pendingRegistration.email === email
+      useAppStore.getState().pendingRegistration?.ownerScope === challenge.previousScope &&
+      useAppStore.getState().pendingRegistration?.email === challenge.email
     ) {
-      store.setPendingRegistration(null);
+      useAppStore.getState().setPendingRegistration(null);
     }
     throw error;
   }
-  return acceptAuth(response, generation);
+  return acceptAuth(response, challenge.generation);
+}
+
+export async function requestPasswordResetOtp(
+  rawEmail: string,
+): Promise<PasswordResetOtpChallenge> {
+  const email = rawEmail.trim().toLowerCase();
+  const generation = beginAuthTransition();
+  const response = await apiRequest<OtpChallengeResponse>('/auth/otp/request', {
+    method: 'POST',
+    body: JSON.stringify({ purpose: 'password_reset', email }),
+    schema: otpChallengeResponseSchema,
+  });
+  if (!isAuthGenerationCurrent(generation)) throw staleAuthError();
+  if (response.purpose !== 'password_reset') {
+    throw new ApiError(translate('errors.incompatibleResponse'), 502, 'API_CONTRACT_ERROR');
+  }
+  return { ...response, purpose: 'password_reset', email, generation };
+}
+
+export async function completePasswordReset(
+  challenge: PasswordResetOtpChallenge,
+  input: { code: string; newPassword: string },
+) {
+  if (!isAuthGenerationCurrent(challenge.generation)) throw staleAuthError();
+  const response = await apiRequest<AuthResponse>('/auth/password/reset', {
+    method: 'POST',
+    body: JSON.stringify({
+      email: challenge.email,
+      newPassword: input.newPassword,
+      challengeId: challenge.challengeId,
+      code: input.code,
+    }),
+    schema: authResponseSchema,
+  });
+  return acceptAuth(response, challenge.generation);
+}
+
+export async function requestPasswordChangeOtp(): Promise<PasswordChangeOtpChallenge> {
+  const initialStore = useAppStore.getState();
+  if (initialStore.session?.kind !== 'registered') {
+    throw new ApiError(translate('errors.authRequired'), 401, 'AUTH_REQUIRED');
+  }
+  const generation = beginAuthTransition();
+  const response = await apiRequest<OtpChallengeResponse>('/auth/otp/request-authenticated', {
+    method: 'POST',
+    body: JSON.stringify({ purpose: 'password_change' }),
+    schema: otpChallengeResponseSchema,
+  });
+  if (!isAuthGenerationCurrent(generation)) throw staleAuthError();
+  if (response.purpose !== 'password_change') {
+    throw new ApiError(translate('errors.incompatibleResponse'), 502, 'API_CONTRACT_ERROR');
+  }
+  return { ...response, purpose: 'password_change', generation };
+}
+
+export async function completePasswordChange(
+  challenge: PasswordChangeOtpChallenge,
+  input: { code: string; currentPassword: string; newPassword: string },
+) {
+  if (!isAuthGenerationCurrent(challenge.generation)) throw staleAuthError();
+  const response = await apiRequest<AuthResponse>('/auth/password/change', {
+    method: 'POST',
+    body: JSON.stringify({
+      currentPassword: input.currentPassword,
+      newPassword: input.newPassword,
+      challengeId: challenge.challengeId,
+      code: input.code,
+    }),
+    schema: authResponseSchema,
+  });
+  return acceptAuth(response, challenge.generation);
+}
+
+export function cancelOtpChallenge(
+  challenge:
+    AuthenticationOtpChallenge | PasswordResetOtpChallenge | PasswordChangeOtpChallenge | null,
+) {
+  if (!challenge || !isAuthGenerationCurrent(challenge.generation)) return;
+  beginAuthTransition();
+  if (
+    'flow' in challenge &&
+    challenge.flow !== 'login' &&
+    challenge.previousScope &&
+    useAppStore.getState().pendingRegistration?.ownerScope === challenge.previousScope &&
+    useAppStore.getState().pendingRegistration?.email === challenge.email
+  ) {
+    useAppStore.getState().setPendingRegistration(null);
+    void flushAppPersistence().catch(() => {});
+  }
 }
 
 export async function logout() {

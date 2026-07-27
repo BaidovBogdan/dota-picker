@@ -4,20 +4,19 @@ import { IBMPlexSans_500Medium } from '@expo-google-fonts/ibm-plex-sans/500Mediu
 import { IBMPlexSans_600SemiBold } from '@expo-google-fonts/ibm-plex-sans/600SemiBold';
 import { Oswald_600SemiBold } from '@expo-google-fonts/oswald/600SemiBold';
 import { Oswald_700Bold } from '@expo-google-fonts/oswald/700Bold';
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
+import { DarkTheme, DefaultTheme, ThemeProvider } from 'expo-router/react-navigation';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useMemo } from 'react';
 import { Appearance, Platform } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
-import '../styles/global.css';
 import { BootstrapGate } from '@/components/bootstrap-gate';
 import { useReducedMotion } from '@/hooks/use-reduced-motion';
 import { AppProviders } from '@/providers/app-providers';
-import { useAppTheme } from '@/theme/use-app-theme';
+import { AppThemeProvider, useAppTheme } from '@/theme/use-app-theme';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
@@ -26,6 +25,14 @@ export const unstable_settings = {
 };
 
 export default function RootLayout() {
+  return (
+    <AppThemeProvider>
+      <ThemedRootLayout />
+    </AppThemeProvider>
+  );
+}
+
+function ThemedRootLayout() {
   const [fonts, fontError] = useFonts({
     IBMPlexSans_400Regular,
     IBMPlexSans_500Medium,
@@ -54,7 +61,7 @@ export default function RootLayout() {
   }, [colors, isDark]);
 
   useEffect(() => {
-    Appearance.setColorScheme(mode === 'system' ? null : resolvedMode);
+    Appearance.setColorScheme(mode === 'system' ? 'unspecified' : resolvedMode);
   }, [mode, resolvedMode]);
 
   useEffect(() => {
@@ -67,15 +74,51 @@ export default function RootLayout() {
       <ThemeProvider value={navigationTheme}>
         <AppProviders>
           <BootstrapGate fontsReady={fontsReady}>
-            <StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={colors.background} />
+            <StatusBar style={isDark ? 'light' : 'dark'} />
             <Stack
               screenOptions={{
                 headerShown: false,
+                freezeOnBlur: true,
                 contentStyle: { backgroundColor: colors.iron },
                 animation: reducedMotion ? 'none' : 'fade_from_bottom',
               }}
             >
               <Stack.Screen name="(tabs)" />
+              <Stack.Screen
+                name="wishlist"
+                options={{
+                  headerShown: true,
+                  animation: reducedMotion ? 'none' : 'slide_from_right',
+                }}
+              />
+              <Stack.Screen
+                name="meta"
+                options={{
+                  headerShown: false,
+                  animation: reducedMotion ? 'none' : 'slide_from_right',
+                }}
+              />
+              <Stack.Screen
+                name="hero/[id]"
+                options={{
+                  headerShown: true,
+                  animation: reducedMotion ? 'none' : 'slide_from_right',
+                }}
+              />
+              <Stack.Screen
+                name="draft/manual"
+                options={{
+                  presentation: Platform.OS === 'ios' ? 'formSheet' : 'modal',
+                  headerShown: false,
+                  sheetAllowedDetents: [1],
+                  sheetInitialDetentIndex: 0,
+                  sheetGrabberVisible: true,
+                  sheetExpandsWhenScrolledToEdge: true,
+                  gestureEnabled: true,
+                  animation: reducedMotion ? 'none' : 'default',
+                  contentStyle: { backgroundColor: colors.background },
+                }}
+              />
               <Stack.Screen
                 name="hero-select"
                 options={{
@@ -102,6 +145,19 @@ export default function RootLayout() {
                 options={{ animation: reducedMotion ? 'none' : 'slide_from_right' }}
               />
               <Stack.Screen
+                name="feedback/[analysisId]"
+                options={{
+                  presentation: Platform.OS === 'ios' ? 'formSheet' : 'modal',
+                  headerShown: true,
+                  sheetAllowedDetents: [0.72, 1],
+                  sheetInitialDetentIndex: 0,
+                  sheetGrabberVisible: true,
+                  sheetExpandsWhenScrolledToEdge: true,
+                  gestureEnabled: true,
+                  contentStyle: { backgroundColor: colors.background },
+                }}
+              />
+              <Stack.Screen
                 name="auth"
                 options={{
                   presentation: Platform.OS === 'ios' ? 'formSheet' : 'modal',
@@ -110,6 +166,19 @@ export default function RootLayout() {
                   sheetInitialDetentIndex: 0,
                   sheetGrabberVisible: true,
                   sheetExpandsWhenScrolledToEdge: false,
+                  gestureEnabled: true,
+                  contentStyle: { backgroundColor: colors.background },
+                }}
+              />
+              <Stack.Screen
+                name="change-password"
+                options={{
+                  presentation: Platform.OS === 'ios' ? 'formSheet' : 'modal',
+                  headerShown: true,
+                  sheetAllowedDetents: [0.72, 1],
+                  sheetInitialDetentIndex: 0,
+                  sheetGrabberVisible: true,
+                  sheetExpandsWhenScrolledToEdge: true,
                   gestureEnabled: true,
                   contentStyle: { backgroundColor: colors.background },
                 }}

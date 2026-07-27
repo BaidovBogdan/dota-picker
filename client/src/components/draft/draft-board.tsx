@@ -2,8 +2,12 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import LottieView from 'lottie-react-native';
 import { router } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
-import { TouchableOpacity, useWindowDimensions, View } from 'react-native';
+import { Pressable, useWindowDimensions, View } from 'react-native';
 
+import {
+  DraftCaptureActions,
+  type DraftCaptureActionsConfig,
+} from '@/components/draft/draft-capture-actions';
 import { HeroPortrait } from '@/components/hero/hero-portrait';
 import { AppText } from '@/components/ui/app-text';
 import { fallbackHeroes } from '@/data/heroes';
@@ -16,12 +20,6 @@ import { useAppTheme } from '@/theme/use-app-theme';
 import type { DraftTeam } from '@/types/domain';
 
 const plusAnimation = require('../../../assets/lottie/plus.json');
-
-type CaptureActions = {
-  busy: boolean;
-  onCamera: () => void;
-  onLibrary: () => void;
-};
 
 function TargetPick({ size }: { size: number }) {
   const position = useAppStore((state) => state.draft.position);
@@ -57,11 +55,13 @@ function TeamRow({
   slotSize,
   requestAccess,
   showHeader = true,
+  showDivider = true,
 }: {
   team: DraftTeam;
   slotSize: number;
   requestAccess: DraftAccessRequest;
   showHeader?: boolean;
+  showDivider?: boolean;
 }) {
   const heroIds = useAppStore((state) => state.draft[team]);
   const catalog = useAppStore((state) => state.heroes);
@@ -94,7 +94,7 @@ function TeamRow({
         paddingTop: showHeader ? 10 : 8,
         paddingBottom: 11,
         backgroundColor: colors.surface,
-        borderWidth: 2,
+        borderBottomWidth: showDivider ? 2 : 0,
         borderColor: colors.outline,
       }}
     >
@@ -167,128 +167,30 @@ function TeamRow({
   );
 }
 
-function CaptureDesk({
-  actions,
-  requestAccess,
-  accessPending,
-}: {
-  actions: CaptureActions;
-  requestAccess: DraftAccessRequest;
-  accessPending: boolean;
-}) {
-  const { colors } = useAppTheme();
-  const { t } = useTranslation();
-
-  return (
-    <View
-      style={{
-        minHeight: 112,
-        flexDirection: 'row',
-        borderWidth: 2,
-        borderTopWidth: 0,
-        borderColor: colors.outline,
-        backgroundColor: colors.surface,
-      }}
-    >
-      <TouchableOpacity
-        accessibilityRole="button"
-        accessibilityLabel={t('home.scanDraft')}
-        accessibilityHint={t('home.scanHint')}
-        activeOpacity={0.78}
-        disabled={actions.busy || accessPending}
-        onPress={() => requestAccess(actions.onLibrary)}
-        style={{
-          flex: 1.85,
-          minHeight: 110,
-          padding: 12,
-          flexDirection: 'row',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          backgroundColor: colors.cobalt,
-          opacity: actions.busy || accessPending ? 0.5 : 1,
-        }}
-      >
-        <AppText
-          variant="display"
-          color="#FFFFFF"
-          numberOfLines={2}
-          adjustsFontSizeToFit
-          style={{ maxWidth: 190, fontSize: 29, lineHeight: 29 }}
-        >
-          {actions.busy ? t('common.loading') : t('home.scanDraft')}
-        </AppText>
-        <Ionicons name="scan-outline" size={31} color="#FFFFFF" />
-      </TouchableOpacity>
-      <View style={{ flex: 1, minWidth: 104 }}>
-        <TouchableOpacity
-          accessibilityRole="button"
-          accessibilityLabel={t('home.manualEntry')}
-          activeOpacity={0.72}
-          disabled={actions.busy || accessPending}
-          onPress={() =>
-            requestAccess(() =>
-              router.push({ pathname: '/hero-select', params: { team: 'enemies' } }),
-            )
-          }
-          style={{
-            flex: 1,
-            minHeight: 55,
-            paddingHorizontal: 10,
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            borderLeftWidth: 2,
-            borderBottomWidth: 1,
-            borderColor: colors.outline,
-            backgroundColor: colors.surface,
-            opacity: actions.busy || accessPending ? 0.5 : 1,
-          }}
-        >
-          <AppText
-            variant="data"
-            numberOfLines={2}
-            adjustsFontSizeToFit
-            style={{ maxWidth: 70, fontSize: 9, lineHeight: 12 }}
-          >
-            {t('home.manualEntry')}
-          </AppText>
-          <Ionicons name="arrow-forward" size={19} color={colors.text} />
-        </TouchableOpacity>
-        <TouchableOpacity
-          accessibilityRole="button"
-          accessibilityLabel={t('draft.photo')}
-          activeOpacity={0.72}
-          disabled={actions.busy || accessPending}
-          onPress={() => requestAccess(actions.onCamera)}
-          style={{
-            flex: 1,
-            minHeight: 55,
-            paddingHorizontal: 10,
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            borderLeftWidth: 2,
-            borderTopWidth: 1,
-            borderColor: colors.outline,
-            backgroundColor: colors.surface,
-            opacity: actions.busy || accessPending ? 0.5 : 1,
-          }}
-        >
-          <AppText variant="data" style={{ fontSize: 9, lineHeight: 12 }}>
-            {t('draft.camera')}
-          </AppText>
-          <Ionicons name="camera-outline" size={19} color={colors.text} />
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
-}
-
-export function DraftBoard({
+function CaptureOnlyDraftBoard({
   capture,
   onRequestAccess,
 }: {
-  capture?: CaptureActions;
+  capture?: DraftCaptureActionsConfig;
+  onRequestAccess?: DraftAccessRequest;
+}) {
+  const draftAccess = useDraftAccessGuard();
+  if (!capture) return null;
+
+  return (
+    <DraftCaptureActions
+      actions={capture}
+      requestAccess={onRequestAccess ?? draftAccess.requestAccess}
+      accessPending={draftAccess.status === 'pending'}
+    />
+  );
+}
+
+function InteractiveDraftBoard({
+  capture,
+  onRequestAccess,
+}: {
+  capture?: DraftCaptureActionsConfig;
   onRequestAccess?: DraftAccessRequest;
 }) {
   const { width } = useWindowDimensions();
@@ -300,21 +202,36 @@ export function DraftBoard({
   const reducedMotion = useReducedMotion();
   const horizontalGutter = width >= 700 ? layout.tabletGutter : layout.phoneGutter;
   const contentWidth = Math.max(0, Math.min(width, layout.contentMaxWidth) - horizontalGutter * 2);
-  const slotSize = Math.max(44, Math.min(66, Math.floor((contentWidth - 36) / 5)));
+  const slotSize = Math.max(44, Math.min(66, Math.floor((contentWidth - 40) / 5)));
   const requestAccess = onRequestAccess ?? draftAccess.requestAccess;
 
   useEffect(() => {
-    if (allies.length > 0) setAlliesExpanded(true);
-  }, [allies.length]);
+    return useAppStore.subscribe((state, previousState) => {
+      if (
+        state.draft.allies.length > 0 &&
+        state.draft.allies.length !== previousState.draft.allies.length
+      ) {
+        setAlliesExpanded(true);
+      }
+    });
+  }, []);
 
   return (
-    <View style={{ width: '100%', borderRadius: shape.card, overflow: 'hidden' }}>
+    <View
+      style={{
+        width: '100%',
+        overflow: 'hidden',
+        borderWidth: 2,
+        borderRadius: shape.card,
+        borderColor: colors.outline,
+        backgroundColor: colors.surface,
+      }}
+    >
       <TeamRow team="enemies" slotSize={slotSize} requestAccess={requestAccess} />
-      <TouchableOpacity
+      <Pressable
         accessibilityRole="button"
         accessibilityState={{ expanded: alliesExpanded }}
         accessibilityLabel={t(alliesExpanded ? 'draft.hideAllies' : 'draft.addAllies')}
-        activeOpacity={0.76}
         onPress={() => setAlliesExpanded((current) => !current)}
         style={{
           minHeight: 48,
@@ -323,8 +240,7 @@ export function DraftBoard({
           alignItems: 'center',
           gap: 8,
           backgroundColor: colors.surface,
-          borderWidth: 2,
-          borderTopWidth: 0,
+          borderBottomWidth: alliesExpanded || capture ? 2 : 0,
           borderColor: colors.outline,
         }}
       >
@@ -370,24 +286,48 @@ export function DraftBoard({
           size={18}
           color={colors.text}
         />
-      </TouchableOpacity>
+      </Pressable>
       {alliesExpanded ? (
-        <View style={{ marginTop: -2 }}>
+        <View>
           <TeamRow
             team="allies"
             slotSize={slotSize}
             requestAccess={requestAccess}
             showHeader={false}
+            showDivider={Boolean(capture)}
           />
         </View>
       ) : null}
       {capture ? (
-        <CaptureDesk
+        <DraftCaptureActions
           actions={capture}
           requestAccess={requestAccess}
           accessPending={draftAccess.status === 'pending'}
+          embedded
         />
       ) : null}
     </View>
+  );
+}
+
+export function DraftBoard({
+  capture,
+  onRequestAccess,
+  captureOnly = false,
+}: {
+  capture?: DraftCaptureActionsConfig;
+  onRequestAccess?: DraftAccessRequest;
+  captureOnly?: boolean;
+}) {
+  return captureOnly ? (
+    <CaptureOnlyDraftBoard
+      {...(capture ? { capture } : {})}
+      {...(onRequestAccess ? { onRequestAccess } : {})}
+    />
+  ) : (
+    <InteractiveDraftBoard
+      {...(capture ? { capture } : {})}
+      {...(onRequestAccess ? { onRequestAccess } : {})}
+    />
   );
 }

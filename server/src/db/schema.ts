@@ -20,6 +20,13 @@ export const analysisSourceEnum = pgEnum('analysis_source', ['manual', 'photo'])
 export const idempotencyStatusEnum = pgEnum('idempotency_status', ['in_progress', 'completed']);
 export const quotaReasonEnum = pgEnum('quota_reason', ['analysis', 'refund']);
 export const billingEventStatusEnum = pgEnum('billing_event_status', ['pending', 'processed']);
+export const otpPurposeEnum = pgEnum('otp_purpose', [
+  'register',
+  'login',
+  'upgrade_guest',
+  'password_reset',
+  'password_change',
+]);
 
 export const accounts = pgTable(
   'accounts',
@@ -73,6 +80,31 @@ export const refreshTokens = pgTable(
   ],
 );
 
+export const otpChallenges = pgTable(
+  'otp_challenges',
+  {
+    id: uuid('id').primaryKey(),
+    purpose: otpPurposeEnum('purpose').notNull(),
+    emailHash: text('email_hash').notNull(),
+    accountId: uuid('account_id').references(() => accounts.id, { onDelete: 'cascade' }),
+    tokenVersion: integer('token_version'),
+    codeHash: text('code_hash').notNull(),
+    attempts: integer('attempts').notNull().default(0),
+    maxAttempts: integer('max_attempts').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    consumedAt: timestamp('consumed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('otp_challenges_email_purpose_created_idx').on(table.emailHash, table.purpose, table.createdAt),
+    index('otp_challenges_account_purpose_created_idx').on(table.accountId, table.purpose, table.createdAt),
+    index('otp_challenges_expires_idx').on(table.expiresAt),
+    check('otp_challenges_attempts_check', sql`
+      ${table.attempts} >= 0 and ${table.maxAttempts} > 0 and ${table.attempts} <= ${table.maxAttempts}
+    `),
+  ],
+);
+
 export const analyses = pgTable(
   'analyses',
   {
@@ -92,6 +124,38 @@ export const analyses = pgTable(
   (table) => [
     index('analyses_account_created_idx').on(table.accountId, table.createdAt, table.id),
     index('analyses_account_status_created_idx').on(table.accountId, table.status, table.createdAt, table.id),
+  ],
+);
+
+export const analysisReviews = pgTable(
+  'analysis_reviews',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    analysisId: uuid('analysis_id')
+      .notNull()
+      .references(() => analyses.id, { onDelete: 'cascade' }),
+    rating: integer('rating').notNull(),
+    selectedHeroIds: jsonb('selected_hero_ids').$type<number[]>().notNull().default(sql`'[]'::jsonb`),
+    comment: text('comment'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('analysis_reviews_account_analysis_unique').on(table.accountId, table.analysisId),
+    index('analysis_reviews_account_updated_idx').on(table.accountId, table.updatedAt, table.id),
+    index('analysis_reviews_updated_idx').on(table.updatedAt, table.id),
+    index('analysis_reviews_rating_updated_idx').on(table.rating, table.updatedAt, table.id),
+    check('analysis_reviews_rating_check', sql`${table.rating} between 1 and 5`),
+    check('analysis_reviews_selected_heroes_check', sql`
+      jsonb_typeof(${table.selectedHeroIds}) = 'array'
+      and jsonb_array_length(${table.selectedHeroIds}) <= 3
+    `),
+    check('analysis_reviews_comment_check', sql`
+      ${table.comment} is null or char_length(${table.comment}) <= 500
+    `),
   ],
 );
 
@@ -173,16 +237,25 @@ export const billingTombstones = pgTable(
 
 export const accountsRelations = relations(accounts, ({ many }) => ({
   analyses: many(analyses),
+  analysisReviews: many(analysisReviews),
   refreshTokens: many(refreshTokens),
+  otpChallenges: many(otpChallenges),
   quotaEvents: many(quotaEvents),
   idempotencyRecords: many(idempotencyRecords),
   billingEvents: many(billingEvents),
 }));
 
-export const analysesRelations = relations(analyses, ({ one }) => ({
+export const analysesRelations = relations(analyses, ({ one, many }) => ({
   account: one(accounts, { fields: [analyses.accountId], references: [accounts.id] }),
+  reviews: many(analysisReviews),
+}));
+
+export const analysisReviewsRelations = relations(analysisReviews, ({ one }) => ({
+  account: one(accounts, { fields: [analysisReviews.accountId], references: [accounts.id] }),
+  analysis: one(analyses, { fields: [analysisReviews.analysisId], references: [analyses.id] }),
 }));
 
 export type Account = typeof accounts.$inferSelect;
 export type NewAccount = typeof accounts.$inferInsert;
 export type Analysis = typeof analyses.$inferSelect;
+export type AnalysisReview = typeof analysisReviews.$inferSelect;

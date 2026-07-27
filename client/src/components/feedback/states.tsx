@@ -1,4 +1,5 @@
 import type Ionicons from '@expo/vector-icons/Ionicons';
+import { useIsFocused } from 'expo-router';
 import { useEffect } from 'react';
 import { StyleSheet, useWindowDimensions, View } from 'react-native';
 import Animated, {
@@ -64,6 +65,7 @@ export function MessageState({
   live = 'polite',
   scene,
 }: StateProps) {
+  const isFocused = useIsFocused();
   const { width } = useWindowDimensions();
   const { colors } = useAppTheme();
   const { t } = useTranslation();
@@ -110,7 +112,11 @@ export function MessageState({
               { borderColor: colors.outline },
             ]}
           >
-            <DotaStateAnimation scene={resolvedScene} size={horizontal ? 128 : 118} />
+            <DotaStateAnimation
+              active={isFocused}
+              scene={resolvedScene}
+              size={horizontal ? 128 : 118}
+            />
           </View>
           <View accessible accessibilityLabel={`${title}. ${message}`} style={styles.copy}>
             <AppText variant="title">{title}</AppText>
@@ -135,17 +141,19 @@ export function MessageState({
 export function Skeleton({ height = 82 }: { height?: number }) {
   const opacity = useSharedValue(0.35);
   const reduced = useReducedMotion();
+  const isFocused = useIsFocused();
   const { colors, alpha } = useAppTheme();
   const { t } = useTranslation();
 
   useEffect(() => {
-    if (reduced) {
+    cancelAnimation(opacity);
+    if (!isFocused || reduced) {
       opacity.value = 0.64;
     } else {
       opacity.value = withRepeat(withTiming(0.78, { duration: 760 }), -1, true);
     }
     return () => cancelAnimation(opacity);
-  }, [opacity, reduced]);
+  }, [isFocused, opacity, reduced]);
 
   const animatedStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
 

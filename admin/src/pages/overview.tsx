@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   ArrowDownRight,
   ArrowUpRight,
@@ -29,6 +29,12 @@ import {
 import type { ActivityEvent, AdminAnalysis, AdminUser, DailyMetric } from '../types';
 
 type Period = '7d' | '30d';
+
+type TooltipPosition = {
+  left: string;
+  top: string;
+  edge: 'start' | 'middle' | 'end';
+};
 
 type OverviewProps = {
   users: AdminUser[];
@@ -75,6 +81,9 @@ function MetricCard({
 
 function ActivityChart({ metrics }: { metrics: DailyMetric[] }) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const [tooltipPosition, setTooltipPosition] = useState<TooltipPosition | null>(null);
+  const interactionRef = useRef<'pointer' | 'keyboard' | null>(null);
+  const focusedIndexRef = useRef<number | null>(null);
   const width = 900;
   const height = 274;
   const padding = { top: 18, right: 16, bottom: 34, left: 44 };
@@ -96,9 +105,86 @@ function ActivityChart({ metrics }: { metrics: DailyMetric[] }) {
     : [0, Math.floor((metrics.length - 1) / 3), Math.floor(((metrics.length - 1) * 2) / 3), metrics.length - 1];
   const activePoint = activeIndex === null ? null : points[activeIndex];
 
+  const showKeyboardPoint = (index: number) => {
+    const point = points[index];
+    if (!point) {
+      return;
+    }
+
+    interactionRef.current = 'keyboard';
+    focusedIndexRef.current = index;
+    setActiveIndex(index);
+    setTooltipPosition({
+      left: `${(point.x / width) * 100}%`,
+      top: `${(point.y / height) * 100}%`,
+      edge: index === 0 ? 'start' : index === points.length - 1 ? 'end' : 'middle',
+    });
+  };
+
+  const handlePointerMove = (event: React.PointerEvent<SVGSVGElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    if (!bounds.width || !bounds.height || !points.length) {
+      return;
+    }
+
+    const pointerX = event.clientX - bounds.left;
+    const pointerY = event.clientY - bounds.top;
+    const viewBoxX = (pointerX / bounds.width) * width;
+    const normalizedX = Math.min(
+      1,
+      Math.max(0, (viewBoxX - padding.left) / innerWidth),
+    );
+    const nearestIndex = Math.round(normalizedX * (points.length - 1));
+    const tooltipWidth = 180;
+    const tooltipHeight = 68;
+    const edgeMargin = 8;
+    const edgeThreshold = tooltipWidth / 2 + edgeMargin;
+    const edge =
+      pointerX <= edgeThreshold
+        ? 'start'
+        : pointerX >= bounds.width - edgeThreshold
+          ? 'end'
+          : 'middle';
+    const left =
+      edge === 'start'
+        ? edgeMargin
+        : edge === 'end'
+          ? bounds.width - edgeMargin
+          : pointerX;
+    const top = Math.min(
+      bounds.height - edgeMargin,
+      Math.max(tooltipHeight + 13 + edgeMargin, pointerY),
+    );
+
+    interactionRef.current = 'pointer';
+    setActiveIndex((current) => (current === nearestIndex ? current : nearestIndex));
+    setTooltipPosition({
+      left: `${left}px`,
+      top: `${top}px`,
+      edge,
+    });
+  };
+
+  const handlePointerLeave = () => {
+    if (focusedIndexRef.current !== null) {
+      showKeyboardPoint(focusedIndexRef.current);
+      return;
+    }
+
+    interactionRef.current = null;
+    setActiveIndex(null);
+    setTooltipPosition(null);
+  };
+
   return (
     <div className="activity-chart">
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="График выполненных проверок">
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        role="group"
+        aria-label="График выполненных проверок"
+        onPointerMove={handlePointerMove}
+        onPointerLeave={handlePointerLeave}
+      >
         <defs>
           <linearGradient id="activity-fill" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="#635bff" stopOpacity="0.18" />
@@ -118,6 +204,13 @@ function ActivityChart({ metrics }: { metrics: DailyMetric[] }) {
         })}
         <path d={areaPath} fill="url(#activity-fill)" />
         <path d={path} className="chart-line" />
+        <rect
+          x={0}
+          y={0}
+          width={width}
+          height={height}
+          className="chart-hit"
+        />
         {activePoint ? (
           <line
             x1={activePoint.x}
@@ -144,12 +237,17 @@ function ActivityChart({ metrics }: { metrics: DailyMetric[] }) {
             r="11"
             className="chart-hit"
             tabIndex={0}
-            role="button"
+            role="img"
             aria-label={`${formatShortDate(point.date)}: ${point.checks} проверок, ${point.users} пользователей, ${point.failures} ошибок`}
-            onMouseEnter={() => setActiveIndex(index)}
-            onMouseLeave={() => setActiveIndex(null)}
-            onFocus={() => setActiveIndex(index)}
-            onBlur={() => setActiveIndex(null)}
+            onFocus={() => showKeyboardPoint(index)}
+            onBlur={() => {
+              focusedIndexRef.current = null;
+              if (interactionRef.current === 'keyboard') {
+                interactionRef.current = null;
+                setActiveIndex(null);
+                setTooltipPosition(null);
+              }
+            }}
           />
         ))}
         {xTickIndexes.map((index) => (
@@ -164,17 +262,20 @@ function ActivityChart({ metrics }: { metrics: DailyMetric[] }) {
           </text>
         ))}
       </svg>
-      {activePoint ? (
+      {activePoint && tooltipPosition ? (
         <ChartTooltip
           title={formatShortDate(activePoint.date)}
           value={`${formatNumber(activePoint.checks)} проверок`}
           detail={`${activePoint.users} пользователей · ${activePoint.failures} ошибок`}
           className={`chart-tooltip--point is-visible ${
-            activeIndex === 0 ? 'is-start' : activeIndex === points.length - 1 ? 'is-end' : ''
+            tooltipPosition.edge === 'middle' ? '' : `is-${tooltipPosition.edge}`
           }`}
           style={{
-            left: `${(activePoint.x / width) * 100}%`,
-            top: `${(activePoint.y / height) * 100}%`,
+            left: tooltipPosition.left,
+            top: tooltipPosition.top,
+            transition:
+              'left 90ms linear, top 90ms linear, opacity 140ms ease, transform 180ms cubic-bezier(0.2, 0.78, 0.25, 1), visibility 180ms ease',
+            willChange: 'left, top, transform',
           }}
         />
       ) : null}

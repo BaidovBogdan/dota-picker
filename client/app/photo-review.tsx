@@ -3,7 +3,7 @@ import { useMutation } from '@tanstack/react-query';
 import { Image } from 'expo-image';
 import { router, Stack } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { TouchableOpacity, useWindowDimensions, View } from 'react-native';
+import { Pressable, useWindowDimensions, View } from 'react-native';
 
 import { DraftBoard } from '@/components/draft/draft-board';
 import { MessageState } from '@/components/feedback/states';
@@ -42,11 +42,10 @@ function AssignmentButton({
   const backgroundColor = team === 'allies' ? colors.cobalt : colors.live;
 
   return (
-    <TouchableOpacity
+    <Pressable
       accessibilityRole="button"
       accessibilityLabel={label}
       accessibilityState={{ disabled }}
-      activeOpacity={0.76}
       disabled={disabled}
       onPress={onPress}
       style={{
@@ -78,7 +77,7 @@ function AssignmentButton({
       >
         {label}
       </AppText>
-    </TouchableOpacity>
+    </Pressable>
   );
 }
 
@@ -196,13 +195,17 @@ export default function PhotoReviewScreen() {
     },
   });
   const header = (
-    <Stack.Screen
-      options={{
-        ...nativeHeaderOptions(colors),
-        title: t('photo.title'),
-        headerLargeTitleEnabled: false,
-        headerBackButtonDisplayMode: 'minimal',
-        headerRight: () => (
+    <>
+      <Stack.Screen
+        options={{
+          ...nativeHeaderOptions(colors),
+          title: t('photo.title'),
+          headerLargeTitleEnabled: false,
+          headerBackButtonDisplayMode: 'minimal',
+        }}
+      />
+      <Stack.Toolbar placement="right">
+        <Stack.Toolbar.View>
           <View
             accessibilityLabel={t('quota.a11y', {
               remaining: attempts.remaining,
@@ -222,9 +225,9 @@ export default function PhotoReviewScreen() {
               {attempts.remaining}/{attempts.maximum}
             </AppText>
           </View>
-        ),
-      }}
-    />
+        </Stack.Toolbar.View>
+      </Stack.Toolbar>
+    </>
   );
 
   useEffect(() => {
@@ -392,6 +395,8 @@ export default function PhotoReviewScreen() {
             source={{ uri: photoUri }}
             style={{ width: '100%', height: '100%' }}
             contentFit="contain"
+            cachePolicy="none"
+            enforceEarlyResizing
             transition={160}
           />
           <View

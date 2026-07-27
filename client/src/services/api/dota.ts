@@ -81,6 +81,71 @@ const heroesResponseSchema = z.object({
   patch: z.string().optional(),
   fetchedAt: z.string().optional(),
 });
+const metaPositionStatSchema = z.object({
+  heroId: z.number().int().positive(),
+  position: positionSchema,
+  picks: z.number().int().positive(),
+  wins: z.number().int().nonnegative(),
+  winRate: z.number().min(0).max(1),
+  isApproximate: z.boolean(),
+  method: z.enum(['lane_role', 'lane_role_farm_priority']),
+});
+const metaPositionResponseSchema = z.object({
+  heroes: z.array(backendHeroSchema),
+  patch: z.string().min(1),
+  rank: positionSchema.or(z.literal(6)).or(z.literal(7)).or(z.literal(8)).nullable(),
+  rankFilter: z.enum(['average_match_rank', 'all_ranks']),
+  window: z.literal('current_patch_30d'),
+  minimumGames: z.number().int().positive(),
+  fetchedAt: z.string().min(1),
+  isStale: z.boolean(),
+  availability: z.enum(['ready', 'collecting']),
+  positionStats: z.array(metaPositionStatSchema),
+});
+const heroDetailResponseSchema = z.object({
+  hero: backendHeroSchema,
+  patch: z.object({
+    id: z.number().int().positive(),
+    name: z.string().min(1),
+    releasedAt: z.string().nullable(),
+  }),
+  generatedAt: z.string().min(1),
+  isStale: z.boolean(),
+  rankWinRates: z.array(
+    z.object({
+      rank: positionSchema.or(z.literal(6)).or(z.literal(7)).or(z.literal(8)),
+      games: z.number().int().nonnegative(),
+      wins: z.number().int().nonnegative(),
+      winRate: z.number().min(0).max(1).nullable(),
+      window: z.literal('rolling_7d'),
+    }),
+  ),
+  builds: z.array(
+    z.object({
+      id: z.string().min(1),
+      games: z.number().int().positive(),
+      wins: z.number().int().nonnegative(),
+      winRate: z.number().min(0).max(1),
+      items: z.array(
+        z.object({
+          id: z.number().int().nonnegative(),
+          slug: z.string().min(1),
+          name: z.string().min(1),
+          imageUrl: z.string().nullable(),
+          order: z.number().int().positive(),
+          medianPurchaseSec: z.number().int().nonnegative(),
+          p25PurchaseSec: z.number().int().nonnegative(),
+          p75PurchaseSec: z.number().int().nonnegative(),
+        }),
+      ),
+      source: z.literal('parsed_current_patch'),
+    }),
+  ),
+  buildSampleSize: z.number().int().nonnegative(),
+  availability: z.object({
+    builds: z.enum(['ready', 'collecting', 'unavailable']),
+  }),
+});
 const photoResponseSchema = z.object({
   quality: z.enum(['clear', 'partial', 'not_dota', 'too_blurry']),
   recognized: z.array(backendRecognizedPickSchema).max(10),
@@ -230,44 +295,244 @@ export async function getHeroes(): Promise<Hero[]> {
 
 export type MetaSnapshot = {
   hero: Hero | null;
+  entries: MetaRotationEntry[];
+  catalog: Hero[];
   patch: string;
   fetchedAt: string;
+  rank: number | null;
+  rankFilter: 'average_match_rank' | 'all_ranks';
+  window: 'current_patch_30d';
+  minimumGames: number;
+  isStale: boolean;
+  error: 'refresh_failed' | 'upstream_stale' | null;
+  availability: 'ready' | 'collecting';
+  positionStats: MetaPositionStat[];
+};
+
+export type MetaPositionStat = {
+  heroId: number;
+  position: Position;
+  picks: number;
+  wins: number;
+  winRate: number;
+  isApproximate: boolean;
+  method: 'lane_role' | 'lane_role_farm_priority';
+};
+
+export type MetaRotationEntry = {
+  position: Position;
+  hero: Hero;
+  picks: number;
+  wins: number;
+  winRate: number;
+  isApproximate: boolean;
+  isStale: boolean;
+  method: 'lane_role' | 'lane_role_farm_priority';
+};
+
+export const META_SNAPSHOT_STALE_RETRY_MS = 5 * 60 * 1_000;
+export const META_SNAPSHOT_COLLECTING_RETRY_MS = 30 * 1_000;
+
+export const isMetaSnapshotIncomplete = (snapshot?: MetaSnapshot) =>
+  Boolean(
+    snapshot &&
+      (snapshot.availability === 'collecting' ||
+        snapshot.positionStats.length === 0 ||
+        snapshot.catalog.length === 0),
+  );
+
+const selectMetaRotation = (
+  heroes: Hero[],
+  positionStats: MetaPositionStat[],
+  isStale: boolean,
+): MetaRotationEntry[] => {
+  const heroesById = new Map(heroes.map((hero) => [hero.id, hero]));
+  const usedHeroIds = new Set<number>();
+  return ([1, 2, 3, 4, 5] as const).flatMap((position) => {
+    const candidates = positionStats
+      .filter((candidate) => candidate.position === position && heroesById.has(candidate.heroId))
+      .sort(
+        (left, right) =>
+          right.winRate - left.winRate || right.picks - left.picks || left.heroId - right.heroId,
+      );
+    const stat =
+      candidates.find((candidate) => !usedHeroIds.has(candidate.heroId)) ?? candidates[0];
+    const hero = stat ? heroesById.get(stat.heroId) : undefined;
+    if (!stat || !hero) return [];
+    usedHeroIds.add(hero.id);
+    return [{ hero, ...stat, isStale }];
+  });
+};
+
+const rankMetaHeroes = (heroes: Hero[]) =>
+  heroes
+    .filter((hero) => (hero.picks ?? 0) > 0 && typeof hero.winRate === 'number')
+    .sort((left, right) => {
+      const winRateDelta = (right.winRate ?? 0) - (left.winRate ?? 0);
+      const picksDelta = (right.picks ?? 0) - (left.picks ?? 0);
+      return winRateDelta || picksDelta || left.id - right.id;
+    });
+
+const buildMetaCatalog = (heroes: Hero[], positionStats: MetaPositionStat[]): Hero[] => {
+  const statsByHero = new Map<
+    number,
+    {
+      picks: number;
+      wins: number;
+      positions: Set<Position>;
+    }
+  >();
+  for (const stat of positionStats) {
+    const aggregate = statsByHero.get(stat.heroId) ?? {
+      picks: 0,
+      wins: 0,
+      positions: new Set<Position>(),
+    };
+    aggregate.picks += stat.picks;
+    aggregate.wins += stat.wins;
+    aggregate.positions.add(stat.position);
+    statsByHero.set(stat.heroId, aggregate);
+  }
+  return rankMetaHeroes(
+    heroes.flatMap((hero) => {
+      const aggregate = statsByHero.get(hero.id);
+      if (!aggregate || aggregate.picks <= 0) return [];
+      return [
+        {
+          ...hero,
+          positions: [...aggregate.positions].sort((left, right) => left - right),
+          picks: aggregate.picks,
+          wins: aggregate.wins,
+          winRate: aggregate.wins / aggregate.picks,
+        },
+      ];
+    }),
+  );
+};
+
+const metaSnapshotCache = new Map<string, MetaSnapshot>();
+const META_SNAPSHOT_CACHE_LIMIT = 2;
+
+export function clearMetaSnapshotMemoryCache() {
+  metaSnapshotCache.clear();
+}
+
+const cacheMetaSnapshot = (key: string, snapshot: MetaSnapshot) => {
+  metaSnapshotCache.delete(key);
+  metaSnapshotCache.set(key, snapshot);
+  while (metaSnapshotCache.size > META_SNAPSHOT_CACHE_LIMIT) {
+    const oldestKey = metaSnapshotCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    metaSnapshotCache.delete(oldestKey);
+  }
 };
 
 export async function getMetaSnapshot(rank?: number | null): Promise<MetaSnapshot> {
+  const cacheKey = rank == null ? 'all' : String(rank);
   try {
     const suffix = rank ? `?rank=${rank}` : '';
-    const payload = await apiRequest<z.infer<typeof heroesResponseSchema>>(`/heroes${suffix}`, {
-      timeoutMs: 6_000,
-      schema: heroesResponseSchema,
-    });
+    const payload = await apiRequest<z.infer<typeof metaPositionResponseSchema>>(
+      `/heroes/meta-positions${suffix}`,
+      {
+        timeoutMs: 32_000,
+        schema: metaPositionResponseSchema,
+      },
+    );
+    if (payload.rank !== (rank ?? null)) {
+      throw new ApiError(translate('errors.incompatibleResponse'), 502, 'META_RANK_MISMATCH');
+    }
     const heroes = payload.heroes.map(mapHero);
     if (heroes.length) useAppStore.getState().setHeroes(heroes);
-    const hero =
-      heroes
-        .filter((item) => (item.picks ?? 0) > 0 && typeof item.winRate === 'number')
-        .sort((left, right) => {
-          const winRateDelta = (right.winRate ?? 0) - (left.winRate ?? 0);
-          return winRateDelta || (right.picks ?? 0) - (left.picks ?? 0);
-        })[0] ?? null;
-    return {
-      hero,
-      patch: payload.patch ?? 'unknown',
-      fetchedAt: payload.fetchedAt ?? new Date().toISOString(),
+    const positionStats: MetaPositionStat[] = payload.positionStats;
+    const entries = selectMetaRotation(heroes, positionStats, payload.isStale);
+    const snapshot: MetaSnapshot = {
+      hero: entries[0]?.hero ?? null,
+      entries,
+      catalog: buildMetaCatalog(heroes, positionStats),
+      patch: payload.patch,
+      fetchedAt: payload.fetchedAt,
+      rank: payload.rank,
+      rankFilter: payload.rankFilter,
+      window: payload.window,
+      minimumGames: payload.minimumGames,
+      isStale: payload.isStale,
+      error: payload.isStale ? 'upstream_stale' : null,
+      availability: payload.availability,
+      positionStats,
     };
+    if (!isMetaSnapshotIncomplete(snapshot)) cacheMetaSnapshot(cacheKey, snapshot);
+    return snapshot;
   } catch (error) {
     if (error instanceof ApiError && error.status >= 400 && error.status < 500) throw error;
-    const heroes = useAppStore.getState().heroes;
-    const hero =
-      heroes
-        .filter((item) => (item.picks ?? 0) > 0 && typeof item.winRate === 'number')
-        .sort((left, right) => (right.winRate ?? 0) - (left.winRate ?? 0))[0] ?? null;
+    const cached = metaSnapshotCache.get(cacheKey);
+    if (!cached) throw error;
+    cacheMetaSnapshot(cacheKey, cached);
     return {
-      hero,
-      patch: useAppStore.getState().history[0]?.patch ?? 'unknown',
-      fetchedAt: new Date().toISOString(),
+      ...cached,
+      isStale: true,
+      error: 'refresh_failed',
+      entries: cached.entries.map((entry) => ({ ...entry, isStale: true })),
     };
   }
+}
+
+export type HeroRankWinRate = {
+  rank: number;
+  games: number;
+  wins: number;
+  winRate: number | null;
+  window: 'rolling_7d';
+};
+
+export type HeroBuildItem = {
+  id: number;
+  slug: string;
+  name: string;
+  imageUrl: string | null;
+  order: number;
+  medianPurchaseSec: number;
+  p25PurchaseSec: number;
+  p75PurchaseSec: number;
+};
+
+export type HeroBuildVariant = {
+  id: string;
+  games: number;
+  wins: number;
+  winRate: number;
+  items: HeroBuildItem[];
+  source: 'parsed_current_patch';
+};
+
+export type HeroDetail = {
+  hero: Hero;
+  patch: {
+    id: number;
+    name: string;
+    releasedAt: string | null;
+  };
+  generatedAt: string;
+  isStale: boolean;
+  rankWinRates: HeroRankWinRate[];
+  builds: HeroBuildVariant[];
+  buildSampleSize: number;
+  availability: {
+    builds: 'ready' | 'collecting' | 'unavailable';
+  };
+};
+
+export async function getHeroDetail(heroId: number): Promise<HeroDetail> {
+  const payload = await apiRequest<z.infer<typeof heroDetailResponseSchema>>(
+    `/heroes/${heroId}/detail`,
+    {
+      timeoutMs: 30_000,
+      schema: heroDetailResponseSchema,
+    },
+  );
+  return {
+    ...payload,
+    hero: mapHero(payload.hero),
+  };
 }
 
 export async function recognizePhoto(input: {
@@ -573,5 +838,26 @@ export async function syncQuota(): Promise<BackendQuota | undefined> {
     useAppStore.getState().setSession({ ...session, plan: payload.quota.plan });
   }
   void syncPendingOfflineAnalyses();
+  return payload.quota;
+}
+
+export async function resetDevelopmentQuota(): Promise<BackendQuota> {
+  const expectedUserId = useAppStore.getState().session?.userId;
+  if (!expectedUserId) {
+    throw new ApiError(translate('errors.authRequired'), 401, 'AUTH_REQUIRED');
+  }
+  const payload = await apiRequest<z.infer<typeof quotaResponseSchema>>('/quota/reset', {
+    method: 'POST',
+    schema: quotaResponseSchema,
+  });
+  const store = useAppStore.getState();
+  if (store.session?.userId !== expectedUserId) {
+    throw new ApiError(translate('errors.authChanged'), 0, 'AUTH_OPERATION_STALE');
+  }
+  applyServerQuota(payload.quota);
+  const session = useAppStore.getState().session;
+  if (session && session.userId === expectedUserId && session.plan !== payload.quota.plan) {
+    useAppStore.getState().setSession({ ...session, plan: payload.quota.plan });
+  }
   return payload.quota;
 }

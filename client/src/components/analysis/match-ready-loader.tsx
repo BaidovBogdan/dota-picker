@@ -1,5 +1,6 @@
+import { useIsFocused } from 'expo-router';
 import LottieView from 'lottie-react-native';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Platform, View } from 'react-native';
 
 import { AppText } from '@/components/ui/app-text';
@@ -12,21 +13,37 @@ const loadingSource = require('../../../assets/lottie/loading.json');
 
 export function MatchReadyLoader() {
   const reduced = useReducedMotion();
+  const isFocused = useIsFocused();
+  return (
+    <MatchReadyLoaderContent
+      key={reduced ? 'reduced' : 'animated'}
+      active={isFocused}
+      reduced={reduced}
+    />
+  );
+}
+
+function MatchReadyLoaderContent({ active, reduced }: { active: boolean; reduced: boolean }) {
+  const animation = useRef<LottieView>(null);
   const { colors, alpha } = useAppTheme();
   const { t } = useTranslation();
   const [accepted, setAccepted] = useState(reduced ? 9 : 1);
 
   useEffect(() => {
-    if (reduced) {
-      setAccepted(9);
-      return;
-    }
-    setAccepted(1);
-    const interval = setInterval(() => {
+    if (reduced || !active || accepted >= 9) return;
+    const timeout = setTimeout(() => {
       setAccepted((current) => Math.min(9, current + 1));
     }, 420);
-    return () => clearInterval(interval);
-  }, [reduced]);
+    return () => clearTimeout(timeout);
+  }, [accepted, active, reduced]);
+
+  useEffect(() => {
+    if (!active || reduced) {
+      animation.current?.pause();
+      return;
+    }
+    animation.current?.play();
+  }, [active, reduced]);
 
   const stages = [t('analysis.stageDraft'), t('analysis.stageMeta'), t('analysis.stageCounter')];
   const activeStage = accepted < 4 ? 0 : accepted < 7 ? 1 : 2;
@@ -134,6 +151,7 @@ export function MatchReadyLoader() {
               }}
             >
               <LottieView
+                ref={animation}
                 source={loadingSource}
                 resizeMode="contain"
                 renderMode="AUTOMATIC"
@@ -143,7 +161,7 @@ export function MatchReadyLoader() {
                   ? Platform.OS === 'web'
                     ? { autoPlay: false, loop: false }
                     : { progress: 0.58 }
-                  : { autoPlay: true, loop: true, speed: 0.92 })}
+                  : { autoPlay: active, loop: true, speed: 0.92 })}
               />
             </View>
           </View>

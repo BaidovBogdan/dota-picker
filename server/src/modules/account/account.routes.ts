@@ -9,6 +9,7 @@ import type { QuotaService } from '../quota/quota.service.js';
 type Dependencies = {
   authService: AuthService;
   quotaService: QuotaService;
+  allowQuotaReset: boolean;
 };
 
 export function accountRoutes(dependencies: Dependencies): FastifyPluginAsyncZod {
@@ -42,6 +43,17 @@ export function accountRoutes(dependencies: Dependencies): FastifyPluginAsyncZod
         response: { 200: z.object({ quota: quotaSchema }) },
       },
     }, async (request) => ({ quota: await dependencies.quotaService.get(request.user.sub) }));
+
+    if (dependencies.allowQuotaReset) {
+      app.post('/quota/reset', {
+        preHandler: app.authenticate,
+        schema: {
+          tags: ['Account'],
+          security: [{ bearerAuth: [] }],
+          response: { 200: z.object({ quota: quotaSchema }) },
+        },
+      }, async (request) => ({ quota: await dependencies.quotaService.reset(request.user.sub) }));
+    }
 
     app.delete('/me', {
       preHandler: app.authenticate,

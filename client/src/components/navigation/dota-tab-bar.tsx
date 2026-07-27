@@ -1,8 +1,8 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import * as Haptics from 'expo-haptics';
+import type { BottomTabBarProps } from 'expo-router/js-tabs';
 import { memo, useCallback } from 'react';
-import { TouchableOpacity, useWindowDimensions, View } from 'react-native';
+import { Pressable, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AppText } from '@/components/ui/app-text';
@@ -86,13 +86,12 @@ export const DotaTabBar = memo(function DotaTabBar({
         const isFocused = state.routes[state.index]?.key === item.route.key;
         const options = descriptors[item.route.key]?.options;
         return (
-          <TouchableOpacity
+          <Pressable
             key={item.route.key}
             accessibilityRole="tab"
             accessibilityLabel={options?.tabBarAccessibilityLabel ?? t(item.a11yKey)}
             accessibilityState={{ selected: isFocused }}
             testID={options?.tabBarButtonTestID}
-            activeOpacity={0.78}
             onPress={() => commit(index)}
             style={{
               flex: 1,
@@ -138,7 +137,7 @@ export const DotaTabBar = memo(function DotaTabBar({
             >
               {t(item.labelKey)}
             </AppText>
-          </TouchableOpacity>
+          </Pressable>
         );
       })}
     </View>

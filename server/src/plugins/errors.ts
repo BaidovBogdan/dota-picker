@@ -53,6 +53,16 @@ export const errorPlugin = fp(async (app) => {
       });
     }
 
+    if (typeof error === 'object' && error !== null && 'statusCode' in error && error.statusCode === 429) {
+      return reply.status(429).send({
+        error: {
+          code: 'RATE_LIMITED',
+          message: 'Too many requests; retry shortly',
+          requestId: request.id,
+        },
+      });
+    }
+
     request.log.error({ err: error }, 'Unhandled request error');
     return reply.status(500).send({
       error: {

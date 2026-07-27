@@ -1,10 +1,9 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { FlashList } from '@shopify/flash-list';
-import { useFocusEffect } from '@react-navigation/native';
 import { Image } from 'expo-image';
-import { router, Stack } from 'expo-router';
+import { router, Stack, useFocusEffect, useIsFocused } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
-import { TouchableOpacity, View } from 'react-native';
+import { Pressable, View } from 'react-native';
 
 import { DotaStateAnimation } from '@/components/feedback/dota-state-animation';
 import { showNativeAlert } from '@/components/feedback/native-alert';
@@ -27,11 +26,12 @@ export default function HistoryScreen() {
   const { t } = useTranslation();
   const { colors } = useAppTheme();
   const normalizedSearch = search.trim().toLocaleLowerCase();
+  const registeredUserId = session?.kind === 'registered' ? session.userId : null;
 
   useFocusEffect(
     useCallback(() => {
-      if (session?.kind !== 'registered' || isRemoteBootstrapPending) return;
-      const expectedUserId = session.userId;
+      if (!registeredUserId || isRemoteBootstrapPending) return;
+      const expectedUserId = registeredUserId;
       let active = true;
       void getServerHistory()
         .then((serverHistory) => {
@@ -44,7 +44,7 @@ export default function HistoryScreen() {
       return () => {
         active = false;
       };
-    }, [isRemoteBootstrapPending, session?.kind, session?.userId]),
+    }, [isRemoteBootstrapPending, registeredUserId]),
   );
 
   const visibleHistory = useMemo(
@@ -158,6 +158,7 @@ export default function HistoryScreen() {
 }
 
 function EmptyArchive({ searching = false }: { searching?: boolean }) {
+  const isFocused = useIsFocused();
   const { t } = useTranslation();
   const { colors } = useAppTheme();
 
@@ -182,7 +183,7 @@ function EmptyArchive({ searching = false }: { searching?: boolean }) {
           paddingHorizontal: 24,
         }}
       >
-        <DotaStateAnimation scene="empty" size={166} />
+        <DotaStateAnimation active={isFocused} scene="empty" size={166} />
         <AppText variant="title" style={{ textAlign: 'center' }}>
           {t(searching ? 'history.noMatches' : 'history.empty')}
         </AppText>
@@ -280,10 +281,9 @@ function HistoryCard({
       </View>
 
       <View style={{ minHeight: 96, flexDirection: 'row', alignItems: 'stretch' }}>
-        <TouchableOpacity
+        <Pressable
           accessibilityRole="button"
           accessibilityLabel={`${t('history.open')}: ${first.hero.name}`}
-          activeOpacity={0.72}
           onPress={() => router.push({ pathname: '/result/[id]', params: { id: item.id } })}
           style={{
             flex: 1,
@@ -307,6 +307,9 @@ function HistoryCard({
               <Image
                 source={{ uri: first.hero.imageUrl }}
                 contentFit="cover"
+                cachePolicy="disk"
+                enforceEarlyResizing
+                recyclingKey={item.id}
                 transition={120}
                 style={{ width: '100%', height: '100%' }}
               />
@@ -334,12 +337,11 @@ function HistoryCard({
               {date}
             </AppText>
           </View>
-        </TouchableOpacity>
+        </Pressable>
 
-        <TouchableOpacity
+        <Pressable
           accessibilityRole="button"
           accessibilityLabel={`${t('common.delete')}: ${first.hero.name}`}
-          activeOpacity={0.7}
           hitSlop={6}
           onPress={onRemove}
           style={{
@@ -363,7 +365,7 @@ function HistoryCard({
           >
             <Ionicons name="close" size={20} color={colors.live} />
           </View>
-        </TouchableOpacity>
+        </Pressable>
       </View>
     </View>
   );

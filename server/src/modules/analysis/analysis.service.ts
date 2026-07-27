@@ -5,17 +5,18 @@ import { analyses, idempotencyRecords, quotaEvents } from '../../db/schema.js';
 import { AppError, ConflictError, NotFoundError } from '../../lib/errors.js';
 import type { OpenDotaAdapter } from '../heroes/opendota.adapter.js';
 import type { QuotaService, QuotaView } from '../quota/quota.service.js';
-import { rankRecommendations } from '../recommendation/ranking.js';
+import { RecommendationEngine } from '../recommendation/recommendation.engine.js';
 import { draftSchema, recommendationResultSchema } from '../recommendation/recommendation.schemas.js';
 import type { DraftInput, RecommendationResult } from '../recommendation/recommendation.types.js';
 
 const cursorSchema = z.object({ createdAt: z.iso.datetime(), id: z.uuid() });
+type DraftView = z.output<typeof draftSchema>;
 
 type AnalysisView = {
   id: string;
   status: 'completed';
   source: 'manual' | 'photo';
-  input: DraftInput;
+  input: DraftView;
   result: RecommendationResult;
   createdAt: string;
 };
@@ -38,6 +39,7 @@ export class AnalysisService {
     private readonly db: Database,
     private readonly meta: OpenDotaAdapter,
     private readonly quota: QuotaService,
+    private readonly recommendations = new RecommendationEngine(),
   ) {}
 
   public async analyze(
@@ -77,14 +79,18 @@ export class AnalysisService {
     try {
       const heroes = await this.meta.getHeroes(draft.rank);
       const heroIds = new Set(heroes.map((hero) => hero.id));
-      const unknownIds = [...draft.allyHeroIds, ...draft.enemyHeroIds].filter((id) => !heroIds.has(id));
+      const unknownIds = [
+        ...draft.allyHeroIds,
+        ...draft.enemyHeroIds,
+        ...(draft.bannedHeroIds ?? []),
+      ].filter((id) => !heroIds.has(id));
       if (unknownIds.length > 0) {
         throw new AppError(422, 'HERO_NOT_FOUND', 'One or more selected heroes do not exist', { heroIds: unknownIds });
       }
 
       const quota = await this.quota.reserve(accountId, row.id);
       const snapshot = await this.meta.getSnapshot(draft.rank, draft.enemyHeroIds);
-      const result = rankRecommendations({ draft, snapshot });
+      const result = await this.recommendations.recommend({ draft, snapshot });
       if (result.recommendations.length !== 3) {
         throw new AppError(422, 'INVALID_DRAFT', 'Not enough valid recommendations for this draft');
       }
@@ -105,7 +111,7 @@ export class AnalysisService {
           id: row.id,
           status: 'completed',
           source: draft.source,
-          input: draft,
+          input: draftSchema.parse(draft),
           result,
           createdAt: row.createdAt.toISOString(),
         },
@@ -218,7 +224,14 @@ export class AnalysisService {
       }
       const [row] = await tx
         .insert(analyses)
-        .values({ accountId, source: draft.source, input: { ...draft } })
+        .values({
+          accountId,
+          source: draft.source,
+          input: {
+            ...draft,
+            bannedHeroIds: draft.bannedHeroIds ?? [],
+          },
+        })
         .returning();
       if (!row) {
         throw new Error('Failed to create analysis');

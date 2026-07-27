@@ -25,8 +25,8 @@ type SystemPageProps = {
 const services = [
   { name: 'API', description: 'Fastify · eu-central', latency: 84, icon: Server, status: 'healthy' },
   { name: 'PostgreSQL', description: 'Основная база', latency: 21, icon: Database, status: 'healthy' },
-  { name: 'OpenDota', description: 'Снимок меты 7.39d', latency: 310, icon: Cloud, status: 'healthy' },
-  { name: 'Vision', description: 'Распознавание фото', latency: 2_480, icon: Zap, status: 'degraded' },
+  { name: 'OpenDota', description: 'Мета P1–P5 · патч 7.41', latency: 310, icon: Cloud, status: 'healthy' },
+  { name: 'Gemini Vision', description: 'gemini-3.5-flash-lite', latency: 2_480, icon: Zap, status: 'degraded' },
 ] as const;
 
 export function SystemPage({ analyses, onNotify }: SystemPageProps) {
@@ -203,8 +203,8 @@ export function SystemPage({ analyses, onNotify }: SystemPageProps) {
         <Panel className="usage-panel">
           <div className="panel-heading panel-heading--compact">
             <div>
-              <h2>Vision usage</h2>
-              <p>Модельные значения для будущей телеметрии.</p>
+              <h2>Gemini usage</h2>
+              <p>Распознавание фото через настроенную vision-модель.</p>
             </div>
             <WalletCards size={19} className="panel-heading__icon" />
           </div>

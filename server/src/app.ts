@@ -18,6 +18,7 @@ import { AnalysisService } from './modules/analysis/analysis.service.js';
 import { analysisRoutes } from './modules/analysis/analysis.routes.js';
 import { authRoutes } from './modules/auth/auth.routes.js';
 import { AuthService } from './modules/auth/auth.service.js';
+import { OtpService } from './modules/auth/otp.service.js';
 import { billingRoutes } from './modules/billing/billing.routes.js';
 import { BillingService } from './modules/billing/billing.service.js';
 import { heroesRoutes } from './modules/heroes/heroes.routes.js';
@@ -25,6 +26,10 @@ import { OpenDotaAdapter } from './modules/heroes/opendota.adapter.js';
 import { IdempotencyService } from './modules/idempotency/idempotency.service.js';
 import { GeminiPhotoAdapter } from './modules/photo/gemini-photo.adapter.js';
 import { QuotaService } from './modules/quota/quota.service.js';
+import { GeminiRecommendationAdvisor } from './modules/recommendation/gemini-recommendation.adapter.js';
+import { RecommendationEngine } from './modules/recommendation/recommendation.engine.js';
+import { reviewRoutes } from './modules/reviews/review.routes.js';
+import { ReviewService } from './modules/reviews/review.service.js';
 import { authPlugin } from './plugins/auth.js';
 import { errorPlugin } from './plugins/errors.js';
 import { healthRoutes } from './routes/health.routes.js';
@@ -35,7 +40,12 @@ export function buildApp(config: AppConfig = loadConfig()) {
     bodyLimit: config.maxImageBytes + 1024 * 1024,
     logger: {
       level: config.logLevel,
-      redact: ['req.headers.authorization', 'req.headers.cookie', 'res.headers.set-cookie'],
+      redact: [
+        'req.headers.authorization',
+        'req.headers.cookie',
+        'req.headers.x-admin-key',
+        'res.headers.set-cookie',
+      ],
       ...(config.nodeEnv === 'development'
         ? { transport: { target: 'pino-pretty', options: { colorize: true, singleLine: true } } }
         : {}),
@@ -43,12 +53,21 @@ export function buildApp(config: AppConfig = loadConfig()) {
   }).withTypeProvider<ZodTypeProvider>();
   const { db, pool } = createDatabase(config.databaseUrl);
   const quotaService = new QuotaService(db, config.quota);
-  const authService = new AuthService(db, config);
+  const otpService = new OtpService(db, config);
+  const authService = new AuthService(db, config, otpService);
   const metaAdapter = new OpenDotaAdapter(config.openDota);
-  const analysisService = new AnalysisService(db, metaAdapter, quotaService);
+  const recommendationAdvisor = new GeminiRecommendationAdvisor(config.gemini);
+  const recommendationEngine = new RecommendationEngine(recommendationAdvisor);
+  const analysisService = new AnalysisService(
+    db,
+    metaAdapter,
+    quotaService,
+    recommendationEngine,
+  );
   const idempotencyService = new IdempotencyService(db, config.idempotencyTtlMs, config.idempotencyLeaseMs);
   const photoAdapter = new GeminiPhotoAdapter(config.gemini);
   const billingService = new BillingService(db, config, quotaService);
+  const reviewService = new ReviewService(db);
 
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
@@ -88,7 +107,11 @@ export function buildApp(config: AppConfig = loadConfig()) {
   app.register(errorPlugin);
   app.register(healthRoutes(db), { prefix: '/health' });
   app.register(authRoutes({ config, authService, quotaService }), { prefix: '/v1/auth' });
-  app.register(accountRoutes({ authService, quotaService }), { prefix: '/v1' });
+  app.register(accountRoutes({
+    authService,
+    quotaService,
+    allowQuotaReset: config.nodeEnv !== 'production',
+  }), { prefix: '/v1' });
   app.register(heroesRoutes(metaAdapter), { prefix: '/v1/heroes' });
   app.register(analysisRoutes({
     config,
@@ -99,6 +122,7 @@ export function buildApp(config: AppConfig = loadConfig()) {
     quotaService,
   }), { prefix: '/v1/analyses' });
   app.register(billingRoutes({ config, billingService }), { prefix: '/v1/billing' });
+  app.register(reviewRoutes({ config, reviewService }), { prefix: '/v1' });
 
   app.addHook('onClose', async () => {
     await pool.end();

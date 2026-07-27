@@ -1,14 +1,27 @@
 import NetInfo from '@react-native-community/netinfo';
 import { focusManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { Image } from 'expo-image';
+import { setVideoCacheSizeAsync } from 'expo-video';
 import { PropsWithChildren, useEffect, useRef, useState } from 'react';
 import { AppState, Platform } from 'react-native';
 
-import { syncQuota } from '@/services/api/dota';
+import { clearMetaSnapshotMemoryCache, syncQuota } from '@/services/api/dota';
 import { applyNetworkState, refreshNetworkState } from '@/services/network';
-import { getSessionScope, useAppStore } from '@/store/app-store';
+import { flushAppPersistence, getSessionScope, useAppStore } from '@/store/app-store';
 import { LocaleProvider } from '@/i18n';
 
-const accountScopedQueryKeys = new Set(['analysis', 'billing-plans', 'quota']);
+const IMAGE_MEMORY_CACHE_BYTES = 32 * 1024 * 1024;
+const IMAGE_DISK_CACHE_BYTES = 256 * 1024 * 1024;
+const VIDEO_DISK_CACHE_BYTES = 192 * 1024 * 1024;
+const accountScopedQueryKeys = new Set([
+  'analysis',
+  'billing-plans',
+  'hero-detail',
+  'heroes',
+  'meta-snapshot',
+  'quota',
+  'reviews',
+]);
 
 const syncPendingForCurrentOwner = () => {
   const store = useAppStore.getState();
@@ -26,15 +39,33 @@ export function AppProviders({ children }: PropsWithChildren) {
   const nextRefreshAt = useAppStore((state) => state.attempts.nextRefreshAt);
   const plan = useAppStore((state) => state.session?.plan);
   const refreshFreeAttempts = useAppStore((state) => state.refreshFreeAttempts);
-  const [client] = useState(
-    () =>
-      new QueryClient({
-        defaultOptions: {
-          queries: { staleTime: 5 * 60 * 1000, retry: 1, refetchOnReconnect: true },
-          mutations: { retry: 0 },
-        },
-      }),
-  );
+  const [client] = useState(() => {
+    if (Platform.OS === 'ios') {
+      Image.configureCache({
+        maxMemoryCost: IMAGE_MEMORY_CACHE_BYTES,
+        maxMemoryCount: 64,
+        maxDiskSize: IMAGE_DISK_CACHE_BYTES,
+      });
+    }
+    return new QueryClient({
+      defaultOptions: {
+        queries: { staleTime: 5 * 60 * 1000, retry: 1, refetchOnReconnect: true },
+        mutations: { retry: 0 },
+      },
+    });
+  });
+
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    void setVideoCacheSizeAsync(VIDEO_DISK_CACHE_BYTES).catch(() => {});
+    if (Platform.OS !== 'ios') return;
+    const subscription = AppState.addEventListener('memoryWarning', () => {
+      client.removeQueries({ type: 'inactive' });
+      clearMetaSnapshotMemoryCache();
+      void Image.clearMemoryCache().catch(() => {});
+    });
+    return () => subscription.remove();
+  }, [client]);
 
   useEffect(() => {
     const deadline = Date.parse(nextRefreshAt);
@@ -63,7 +94,10 @@ export function AppProviders({ children }: PropsWithChildren) {
     if (Platform.OS === 'web') return;
     const subscription = AppState.addEventListener('change', (state) => {
       focusManager.setFocused(state === 'active');
-      if (state !== 'active') return;
+      if (state !== 'active') {
+        void flushAppPersistence().catch(() => {});
+        return;
+      }
       useAppStore.getState().refreshFreeAttempts();
       void refreshNetworkState().then((online) => {
         if (online) syncPendingForCurrentOwner();

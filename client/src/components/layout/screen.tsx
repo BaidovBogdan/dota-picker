@@ -12,6 +12,7 @@ type Props = PropsWithChildren<{
   keyboard?: boolean;
   nativeHeader?: boolean;
   showGrid?: boolean;
+  gridHeaderInset?: number;
   onScroll?: ScrollViewProps['onScroll'];
   scrollEventThrottle?: number;
   refreshControl?: ScrollViewProps['refreshControl'];
@@ -25,6 +26,7 @@ export function Screen({
   keyboard = false,
   nativeHeader = false,
   showGrid = false,
+  gridHeaderInset = 0,
   onScroll,
   scrollEventThrottle,
   refreshControl,
@@ -76,6 +78,19 @@ export function Screen({
       style={{ flex: 1, backgroundColor: colors.background }}
     >
       {showGrid ? <BroadcastGrid /> : null}
+      {showGrid && gridHeaderInset > 0 ? (
+        <View
+          pointerEvents="none"
+          style={{
+            position: 'absolute',
+            top: 0,
+            right: 0,
+            left: 0,
+            height: insets.top + gridHeaderInset,
+            backgroundColor: colors.background,
+          }}
+        />
+      ) : null}
       {stickyHeader}
       {content}
     </SafeAreaView>

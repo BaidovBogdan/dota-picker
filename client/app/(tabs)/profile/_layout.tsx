@@ -12,7 +12,9 @@ export default function ProfileLayout() {
         name="index"
         options={{ ...nativeLargeHeaderOptions(colors), headerLargeTitleEnabled: true }}
       />
+      <Stack.Screen name="reviews" options={{ headerLargeTitleEnabled: true }} />
       <Stack.Screen name="lottie-lab" options={{ headerLargeTitleEnabled: false }} />
+      <Stack.Screen name="loader-preview" options={{ headerLargeTitleEnabled: false }} />
     </Stack>
   );
 }

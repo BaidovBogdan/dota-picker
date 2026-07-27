@@ -1,6 +1,6 @@
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { ScrollView, TouchableOpacity, View } from 'react-native';
+import { Pressable, ScrollView, View } from 'react-native';
 
 import { AppText } from '@/components/ui/app-text';
 import { IconButton } from '@/components/ui/icon-button';
@@ -62,11 +62,10 @@ export default function NativeSheetDemoScreen() {
           {positions.map((item) => {
             const active = item === position;
             return (
-              <TouchableOpacity
+              <Pressable
                 key={item}
                 accessibilityRole="radio"
                 accessibilityState={{ checked: active }}
-                activeOpacity={0.74}
                 onPress={() => setPosition(item)}
                 style={{
                   width: 52,
@@ -82,7 +81,7 @@ export default function NativeSheetDemoScreen() {
                 <AppText variant="data" color={active ? '#FFFFFF' : colors.text}>
                   P{item}
                 </AppText>
-              </TouchableOpacity>
+              </Pressable>
             );
           })}
         </View>
@@ -94,11 +93,10 @@ export default function NativeSheetDemoScreen() {
           {ranks.map((item) => {
             const active = item === rank;
             return (
-              <TouchableOpacity
+              <Pressable
                 key={item}
                 accessibilityRole="radio"
                 accessibilityState={{ checked: active }}
-                activeOpacity={0.74}
                 onPress={() => setRank(item)}
                 style={{
                   minHeight: 58,
@@ -118,7 +116,7 @@ export default function NativeSheetDemoScreen() {
                 <AppText variant="data" color={active ? '#FFFFFF' : colors.textMuted}>
                   0{item}
                 </AppText>
-              </TouchableOpacity>
+              </Pressable>
             );
           })}
         </View>

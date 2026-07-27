@@ -109,6 +109,7 @@ export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZo
           413: errorResponseSchema,
           415: errorResponseSchema,
           422: errorResponseSchema,
+          429: errorResponseSchema,
           503: errorResponseSchema,
         },
       },

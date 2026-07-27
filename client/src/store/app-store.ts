@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { InteractionManager } from 'react-native';
 import { create } from 'zustand';
-import { createJSONStorage, persist } from 'zustand/middleware';
+import { persist, type PersistStorage, type StorageValue } from 'zustand/middleware';
 
 import type {
   AnalysisResult,
@@ -19,25 +20,6 @@ import { createId } from '@/utils/id';
 const HISTORY_LIMIT = 50;
 const HISTORY_TOMBSTONE_LIMIT = 200;
 const ATTEMPT_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
-
-let persistenceTail: Promise<void> = Promise.resolve();
-let latestPersistenceOperation: Promise<void> = persistenceTail;
-
-const enqueuePersistenceOperation = (operation: () => Promise<void>) => {
-  const queued = persistenceTail.then(operation);
-  latestPersistenceOperation = queued;
-  persistenceTail = queued.catch(() => undefined);
-  return queued;
-};
-
-const appStorage = {
-  getItem: (name: string) => AsyncStorage.getItem(name),
-  setItem: (name: string, value: string) =>
-    enqueuePersistenceOperation(() => AsyncStorage.setItem(name, value)),
-  removeItem: (name: string) => enqueuePersistenceOperation(() => AsyncStorage.removeItem(name)),
-};
-
-export const flushAppPersistence = () => latestPersistenceOperation;
 
 export type PendingOfflineAnalysis = {
   localResultId: string;
@@ -105,6 +87,7 @@ type AppState = {
   history: AnalysisResult[];
   deletedHistoryIds: string[];
   deletedOfflineResultIds: string[];
+  wishlistByOwnerScope: Record<string, number[]>;
   heroes: Hero[];
   bootstrapGuest: () => void;
   setGuestId: (guestId: string) => void;
@@ -134,6 +117,8 @@ type AppState = {
   setPendingAccountDeletionScope: (ownerScope: string | null) => void;
   setAttempts: (attempts: Attempts) => void;
   setServerAttempts: (attempts: Attempts, ownerScope: string) => void;
+  toggleWishlist: (heroId: number) => void;
+  removeFromWishlist: (heroIds: number[]) => void;
   setHeroes: (heroes: Hero[]) => void;
   setHydrated: (hydrated: boolean) => void;
   setRemoteBootstrapPending: (pending: boolean) => void;
@@ -154,8 +139,96 @@ type PersistedAppState = {
   history: AnalysisResult[];
   deletedHistoryIds: string[];
   deletedOfflineResultIds: string[];
+  wishlistByOwnerScope: Record<string, number[]>;
   themeMode: ThemeMode;
   languageMode: LanguageMode;
+};
+
+type PendingPersistenceWrite = {
+  value: StorageValue<PersistedAppState>;
+  resolve: (() => void)[];
+  reject: ((reason: unknown) => void)[];
+};
+
+let persistenceTail: Promise<void> = Promise.resolve();
+let latestPersistenceOperation: Promise<void> = persistenceTail;
+let persistenceSchedule: ReturnType<typeof InteractionManager.runAfterInteractions> | null = null;
+const pendingPersistenceWrites = new Map<string, PendingPersistenceWrite>();
+
+const enqueuePersistenceOperation = (operation: () => Promise<void>) => {
+  const queued = persistenceTail.then(operation);
+  latestPersistenceOperation = queued;
+  persistenceTail = queued.catch(() => undefined);
+  return queued;
+};
+
+const flushPendingPersistenceBatch = () => {
+  if (pendingPersistenceWrites.size === 0) return latestPersistenceOperation;
+  const batch = [...pendingPersistenceWrites.entries()];
+  pendingPersistenceWrites.clear();
+  const operation = enqueuePersistenceOperation(async () => {
+    for (const [name, pending] of batch) {
+      await AsyncStorage.setItem(name, JSON.stringify(pending.value));
+    }
+  });
+  void operation.then(
+    () => {
+      batch.forEach(([, pending]) => pending.resolve.forEach((resolve) => resolve()));
+    },
+    (error: unknown) => {
+      batch.forEach(([, pending]) => pending.reject.forEach((reject) => reject(error)));
+    },
+  );
+  return operation;
+};
+
+const schedulePersistenceBatch = () => {
+  if (persistenceSchedule || pendingPersistenceWrites.size === 0) return;
+  persistenceSchedule = InteractionManager.runAfterInteractions(() => {
+    persistenceSchedule = null;
+    void flushPendingPersistenceBatch();
+  });
+};
+
+const appStorage: PersistStorage<PersistedAppState> = {
+  getItem: async (name) => {
+    const value = await AsyncStorage.getItem(name);
+    return value ? (JSON.parse(value) as StorageValue<PersistedAppState>) : null;
+  },
+  setItem: (name, value) =>
+    new Promise<void>((resolve, reject) => {
+      const pending = pendingPersistenceWrites.get(name);
+      if (pending) {
+        pending.value = value;
+        pending.resolve.push(resolve);
+        pending.reject.push(reject);
+      } else {
+        pendingPersistenceWrites.set(name, {
+          value,
+          resolve: [resolve],
+          reject: [reject],
+        });
+      }
+      schedulePersistenceBatch();
+    }),
+  removeItem: (name) => {
+    const pending = pendingPersistenceWrites.get(name);
+    if (pending) {
+      pendingPersistenceWrites.delete(name);
+      pending.resolve.forEach((resolve) => resolve());
+    }
+    if (pendingPersistenceWrites.size === 0) {
+      persistenceSchedule?.cancel();
+      persistenceSchedule = null;
+    }
+    return enqueuePersistenceOperation(() => AsyncStorage.removeItem(name));
+  },
+};
+
+export const flushAppPersistence = () => {
+  persistenceSchedule?.cancel();
+  persistenceSchedule = null;
+  return flushPendingPersistenceBatch();
 };
 
 type UnknownRecord = Record<string, unknown>;
@@ -398,6 +471,21 @@ const normalizeStringIds = (value: unknown, fallback: string[]) => {
   ).slice(0, HISTORY_TOMBSTONE_LIMIT);
 };
 
+const normalizeWishlistByOwnerScope = (value: unknown, fallback: Record<string, number[]>) => {
+  if (!isRecord(value)) {
+    return Object.fromEntries(
+      Object.entries(fallback).map(([scope, heroIds]) => [scope, [...heroIds]]),
+    );
+  }
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([scope, heroIds]) => {
+      if (!scope.trim()) return [];
+      const normalized = normalizeHeroIds(heroIds, 200);
+      return normalized.length ? [[scope, normalized]] : [];
+    }),
+  );
+};
+
 const createPersistedDefaults = (): PersistedAppState => ({
   guestId: null,
   session: null,
@@ -411,6 +499,7 @@ const createPersistedDefaults = (): PersistedAppState => ({
   history: [],
   deletedHistoryIds: [],
   deletedOfflineResultIds: [],
+  wishlistByOwnerScope: {},
   themeMode: 'system',
   languageMode: 'system',
 });
@@ -428,6 +517,7 @@ const persistedDefaultsFromState = (state: AppState): PersistedAppState => ({
   history: state.history,
   deletedHistoryIds: state.deletedHistoryIds,
   deletedOfflineResultIds: state.deletedOfflineResultIds,
+  wishlistByOwnerScope: state.wishlistByOwnerScope,
   themeMode: state.themeMode,
   languageMode: state.languageMode,
 });
@@ -509,12 +599,37 @@ const normalizePersistedState = (
       persisted.deletedOfflineResultIds,
       fallback.deletedOfflineResultIds,
     ),
+    wishlistByOwnerScope: normalizeWishlistByOwnerScope(
+      persisted.wishlistByOwnerScope,
+      fallback.wishlistByOwnerScope,
+    ),
     themeMode,
     languageMode,
   };
 };
 
 const touch = (draft: Draft): Draft => ({ ...draft, updatedAt: new Date().toISOString() });
+const sameNumbers = (left: number[], right: number[]) =>
+  left.length === right.length && left.every((value, index) => value === right[index]);
+
+const sameHeroes = (left: Hero[], right: Hero[]) =>
+  left.length === right.length &&
+  left.every((hero, index) => {
+    const candidate = right[index];
+    return (
+      candidate !== undefined &&
+      hero.id === candidate.id &&
+      hero.slug === candidate.slug &&
+      hero.name === candidate.name &&
+      hero.attribute === candidate.attribute &&
+      hero.imageUrl === candidate.imageUrl &&
+      hero.iconUrl === candidate.iconUrl &&
+      hero.picks === candidate.picks &&
+      hero.wins === candidate.wins &&
+      hero.winRate === candidate.winRate &&
+      sameNumbers(hero.positions, candidate.positions)
+    );
+  });
 
 const combineHistory = (
   incoming: AnalysisResult[],
@@ -588,6 +703,7 @@ export const useAppStore = create<AppState>()(
       history: [],
       deletedHistoryIds: [],
       deletedOfflineResultIds: [],
+      wishlistByOwnerScope: {},
       heroes: [],
       bootstrapGuest: () => {
         if (!get().guestId) set({ guestId: createId('guest') });
@@ -618,18 +734,31 @@ export const useAppStore = create<AppState>()(
         const refreshedAttempts = refreshAttemptsAfterDeadline(state.attempts);
         if (refreshedAttempts) state.setAttempts(refreshedAttempts);
       },
-      setPosition: (position) => set(({ draft }) => ({ draft: touch({ ...draft, position }) })),
-      setRank: (rank) => set(({ draft }) => ({ draft: touch({ ...draft, rank }) })),
-      setPhoto: (photoUri) =>
+      setPosition: (position) => {
+        if (get().draft.position === position) return;
+        set(({ draft }) => ({ draft: touch({ ...draft, position }) }));
+      },
+      setRank: (rank) => {
+        if (get().draft.rank === rank) return;
+        set(({ draft }) => ({ draft: touch({ ...draft, rank }) }));
+      },
+      setPhoto: (photoUri) => {
+        const current = get().draft;
+        const source = photoUri ? 'photo' : 'manual';
+        if (current.photoUri === photoUri && current.source === source) return;
         set(({ draft }) => ({
           draft: touch({
             ...draft,
             photoUri,
-            source: photoUri ? 'photo' : 'manual',
+            source,
             ...(photoUri ? { allies: [], enemies: [] } : {}),
           }),
-        })),
-      clearPhotoUri: () => set(({ draft }) => ({ draft: { ...draft, photoUri: null } })),
+        }));
+      },
+      clearPhotoUri: () => {
+        if (get().draft.photoUri === null) return;
+        set(({ draft }) => ({ draft: { ...draft, photoUri: null } }));
+      },
       replaceTeam: (team, heroIds) =>
         set(({ draft }) => {
           const opposite = new Set(team === 'allies' ? draft.enemies : draft.allies);
@@ -659,38 +788,43 @@ export const useAppStore = create<AppState>()(
             draft: touch({ ...draft, allies: nextAllies, enemies: nextEnemies }),
           };
         }),
-      addHero: (team, heroId) =>
-        set(({ draft }) => {
-          const current = draft[team];
-          const opposite = team === 'allies' ? draft.enemies : draft.allies;
-          if (
-            current.length >= (team === 'allies' ? 4 : 5) ||
-            current.includes(heroId) ||
-            opposite.includes(heroId)
-          )
-            return {};
-          return { draft: touch({ ...draft, [team]: [...current, heroId] }) };
-        }),
-      replaceHero: (team, currentHeroId, nextHeroId) =>
-        set(({ draft }) => {
-          const current = draft[team];
-          const opposite = team === 'allies' ? draft.enemies : draft.allies;
-          const index = current.indexOf(currentHeroId);
-          if (
-            index < 0 ||
-            nextHeroId <= 0 ||
-            opposite.includes(nextHeroId) ||
-            (nextHeroId !== currentHeroId && current.includes(nextHeroId))
-          )
-            return {};
-          const next = [...current];
-          next[index] = nextHeroId;
-          return { draft: touch({ ...draft, [team]: next }) };
-        }),
-      removeHero: (team, heroId) =>
+      addHero: (team, heroId) => {
+        const draft = get().draft;
+        const current = draft[team];
+        const opposite = team === 'allies' ? draft.enemies : draft.allies;
+        if (
+          current.length >= (team === 'allies' ? 4 : 5) ||
+          current.includes(heroId) ||
+          opposite.includes(heroId)
+        ) {
+          return;
+        }
+        set({ draft: touch({ ...draft, [team]: [...current, heroId] }) });
+      },
+      replaceHero: (team, currentHeroId, nextHeroId) => {
+        const draft = get().draft;
+        const current = draft[team];
+        const opposite = team === 'allies' ? draft.enemies : draft.allies;
+        const index = current.indexOf(currentHeroId);
+        if (
+          index < 0 ||
+          nextHeroId <= 0 ||
+          opposite.includes(nextHeroId) ||
+          currentHeroId === nextHeroId ||
+          current.includes(nextHeroId)
+        ) {
+          return;
+        }
+        const next = [...current];
+        next[index] = nextHeroId;
+        set({ draft: touch({ ...draft, [team]: next }) });
+      },
+      removeHero: (team, heroId) => {
+        if (!get().draft[team].includes(heroId)) return;
         set(({ draft }) => ({
           draft: touch({ ...draft, [team]: draft[team].filter((id) => id !== heroId) }),
-        })),
+        }));
+      },
       resetDraft: () => set({ draft: createDraft() }),
       saveAnalysis: (result, idempotencyKey) =>
         set((state) => {
@@ -822,23 +956,28 @@ export const useAppStore = create<AppState>()(
           };
         }),
       discardOwnerScope: (ownerScope) =>
-        set((state) => ({
-          history: state.history.filter((item) => item.ownerScope !== ownerScope),
-          pendingOfflineAnalyses: state.pendingOfflineAnalyses.filter(
-            (item) => item.ownerScope !== ownerScope,
-          ),
-          pendingAccountDeletionScope:
-            state.pendingAccountDeletionScope === ownerScope
-              ? null
-              : state.pendingAccountDeletionScope,
-          ...(state.serverAttemptsOwnerScope === ownerScope
-            ? {
-                attempts: { ...state.attempts, remaining: 0 },
-                serverAttempts: null,
-                serverAttemptsOwnerScope: null,
-              }
-            : {}),
-        })),
+        set((state) => {
+          const wishlistByOwnerScope = { ...state.wishlistByOwnerScope };
+          delete wishlistByOwnerScope[ownerScope];
+          return {
+            history: state.history.filter((item) => item.ownerScope !== ownerScope),
+            pendingOfflineAnalyses: state.pendingOfflineAnalyses.filter(
+              (item) => item.ownerScope !== ownerScope,
+            ),
+            wishlistByOwnerScope,
+            pendingAccountDeletionScope:
+              state.pendingAccountDeletionScope === ownerScope
+                ? null
+                : state.pendingAccountDeletionScope,
+            ...(state.serverAttemptsOwnerScope === ownerScope
+              ? {
+                  attempts: { ...state.attempts, remaining: 0 },
+                  serverAttempts: null,
+                  serverAttemptsOwnerScope: null,
+                }
+              : {}),
+          };
+        }),
       removeHistory: (id) =>
         set((state) => {
           const removed = state.history.find((item) => item.id === id);
@@ -964,10 +1103,24 @@ export const useAppStore = create<AppState>()(
                   item.ownerScope === migrationScope ? { ...item, ownerScope } : item,
                 )
               : retainedHistory;
+          const wishlistByOwnerScope = { ...state.wishlistByOwnerScope };
+          if (shouldDiscardDeletedScope && deletionScope) {
+            delete wishlistByOwnerScope[deletionScope];
+          }
+          if (migrationScope && migrationScope !== ownerScope) {
+            wishlistByOwnerScope[ownerScope] = Array.from(
+              new Set([
+                ...(wishlistByOwnerScope[ownerScope] ?? []),
+                ...(wishlistByOwnerScope[migrationScope] ?? []),
+              ]),
+            ).slice(0, 200);
+            delete wishlistByOwnerScope[migrationScope];
+          }
           return {
             session,
             history,
             pendingOfflineAnalyses,
+            wishlistByOwnerScope,
             serverAttempts,
             serverAttemptsOwnerScope: ownerScope,
             attempts: effectiveAttempts(serverAttempts, pendingOfflineAnalyses, ownerScope),
@@ -995,16 +1148,67 @@ export const useAppStore = create<AppState>()(
           serverAttemptsOwnerScope: ownerScope,
           attempts: effectiveAttempts(serverAttempts, pendingOfflineAnalyses, ownerScope),
         })),
-      setHeroes: (heroes) => set({ heroes }),
-      setHydrated: (hasHydrated) => set({ hasHydrated }),
-      setRemoteBootstrapPending: (isRemoteBootstrapPending) => set({ isRemoteBootstrapPending }),
-      setThemeMode: (themeMode) => set({ themeMode }),
-      setLanguageMode: (languageMode) => set({ languageMode }),
+      toggleWishlist: (heroId) => {
+        if (!Number.isInteger(heroId) || heroId <= 0) return;
+        const currentState = get();
+        const ownerScope = getSessionScope(currentState.session, currentState.guestId);
+        if (!ownerScope) return;
+        set((state) => {
+          const current = state.wishlistByOwnerScope[ownerScope] ?? [];
+          return {
+            wishlistByOwnerScope: {
+              ...state.wishlistByOwnerScope,
+              [ownerScope]: current.includes(heroId)
+                ? current.filter((id) => id !== heroId)
+                : [...current, heroId].slice(0, 200),
+            },
+          };
+        });
+      },
+      removeFromWishlist: (heroIds) => {
+        const currentState = get();
+        const ownerScope = getSessionScope(currentState.session, currentState.guestId);
+        if (!ownerScope) return;
+        const removed = new Set(normalizeHeroIds(heroIds, 200));
+        if (!removed.size) return;
+        const current = currentState.wishlistByOwnerScope[ownerScope] ?? [];
+        if (!current.some((heroId) => removed.has(heroId))) return;
+        set((state) => {
+          return {
+            wishlistByOwnerScope: {
+              ...state.wishlistByOwnerScope,
+              [ownerScope]: (state.wishlistByOwnerScope[ownerScope] ?? []).filter(
+                (heroId) => !removed.has(heroId),
+              ),
+            },
+          };
+        });
+      },
+      setHeroes: (heroes) => {
+        if (sameHeroes(get().heroes, heroes)) return;
+        set({ heroes });
+      },
+      setHydrated: (hasHydrated) => {
+        if (get().hasHydrated === hasHydrated) return;
+        set({ hasHydrated });
+      },
+      setRemoteBootstrapPending: (isRemoteBootstrapPending) => {
+        if (get().isRemoteBootstrapPending === isRemoteBootstrapPending) return;
+        set({ isRemoteBootstrapPending });
+      },
+      setThemeMode: (themeMode) => {
+        if (get().themeMode === themeMode) return;
+        set({ themeMode });
+      },
+      setLanguageMode: (languageMode) => {
+        if (get().languageMode === languageMode) return;
+        set({ languageMode });
+      },
     }),
     {
       name: 'counterpick.app.v1',
-      storage: createJSONStorage(() => appStorage),
-      version: 5,
+      storage: appStorage,
+      version: 6,
       migrate: (persistedState) =>
         normalizePersistedState(persistedState, createPersistedDefaults()),
       partialize: ({
@@ -1020,6 +1224,7 @@ export const useAppStore = create<AppState>()(
         history,
         deletedHistoryIds,
         deletedOfflineResultIds,
+        wishlistByOwnerScope,
         themeMode,
         languageMode,
       }) => ({
@@ -1035,6 +1240,7 @@ export const useAppStore = create<AppState>()(
         history,
         deletedHistoryIds,
         deletedOfflineResultIds,
+        wishlistByOwnerScope,
         themeMode,
         languageMode,
       }),

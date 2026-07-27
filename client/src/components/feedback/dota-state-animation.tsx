@@ -1,5 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import LottieView from 'lottie-react-native';
+import { useEffect, useRef } from 'react';
 import { Platform, StyleSheet, View } from 'react-native';
 
 import { useReducedMotion } from '@/hooks/use-reduced-motion';
@@ -28,12 +29,15 @@ const loadingLayers = [
 ] as const;
 
 export function DotaStateAnimation({
+  active = true,
   scene,
   size = 140,
 }: {
+  active?: boolean;
   scene: DotaStateScene;
   size?: number;
 }) {
+  const animation = useRef<LottieView>(null);
   const reduced = useReducedMotion();
   const { colors, alpha } = useAppTheme();
   const frameInset = Math.max(7, Math.round(size * 0.08));
@@ -47,6 +51,14 @@ export function DotaStateAnimation({
           { keypath: loadingLayers[2], color: colors.cobalt },
         ]
       : undefined;
+
+  useEffect(() => {
+    if (!active || reduced) {
+      animation.current?.pause();
+      return;
+    }
+    animation.current?.play();
+  }, [active, reduced, scene]);
 
   return (
     <View pointerEvents="none" style={[styles.root, { width: size, height: size }]}>
@@ -86,13 +98,14 @@ export function DotaStateAnimation({
         ]}
       />
       <LottieView
+        ref={animation}
         source={sources[scene]}
         resizeMode="contain"
         renderMode="AUTOMATIC"
         colorFilters={loadingColorFilters}
         style={{ width: size, height: size }}
         webStyle={{ width: size, height: size }}
-        {...(reduced
+        {...(reduced || !active
           ? Platform.OS === 'web'
             ? { autoPlay: false, loop: false }
             : { progress: staticProgress[scene] }

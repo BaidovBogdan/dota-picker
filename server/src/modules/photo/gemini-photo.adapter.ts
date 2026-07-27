@@ -45,7 +45,7 @@ export class GeminiPhotoAdapter implements PhotoRecognizer {
   private readonly client: GeminiClient | null;
 
   public constructor(
-    private readonly config: AppConfig['gemini'],
+    private readonly config: Pick<AppConfig['gemini'], 'apiKey' | 'visionModel' | 'timeoutMs'>,
     client?: GeminiClient,
   ) {
     if (client) {

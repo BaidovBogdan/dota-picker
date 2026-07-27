@@ -1,10 +1,12 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { useQuery } from '@tanstack/react-query';
 import { Image } from 'expo-image';
-import { router, Stack, useLocalSearchParams } from 'expo-router';
+import { type Href, router, Stack, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
-import { View } from 'react-native';
+import { Platform, Pressable, View } from 'react-native';
 
 import { MessageState } from '@/components/feedback/states';
+import { showNativeAlert } from '@/components/feedback/native-alert';
 import {
   FLOATING_ACTION_BAR_BOTTOM_INSET,
   FloatingActionBar,
@@ -14,6 +16,7 @@ import { AppText } from '@/components/ui/app-text';
 import { useDraftAccessGuard } from '@/hooks/use-draft-access';
 import { localizeStoredText, useTranslation } from '@/i18n';
 import { nativeHeaderOptions } from '@/navigation/native-header';
+import { getAnalysisReview } from '@/services/api/reviews';
 import { useAppStore } from '@/store/app-store';
 import { shape } from '@/theme/tokens';
 import { useAppTheme } from '@/theme/use-app-theme';
@@ -29,11 +32,22 @@ const recommendationLabelKey = (label: string) => {
 export default function ResultScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const result = useAppStore((state) => state.history.find((item) => item.id === id));
+  const sessionUserId = useAppStore((state) => state.session?.userId);
   const resetDraft = useAppStore((state) => state.resetDraft);
   const isRemoteBootstrapPending = useAppStore((state) => state.isRemoteBootstrapPending);
   const draftAccess = useDraftAccessGuard();
   const { colors } = useAppTheme();
   const { t, locale } = useTranslation();
+  const analysisId = result?.serverId ?? result?.id ?? id;
+  const reviewQuery = useQuery({
+    queryKey: ['review', sessionUserId, analysisId],
+    queryFn: () => getAnalysisReview(analysisId),
+    enabled: Boolean(sessionUserId && result?.source === 'server'),
+  });
+  const showFeedbackAction =
+    result?.source === 'server' &&
+    !reviewQuery.isPending &&
+    reviewQuery.data == null;
 
   if (!result) {
     return (
@@ -64,6 +78,21 @@ export default function ResultScreen() {
   }
 
   const confidence = t(`result.${result.confidence}`);
+  const startNewDraft = () => {
+    draftAccess.requestAccess(() => {
+      resetDraft();
+      router.replace('/(tabs)');
+    });
+  };
+  const openFeedback = () => {
+    if (result.source !== 'server') {
+      showNativeAlert(t('review.unavailable'), t('review.offlineUnavailable'), [
+        { text: t('common.confirm') },
+      ]);
+      return;
+    }
+    router.push(`/feedback/${analysisId}` as Href);
+  };
 
   return (
     <>
@@ -73,40 +102,55 @@ export default function ResultScreen() {
           title: t('result.title'),
           headerLargeTitleEnabled: false,
           headerBackButtonDisplayMode: 'minimal',
-          headerRight: () => (
-            <View
-              style={{
-                minHeight: 30,
-                paddingHorizontal: 10,
-                borderRadius: 15,
-                alignItems: 'center',
-                justifyContent: 'center',
-                backgroundColor: colors.cobalt,
-              }}
-            >
-              <AppText variant="data" color={colors.onPrimary} numberOfLines={1}>
-                {localizeStoredText(result.patch, t)}
-              </AppText>
-            </View>
-          ),
         }}
       />
+      {Platform.OS === 'ios' ? (
+        <Stack.Toolbar placement="bottom">
+          <Stack.Toolbar.Spacer width={44} />
+          <Stack.Toolbar.Spacer />
+          <Stack.Toolbar.Button
+            accessibilityLabel={t('result.newDraft')}
+            disabled={draftAccess.status === 'pending'}
+            variant="prominent"
+            onPress={startNewDraft}
+          >
+            {t('result.newDraft')}
+          </Stack.Toolbar.Button>
+          <Stack.Toolbar.Spacer />
+          {showFeedbackAction ? (
+            <Stack.Toolbar.Button
+              accessibilityLabel={t('review.leave')}
+              icon="star"
+              onPress={openFeedback}
+            />
+          ) : (
+            <Stack.Toolbar.Spacer width={44} />
+          )}
+        </Stack.Toolbar>
+      ) : null}
       <Screen
         nativeHeader
-        bottomInset={FLOATING_ACTION_BAR_BOTTOM_INSET}
+        bottomInset={Platform.OS === 'ios' ? 24 : FLOATING_ACTION_BAR_BOTTOM_INSET}
         stickyHeader={
-          <FloatingActionBar
-            label={t('result.newDraft')}
-            icon="refresh-outline"
-            testID="result-new-draft"
-            disabled={draftAccess.status === 'pending'}
-            onPress={() =>
-              draftAccess.requestAccess(() => {
-                resetDraft();
-                router.replace('/(tabs)');
-              })
-            }
-          />
+          Platform.OS === 'ios' ? null : (
+            <FloatingActionBar
+              label={t('result.newDraft')}
+              icon="refresh-outline"
+              testID="result-new-draft"
+              disabled={draftAccess.status === 'pending'}
+              onPress={startNewDraft}
+              {...(showFeedbackAction
+                ? {
+                    secondaryAction: {
+                      label: t('review.leave'),
+                      icon: 'star-outline' as const,
+                      iconOnly: true,
+                      onPress: openFeedback,
+                    },
+                  }
+                : {})}
+            />
+          )
         }
       >
         {result.source === 'offline' ? (
@@ -171,10 +215,12 @@ function HeroArtwork({
   item,
   rank,
   featured,
+  onPress,
 }: {
   item: Recommendation;
   rank: number;
   featured: boolean;
+  onPress: () => void;
 }) {
   const { colors } = useAppTheme();
   const [failed, setFailed] = useState(false);
@@ -182,7 +228,10 @@ function HeroArtwork({
   const showImage = Boolean(item.hero.imageUrl && !failed);
 
   return (
-    <View
+    <Pressable
+      accessibilityRole="link"
+      accessibilityLabel={item.hero.name}
+      onPress={onPress}
       style={{
         height: featured ? 226 : 142,
         overflow: 'hidden',
@@ -199,6 +248,9 @@ function HeroArtwork({
           style={{ width: '100%', height: '100%' }}
           contentFit="cover"
           contentPosition="center"
+          cachePolicy="disk"
+          enforceEarlyResizing
+          recyclingKey={String(item.hero.id)}
           transition={160}
           onError={() => setFailed(true)}
         />
@@ -232,7 +284,7 @@ function HeroArtwork({
           #{String(rank).padStart(2, '0')}
         </AppText>
       </View>
-    </View>
+    </Pressable>
   );
 }
 
@@ -258,161 +310,175 @@ function RecommendationCard({
   return (
     <View
       style={{
-        overflow: 'hidden',
         backgroundColor: colors.surface,
         borderWidth: 2,
         borderRadius: shape.card,
         borderColor: colors.outline,
       }}
     >
-      <View
-        style={{
-          minHeight: 42,
-          flexDirection: 'row',
-          alignItems: 'stretch',
-          borderBottomWidth: 2,
-          borderBottomColor: colors.outline,
-        }}
-      >
+      <View style={{ overflow: 'hidden', borderRadius: shape.card - 2 }}>
         <View
           style={{
-            minWidth: 58,
-            paddingHorizontal: 9,
-            alignItems: 'center',
-            justifyContent: 'center',
-            backgroundColor: accent,
+            minHeight: 42,
+            flexDirection: 'row',
+            alignItems: 'stretch',
+            borderBottomWidth: 2,
+            borderBottomColor: colors.outline,
           }}
         >
-          <AppText variant="inscription" color={rank === 3 ? colors.background : colors.onPrimary}>
-            {String(rank).padStart(2, '0')}
-          </AppText>
-        </View>
-        <View
-          style={{
-            flex: 1,
-            minWidth: 0,
-            paddingHorizontal: 10,
-            justifyContent: 'center',
-          }}
-        >
-          <AppText variant="data" color={accent} numberOfLines={1}>
-            {label}
-          </AppText>
-        </View>
-        <View
-          style={{
-            minWidth: 76,
-            paddingHorizontal: 9,
-            alignItems: 'center',
-            justifyContent: 'center',
-            backgroundColor: colors.text,
-          }}
-        >
-          <AppText variant="inscription" color={colors.background}>
-            {Math.round(item.score)}
-          </AppText>
-        </View>
-      </View>
-
-      <HeroArtwork item={item} rank={rank} featured={featured} />
-
-      <View style={{ padding: 14 }}>
-        <AppText
-          variant={featured ? 'display' : 'title'}
-          numberOfLines={2}
-          adjustsFontSizeToFit
-          minimumFontScale={0.62}
-        >
-          {item.hero.name}
-        </AppText>
-        <View style={{ flexDirection: 'row', gap: 7, marginTop: 10 }}>
           <View
             style={{
-              flex: 1,
-              minHeight: 42,
+              minWidth: 58,
               paddingHorizontal: 9,
+              alignItems: 'center',
               justifyContent: 'center',
-              borderRadius: shape.compact,
-              backgroundColor: alpha.primary16,
-              borderLeftWidth: 4,
-              borderLeftColor: colors.cobalt,
+              backgroundColor: accent,
             }}
           >
-            <AppText variant="data" color={colors.textMuted}>
-              {t('position.title')}
-            </AppText>
-            <AppText variant="label" numberOfLines={1}>
-              {positionLabel}
+            <AppText
+              variant="inscription"
+              color={rank === 3 ? colors.background : colors.onPrimary}
+            >
+              {String(rank).padStart(2, '0')}
             </AppText>
           </View>
           <View
             style={{
               flex: 1,
-              minHeight: 42,
-              paddingHorizontal: 9,
+              minWidth: 0,
+              paddingHorizontal: 10,
               justifyContent: 'center',
-              borderRadius: shape.compact,
-              backgroundColor: alpha.ember16,
-              borderLeftWidth: 4,
-              borderLeftColor: colors.live,
             }}
           >
-            <AppText variant="data" color={colors.textMuted}>
-              {t('rank.title')}
+            <AppText variant="data" color={accent} numberOfLines={1}>
+              {label}
             </AppText>
-            <AppText variant="label" numberOfLines={1}>
-              {rankLabel}
+          </View>
+          <View
+            style={{
+              minWidth: 76,
+              paddingHorizontal: 9,
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: colors.text,
+            }}
+          >
+            <AppText variant="inscription" color={colors.background}>
+              {Math.round(item.score)}
             </AppText>
           </View>
         </View>
-      </View>
 
-      <View
-        style={{
-          flexDirection: 'row',
-          alignItems: 'stretch',
-          borderTopWidth: 2,
-          borderTopColor: colors.outline,
-        }}
-      >
+        <HeroArtwork
+          item={item}
+          rank={rank}
+          featured={featured}
+          onPress={() => router.push(`/hero/${item.hero.id}` as Href)}
+        />
+
+        <View style={{ padding: 14 }}>
+          <AppText
+            variant={featured ? 'display' : 'title'}
+            numberOfLines={2}
+            adjustsFontSizeToFit
+            minimumFontScale={0.62}
+          >
+            {item.hero.name}
+          </AppText>
+          <View style={{ flexDirection: 'row', gap: 7, marginTop: 10 }}>
+            <View
+              style={{
+                flex: 1,
+                minHeight: 42,
+                paddingHorizontal: 9,
+                justifyContent: 'center',
+                borderRadius: shape.compact,
+                backgroundColor: alpha.primary16,
+                borderLeftWidth: 4,
+                borderLeftColor: colors.cobalt,
+              }}
+            >
+              <AppText variant="data" color={colors.textMuted}>
+                {t('position.title')}
+              </AppText>
+              <AppText variant="label" numberOfLines={1}>
+                {positionLabel}
+              </AppText>
+            </View>
+            <View
+              style={{
+                flex: 1,
+                minHeight: 42,
+                paddingHorizontal: 9,
+                justifyContent: 'center',
+                borderRadius: shape.compact,
+                backgroundColor: alpha.ember16,
+                borderLeftWidth: 4,
+                borderLeftColor: colors.live,
+              }}
+            >
+              <AppText variant="data" color={colors.textMuted}>
+                {t('rank.title')}
+              </AppText>
+              <AppText variant="label" numberOfLines={1}>
+                {rankLabel}
+              </AppText>
+            </View>
+          </View>
+        </View>
+
         <View
           style={{
-            flex: 1.5,
-            minWidth: 0,
-            padding: 12,
-            borderRightWidth: 2,
-            borderRightColor: colors.outline,
+            flexDirection: 'row',
+            alignItems: 'stretch',
+            borderTopWidth: 2,
+            borderTopColor: colors.outline,
           }}
         >
-          <AppText variant="data" color={colors.cobalt} style={{ marginBottom: 8 }}>
-            {t('result.why')}
-          </AppText>
-          {item.reasons.slice(0, 2).map((reason) => (
-            <View key={reason} style={{ flexDirection: 'row', gap: 7, marginBottom: 7 }}>
-              <Ionicons
-                name="checkmark-sharp"
-                size={15}
-                color={colors.cobalt}
-                style={{ marginTop: 2 }}
-              />
-              <AppText variant="caption" style={{ flex: 1 }}>
-                {localizeStoredText(reason, t)}
-              </AppText>
-            </View>
-          ))}
-        </View>
-        <View style={{ flex: 1, minWidth: 0, padding: 12 }}>
-          <AppText variant="data" color={colors.live} style={{ marginBottom: 8 }}>
-            {t('result.risks')}
-          </AppText>
-          {item.risks.slice(0, 1).map((risk) => (
-            <View key={risk} style={{ flexDirection: 'row', gap: 7 }}>
-              <Ionicons name="alert-sharp" size={15} color={colors.live} style={{ marginTop: 2 }} />
-              <AppText variant="caption" color={colors.textMuted} style={{ flex: 1 }}>
-                {localizeStoredText(risk, t)}
-              </AppText>
-            </View>
-          ))}
+          <View
+            style={{
+              flex: 1.5,
+              minWidth: 0,
+              padding: 12,
+              borderRightWidth: 2,
+              borderRightColor: colors.outline,
+            }}
+          >
+            <AppText variant="data" color={colors.cobalt} style={{ marginBottom: 8 }}>
+              {t('result.why')}
+            </AppText>
+            {item.reasons.slice(0, 2).map((reason) => (
+              <View key={reason} style={{ flexDirection: 'row', gap: 7, marginBottom: 7 }}>
+                <Ionicons
+                  name="checkmark-sharp"
+                  size={15}
+                  color={colors.cobalt}
+                  style={{ marginTop: 2 }}
+                />
+                <AppText variant="caption" style={{ flex: 1 }}>
+                  {localizeStoredText(reason, t)}
+                </AppText>
+              </View>
+            ))}
+          </View>
+          <View style={{ flex: 1, minWidth: 0, padding: 12 }}>
+            <AppText variant="data" color={colors.live} style={{ marginBottom: 8 }}>
+              {t('result.risks')}
+            </AppText>
+            {item.risks.slice(0, 1).map((risk) => (
+              <View key={risk} style={{ flexDirection: 'row', gap: 7 }}>
+                <Ionicons
+                  name="alert-sharp"
+                  size={15}
+                  color={colors.live}
+                  style={{ marginTop: 2 }}
+                />
+                <AppText variant="caption" color={colors.textMuted} style={{ flex: 1 }}>
+                  {localizeStoredText(risk, t)}
+                </AppText>
+              </View>
+            ))}
+          </View>
         </View>
       </View>
     </View>

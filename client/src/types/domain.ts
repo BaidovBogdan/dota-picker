@@ -51,6 +51,21 @@ export type AnalysisResult = {
 
 export type HistoryRecord = AnalysisResult;
 
+export type AnalysisReview = {
+  id: string;
+  analysisId: string;
+  rating: number;
+  selectedHeroIds: number[];
+  comment: string | null;
+  createdAt: string;
+  updatedAt: string;
+  analysis?: {
+    source: DraftSource;
+    patch: string;
+    recommendations: Hero[];
+  };
+};
+
 export type Session = {
   userId: string;
   kind: 'guest' | 'registered';

@@ -1,7 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Haptics from 'expo-haptics';
 import { ComponentProps } from 'react';
-import { TouchableOpacity } from 'react-native';
+import { Pressable } from 'react-native';
 
 import { layout } from '@/theme/tokens';
 import { useAppTheme } from '@/theme/use-app-theme';
@@ -18,11 +18,10 @@ export function IconButton({ name, label, onPress, size = 48, disabled = false }
   const { colors } = useAppTheme();
   const hitInset = Math.max(4, Math.ceil((layout.minTouch - size) / 2));
   return (
-    <TouchableOpacity
+    <Pressable
       accessibilityRole="button"
       accessibilityLabel={label}
       accessibilityState={{ disabled }}
-      activeOpacity={0.72}
       disabled={disabled}
       hitSlop={hitInset}
       onPress={() => {
@@ -42,6 +41,6 @@ export function IconButton({ name, label, onPress, size = 48, disabled = false }
       }}
     >
       <Ionicons name={name} size={21} color={colors.text} />
-    </TouchableOpacity>
+    </Pressable>
   );
 }
