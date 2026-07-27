@@ -1,0 +1,45 @@
+name: Backend
+
+on:
+  pull_request:
+    paths:
+      - server/**
+      - render.yaml
+      - .github/workflows/backend.yml
+  push:
+    branches:
+      - main
+    paths:
+      - server/**
+      - render.yaml
+      - .github/workflows/backend.yml
+  workflow_dispatch:
+
+concurrency:
+  group: backend-production
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+      - name: Migrate production database
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          DATABASE_URL: ${{ secrets.DOTA_PICKER_DATABASE_URL }}
+          MIGRATION_DATABASE_URL: ${{ secrets.DOTA_PICKER_MIGRATION_DATABASE_URL }}
+        run: node dist/db/migrate.js

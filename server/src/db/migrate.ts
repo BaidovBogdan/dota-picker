@@ -1,9 +1,9 @@
 import { fileURLToPath } from 'node:url';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
-import { loadConfig } from '../config/env.js';
+import { loadMigrationConfig } from '../config/env.js';
 import { createDatabase } from './client.js';
 
-const config = loadConfig();
+const config = loadMigrationConfig();
 const { db, pool } = createDatabase(config.databaseUrl);
 
 try {

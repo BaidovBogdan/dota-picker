@@ -6,11 +6,20 @@ const booleanFromString = z
   .default('false')
   .transform((value) => value === 'true');
 
+const databaseUrl = z.url().startsWith('postgresql://');
+
+const optionalDatabaseUrl = z.string().optional()
+  .transform((value) => {
+    const trimmed = value?.trim();
+    return trimmed === '' ? undefined : trimmed;
+  })
+  .pipe(databaseUrl.optional());
+
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   HOST: z.string().min(1).default('0.0.0.0'),
   PORT: z.coerce.number().int().min(1).max(65_535).default(4000),
-  DATABASE_URL: z.url().startsWith('postgresql://'),
+  DATABASE_URL: databaseUrl,
   JWT_SECRET: z.string().min(32),
   ACCESS_TOKEN_TTL: z.string().min(2).default('15m'),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(30),
@@ -20,6 +29,7 @@ const envSchema = z.object({
       return trimmed === '' ? undefined : trimmed;
     })
     .pipe(z.string().regex(/^\d{4}$/).optional()),
+  ALLOW_STATIC_OTP_IN_PRODUCTION: booleanFromString,
   OTP_TTL_MINUTES: z.coerce.number().int().min(2).max(30).default(10),
   OTP_MAX_ATTEMPTS: z.coerce.number().int().min(3).max(10).default(5),
   OTP_RESEND_COOLDOWN_SECONDS: z.coerce.number().int().min(15).max(600).default(60),
@@ -58,16 +68,31 @@ const envSchema = z.object({
   REVENUECAT_APP_IDS: z.string().default(''),
   REVENUECAT_ALLOW_SANDBOX: booleanFromString,
 }).superRefine((env, context) => {
-  if (env.NODE_ENV === 'production' && env.OTP_STATIC_CODE !== undefined) {
+  if (
+    env.NODE_ENV === 'production'
+    && env.OTP_STATIC_CODE !== undefined
+    && !env.ALLOW_STATIC_OTP_IN_PRODUCTION
+  ) {
     context.addIssue({
       code: 'custom',
       path: ['OTP_STATIC_CODE'],
-      message: 'OTP_STATIC_CODE is forbidden in production',
+      message: 'OTP_STATIC_CODE requires ALLOW_STATIC_OTP_IN_PRODUCTION=true in production',
     });
   }
 });
 
 export type AppConfig = ReturnType<typeof loadConfig>;
+
+export function loadMigrationConfig(source: NodeJS.ProcessEnv = process.env) {
+  const env = z.object({
+    DATABASE_URL: databaseUrl,
+    MIGRATION_DATABASE_URL: optionalDatabaseUrl,
+  }).parse(source);
+
+  return {
+    databaseUrl: env.MIGRATION_DATABASE_URL ?? env.DATABASE_URL,
+  } as const;
+}
 
 export function loadConfig(source: NodeJS.ProcessEnv = process.env) {
   const env = envSchema.parse(source);

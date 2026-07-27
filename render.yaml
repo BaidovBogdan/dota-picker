@@ -1,0 +1,40 @@
+services:
+  - type: web
+    name: dota-picker-api
+    runtime: docker
+    repo: https://github.com/BaidovBogdan/dota-picker
+    branch: main
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./server/Dockerfile
+    dockerContext: ./server
+    healthCheckPath: /health/ready
+    autoDeployTrigger: checksPass
+    maxShutdownDelaySeconds: 30
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: PORT
+        value: 4000
+      - key: TRUST_PROXY
+        value: "true"
+      - key: LOG_LEVEL
+        value: info
+      - key: OTP_STATIC_CODE
+        value: "1234"
+      - key: ALLOW_STATIC_OTP_IN_PRODUCTION
+        value: "true"
+      - key: DATABASE_URL
+        sync: false
+      - key: MIGRATION_DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ADMIN_API_KEY
+        generateValue: true
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: REVENUECAT_WEBHOOK_SECRET
+        generateValue: true

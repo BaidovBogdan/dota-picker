@@ -51,6 +51,11 @@ export function buildApp(config: AppConfig = loadConfig()) {
         : {}),
     },
   }).withTypeProvider<ZodTypeProvider>();
+
+  if (config.nodeEnv === 'production' && config.otp.staticCode) {
+    app.log.warn('Static OTP verification is enabled in production pre-launch mode');
+  }
+
   const { db, pool } = createDatabase(config.databaseUrl);
   const quotaService = new QuotaService(db, config.quota);
   const otpService = new OtpService(db, config);
