@@ -27,6 +27,218 @@ afterEach(() => {
 });
 
 describe('OpenDotaAdapter position meta', () => {
+  it('loads current-patch matchup and synergy rows with split indexed branches and caches the snapshot', async () => {
+    const requestedSql: string[] = [];
+    const requestedUrls: string[] = [];
+    const rawHeroes = Array.from({ length: 6 }, (_, index) => {
+      const id = index + 1;
+      return {
+        id,
+        name: `npc_dota_hero_${id}`,
+        localized_name: `Hero ${id}`,
+        primary_attr: 'agi',
+        attack_type: 'Ranged',
+        roles: ['Carry'],
+        img: `/hero-${id}.png`,
+        icon: `/hero-${id}-icon.png`,
+        pub_pick: 1_000,
+        pub_win: 500,
+        '7_pick': 200,
+        '7_win': 100,
+      };
+    });
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
+      requestedUrls.push(url);
+      if (url.endsWith('/heroStats')) {
+        return json(rawHeroes);
+      }
+      if (url.endsWith('/constants/patch')) {
+        return json([{ id: 60, name: '7.41', date: '2026-03-24T00:50:59.580Z' }]);
+      }
+      if (url.includes('/explorer?sql=')) {
+        const sql = new URL(url).searchParams.get('sql') ?? '';
+        requestedSql.push(sql);
+        if (sql.includes('WITH pair_observations')) {
+          return json({
+            rows: [{
+              relation: 'matchup',
+              selected_id: '1',
+              candidate_id: '4',
+              patch_games: '120',
+              patch_wins: '72',
+              rank_games: '40',
+              rank_wins: '25',
+            }, {
+              relation: 'synergy',
+              selected_id: '3',
+              candidate_id: '4',
+              patch_games: '90',
+              patch_wins: '54',
+              rank_games: '30',
+              rank_wins: '19',
+            }],
+          });
+        }
+        return json({ rows: positionRows });
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const adapter = new OpenDotaAdapter(config);
+
+    const first = await adapter.getSnapshot(7, [2, 1], [3]);
+    const second = await adapter.getSnapshot(7, [1, 2], [3]);
+
+    expect(first.matchupByEnemy.get(1)?.get(4)).toEqual({
+      heroId: 4,
+      patchGames: 120,
+      patchWins: 72,
+      rankGames: 40,
+      rankWins: 25,
+    });
+    expect(first.synergyByAlly.get(3)?.get(4)?.rankWins).toBe(19);
+    expect(first.pairScope).toMatchObject({
+      patch: '7.41',
+      rank: 7,
+      rankFilter: 'average_match_rank',
+      availability: 'ready',
+    });
+    expect(second.matchupByEnemy.get(1)?.get(4)?.patchGames).toBe(120);
+    const pairQueries = requestedSql.filter((sql) => sql.includes('WITH pair_observations'));
+    expect(pairQueries).toHaveLength(1);
+    expect(pairQueries[0]).toContain('pub.radiant_team && ARRAY[1,2]::integer[]');
+    expect(pairQueries[0]).toContain('pub.dire_team && ARRAY[1,2]::integer[]');
+    expect(pairQueries[0]).toContain('pub.radiant_team && ARRAY[3]::integer[]');
+    expect(pairQueries[0]).toContain('pub.dire_team && ARRAY[3]::integer[]');
+    expect(pairQueries[0]).toContain("mp.patch = '7.41'");
+    expect(pairQueries[0]).toContain(
+      'COUNT(*) FILTER (WHERE average_rank = 7)::int AS rank_games',
+    );
+    expect(pairQueries[0]).toContain('average_rank = 7');
+    expect(requestedUrls.some((url) => url.includes('/matchups'))).toBe(false);
+  });
+
+  it('bounds the draft-pair cache and refreshes recent entries in LRU order', async () => {
+    let pairQueries = 0;
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
+      if (url.endsWith('/constants/patch')) {
+        return json([{ id: 60, name: '7.41', date: '2026-03-24T00:50:59.580Z' }]);
+      }
+      if (url.includes('/explorer?sql=')) {
+        const sql = new URL(url).searchParams.get('sql') ?? '';
+        if (sql.includes('WITH pair_observations')) {
+          pairQueries += 1;
+          return json({ rows: [] });
+        }
+        return json({ rows: positionRows });
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const adapter = new OpenDotaAdapter(config);
+
+    for (let enemyId = 1; enemyId <= 256; enemyId += 1) {
+      await adapter.getSnapshot(undefined, [enemyId], [], []);
+    }
+    expect(pairQueries).toBe(256);
+
+    await adapter.getSnapshot(undefined, [1], [], []);
+    await adapter.getSnapshot(undefined, [257], [], []);
+    await adapter.getSnapshot(undefined, [1], [], []);
+    expect(pairQueries).toBe(257);
+
+    await adapter.getSnapshot(undefined, [2], [], []);
+
+    expect(pairQueries).toBe(258);
+    const cache = (adapter as unknown as { pairCache: Map<string, unknown> }).pairCache;
+    expect(cache.size).toBe(256);
+  }, 10_000);
+
+  it('labels the patch as unknown when patch discovery fails', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
+      if (url.endsWith('/constants/patch')) {
+        throw new Error('Patch unavailable');
+      }
+      if (url.includes('/explorer?sql=')) {
+        return json({ rows: positionRows });
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const adapter = new OpenDotaAdapter(config);
+
+    const snapshot = await adapter.getSnapshot(undefined, [1], [], []);
+
+    expect(snapshot.patch).toBe('unknown patch');
+    expect(snapshot.pairScope).toBeNull();
+  });
+
+  it('returns an explicit neutral pair snapshot when Explorer is unavailable', async () => {
+    const rawHeroes = Array.from({ length: 4 }, (_, index) => {
+      const id = index + 1;
+      return {
+        id,
+        name: `npc_dota_hero_${id}`,
+        localized_name: `Hero ${id}`,
+        primary_attr: 'agi',
+        attack_type: 'Ranged',
+        roles: ['Carry'],
+        img: `/hero-${id}.png`,
+        icon: `/hero-${id}-icon.png`,
+        pub_pick: 1_000,
+        pub_win: 500,
+      };
+    });
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
+      if (url.endsWith('/heroStats')) {
+        return json(rawHeroes);
+      }
+      if (url.endsWith('/constants/patch')) {
+        return json([{ id: 60, name: '7.41', date: '2026-03-24T00:50:59.580Z' }]);
+      }
+      if (url.includes('/explorer?sql=')) {
+        const sql = new URL(url).searchParams.get('sql') ?? '';
+        if (sql.includes('WITH pair_observations')) {
+          throw new Error('Explorer unavailable');
+        }
+        return json({ rows: positionRows });
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const adapter = new OpenDotaAdapter(config);
+
+    const snapshot = await adapter.getSnapshot(undefined, [1], [2]);
+
+    expect(snapshot.matchupByEnemy.size).toBe(0);
+    expect(snapshot.synergyByAlly.size).toBe(0);
+    expect(snapshot.pairScope).toMatchObject({
+      patch: '7.41',
+      availability: 'unavailable',
+      isStale: false,
+    });
+  });
+
   it('samples balanced public matches for both all-rank and rank-filtered snapshots', async () => {
     const requestedUrls: string[] = [];
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
@@ -187,7 +399,7 @@ describe('OpenDotaAdapter position meta', () => {
     expect(explorerSql[0]).toContain('ORDER BY m.start_time DESC, pm.match_id DESC');
   });
 
-  it('combines current-patch position meta with all-rank matchup baselines', async () => {
+  it('combines current-patch position meta with the selected-rank matchup baseline', async () => {
     const rawHeroes = Array.from({ length: 6 }, (_, index) => {
       const id = index + 1;
       return {
@@ -221,13 +433,6 @@ describe('OpenDotaAdapter position meta', () => {
           date: '2026-03-24T00:50:59.580Z',
         }]);
       }
-      if (url.endsWith('/heroes/1/matchups')) {
-        return json([{
-          hero_id: 2,
-          games_played: 500,
-          wins: 250,
-        }]);
-      }
       if (url.includes('/explorer?sql=')) {
         return json({ rows: positionRows });
       }
@@ -244,7 +449,7 @@ describe('OpenDotaAdapter position meta', () => {
       rankFilter: 'average_match_rank',
       window: 'current_patch_30d',
     });
-    expect(snapshot.matchupBaselineByHero?.get(2)).toBe(0.48);
+    expect(snapshot.matchupBaselineByHero?.get(2)).toBe(0.6);
     expect(snapshot.heroes.find((candidate) => candidate.id === 2)?.winRate).toBe(0.6);
   });
 });

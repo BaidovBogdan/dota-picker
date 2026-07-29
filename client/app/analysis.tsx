@@ -140,8 +140,6 @@ export default function AnalysisScreen() {
   const allowNavigation = useRef(false);
   const [launchUserId] = useState(userId);
   const [quotaAccepted, setQuotaAccepted] = useState(false);
-  const [persistenceError, setPersistenceError] = useState(false);
-  const [saveAttempt, setSaveAttempt] = useState(0);
   const { t } = useTranslation();
   const actionKey =
     typeof idempotencyKey === 'string' &&
@@ -184,33 +182,30 @@ export default function AnalysisScreen() {
     networkMode: 'always',
     retry: false,
   });
-  const isSaving = Boolean(query.data && !persistenceError);
-
-  usePreventRemove(valid && (query.isFetching || isSaving), ({ data }) => {
+  usePreventRemove(valid && query.isFetching, ({ data }) => {
     if (allowNavigation.current) navigation.dispatch(data.action);
   });
 
   useEffect(() => {
     if (!query.data || handled.current) return;
     if (useAppStore.getState().session?.userId !== launchUserId) return;
-    let active = true;
+    const result = query.data;
     handled.current = true;
-    saveAnalysis(query.data, actionKey ?? undefined);
-    void flushAppPersistence()
-      .then(() => {
-        if (!active || useAppStore.getState().session?.userId !== launchUserId) return;
-        allowNavigation.current = true;
-        router.replace({ pathname: '/result/[id]', params: { id: query.data.id } });
-      })
-      .catch(() => {
-        if (!active) return;
-        handled.current = false;
-        setPersistenceError(true);
+
+    const persist = () => {
+      saveAnalysis(result, actionKey ?? undefined);
+      void flushAppPersistence().catch(() => {
+        showNativeAlert(t('analysis.saveWarningTitle'), t('analysis.saveWarningBody'), [
+          { text: t('common.cancel'), style: 'cancel' },
+          { text: t('common.retry'), onPress: persist },
+        ]);
       });
-    return () => {
-      active = false;
     };
-  }, [actionKey, launchUserId, query.data, saveAnalysis, saveAttempt]);
+
+    persist();
+    allowNavigation.current = true;
+    router.replace({ pathname: '/result/[id]', params: { id: result.id } });
+  }, [actionKey, launchUserId, query.data, saveAnalysis, t]);
 
   if (!valid) {
     const quotaPending = accessStatus === 'pending';
@@ -270,12 +265,8 @@ export default function AnalysisScreen() {
     );
   }
 
-  if (query.isError || persistenceError) {
-    const message = persistenceError
-      ? t('errors.storage')
-      : query.error instanceof Error
-        ? query.error.message
-        : t('analysis.error');
+  if (query.isError) {
+    const message = query.error instanceof Error ? query.error.message : t('analysis.error');
 
     return (
       <Screen scroll={false}>
@@ -283,14 +274,7 @@ export default function AnalysisScreen() {
           title={t('analysis.error')}
           message={message}
           actionLabel={t('common.retry')}
-          onAction={() => {
-            if (persistenceError) {
-              setPersistenceError(false);
-              setSaveAttempt((current) => current + 1);
-              return;
-            }
-            void query.refetch();
-          }}
+          onAction={() => void query.refetch()}
           secondaryLabel={t('nav.draft')}
           onSecondary={() => router.replace('/(tabs)')}
           live

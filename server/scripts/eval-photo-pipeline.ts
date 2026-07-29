@@ -21,8 +21,8 @@ const requestedCases = new Set(
 const expectedHeroes = new Set([
   'Earth Spirit',
   'Invoker',
-  'Monkey King',
-  'Disruptor',
+  'Grimstroke',
+  'Zeus',
   'Death Prophet',
 ]);
 

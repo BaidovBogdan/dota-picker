@@ -2,7 +2,7 @@ import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import { File } from 'expo-file-system';
 import { Image, Platform } from 'react-native';
 
-const MAX_EDGE = 1600;
+const MAX_EDGE = 2048;
 
 const getSize = (uri: string) =>
   new Promise<{ width: number; height: number }>((resolve, reject) => {
@@ -23,7 +23,7 @@ export async function prepareDraftPhoto(uri: string) {
       const rendered = await context.renderAsync();
       try {
         const result = await rendered.saveAsync({
-          compress: 0.78,
+          compress: 0.88,
           format: SaveFormat.JPEG,
         });
         preparedUri = result.uri;

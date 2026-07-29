@@ -12,6 +12,11 @@ import type {
   LanguageMode,
   Position,
   Recommendation,
+  RecommendationEvidence,
+  RecommendationMetrics,
+  RecommendationPairEvidence,
+  RecommendationProvenance,
+  RecommendationScoreBreakdown,
   Session,
   ThemeMode,
 } from '@/types/domain';
@@ -369,11 +374,299 @@ const normalizeHero = (value: unknown): Hero | null => {
   };
 };
 
+const finiteNumber = (value: unknown) =>
+  typeof value === 'number' && Number.isFinite(value) ? value : null;
+
+const unitNumber = (value: unknown) => {
+  const normalized = finiteNumber(value);
+  return normalized !== null && normalized >= 0 && normalized <= 1 ? normalized : null;
+};
+
+const nonNegativeInteger = (value: unknown) =>
+  Number.isInteger(value) && Number(value) >= 0 ? Number(value) : null;
+
+const rankBracket = (value: unknown) =>
+  Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 8 ? Number(value) : null;
+
+const normalizeRecommendationMetrics = (value: unknown): RecommendationMetrics | null => {
+  if (!isRecord(value)) return null;
+  const roleFit = unitNumber(value.roleFit);
+  const counter = unitNumber(value.counter);
+  const meta = unitNumber(value.meta);
+  const synergy = unitNumber(value.synergy);
+  if (roleFit === null || counter === null || meta === null || synergy === null) return null;
+  const reliability = unitNumber(value.reliability);
+  const coverage = unitNumber(value.coverage);
+  const worstMatchup = unitNumber(value.worstMatchup);
+  return {
+    roleFit,
+    counter,
+    meta,
+    synergy,
+    ...(reliability === null ? {} : { reliability }),
+    ...(coverage === null ? {} : { coverage }),
+    ...(worstMatchup === null ? {} : { worstMatchup }),
+  };
+};
+
+const normalizeScoreBreakdown = (value: unknown): RecommendationScoreBreakdown | null => {
+  if (!isRecord(value)) return null;
+  const role = finiteNumber(value.role);
+  const matchup = finiteNumber(value.matchup);
+  const meta = finiteNumber(value.meta);
+  const teamFit = finiteNumber(value.teamFit);
+  const reliability = finiteNumber(value.reliability);
+  const advisor = finiteNumber(value.advisor);
+  const diversity = finiteNumber(value.diversity);
+  const total = finiteNumber(value.total);
+  if (
+    role === null ||
+    matchup === null ||
+    meta === null ||
+    teamFit === null ||
+    reliability === null ||
+    advisor === null ||
+    diversity === null ||
+    total === null
+  ) {
+    return null;
+  }
+  return { role, matchup, meta, teamFit, reliability, advisor, diversity, total };
+};
+
+const normalizePairEvidence = (value: unknown): RecommendationPairEvidence | null => {
+  if (!isRecord(value)) return null;
+  const heroId =
+    Number.isInteger(value.heroId) && Number(value.heroId) > 0 ? Number(value.heroId) : null;
+  const rankGames = nonNegativeInteger(value.rankGames);
+  const rankWins = nonNegativeInteger(value.rankWins);
+  const patchGames = nonNegativeInteger(value.patchGames);
+  const patchWins = nonNegativeInteger(value.patchWins);
+  const winRate = unitNumber(value.winRate);
+  const expectedWinRate = unitNumber(value.expectedWinRate);
+  const advantage = finiteNumber(value.advantage);
+  const reliability = unitNumber(value.reliability);
+  if (
+    heroId === null ||
+    rankGames === null ||
+    rankWins === null ||
+    patchGames === null ||
+    patchWins === null ||
+    winRate === null ||
+    expectedWinRate === null ||
+    advantage === null ||
+    advantage < -1 ||
+    advantage > 1 ||
+    reliability === null
+  ) {
+    return null;
+  }
+  return {
+    heroId,
+    rankGames,
+    rankWins,
+    patchGames,
+    patchWins,
+    winRate,
+    expectedWinRate,
+    advantage,
+    reliability,
+  };
+};
+
+const normalizeSynergyEvidence = (
+  value: unknown,
+): NonNullable<RecommendationEvidence['synergy']> | null => {
+  if (!isRecord(value)) return null;
+  const alliesCovered = nonNegativeInteger(value.alliesCovered);
+  const alliesTotal = nonNegativeInteger(value.alliesTotal);
+  const rankAlliesCovered = nonNegativeInteger(value.rankAlliesCovered);
+  const games = nonNegativeInteger(value.games);
+  const rankGames = nonNegativeInteger(value.rankGames);
+  const patchGames = nonNegativeInteger(value.patchGames);
+  const minimumGames = nonNegativeInteger(value.minimumGames);
+  const weightedWinRate = value.weightedWinRate === null ? null : unitNumber(value.weightedWinRate);
+  const expectedWinRate = value.expectedWinRate === null ? null : unitNumber(value.expectedWinRate);
+  const pairScore = unitNumber(value.pairScore);
+  const compositionScore = unitNumber(value.compositionScore);
+  const reliability = unitNumber(value.reliability);
+  const rank = value.rank === null ? null : rankBracket(value.rank);
+  const byAlly = Array.isArray(value.byAlly)
+    ? value.byAlly
+        .map(normalizePairEvidence)
+        .filter((item): item is RecommendationPairEvidence => item !== null)
+        .slice(0, 4)
+    : null;
+  if (
+    typeof value.source !== 'string' ||
+    !value.source ||
+    alliesCovered === null ||
+    alliesTotal === null ||
+    rankAlliesCovered === null ||
+    games === null ||
+    rankGames === null ||
+    patchGames === null ||
+    minimumGames === null ||
+    (value.weightedWinRate !== null && weightedWinRate === null) ||
+    (value.expectedWinRate !== null && expectedWinRate === null) ||
+    pairScore === null ||
+    compositionScore === null ||
+    reliability === null ||
+    (value.patch !== null && (typeof value.patch !== 'string' || !value.patch)) ||
+    (value.rank !== null && rank === null) ||
+    typeof value.rankScoped !== 'boolean' ||
+    typeof value.isStale !== 'boolean' ||
+    (value.availability !== 'ready' && value.availability !== 'unavailable') ||
+    byAlly === null
+  ) {
+    return null;
+  }
+  return {
+    source: value.source,
+    alliesCovered,
+    alliesTotal,
+    rankAlliesCovered,
+    games,
+    rankGames,
+    patchGames,
+    minimumGames,
+    weightedWinRate,
+    expectedWinRate,
+    pairScore,
+    compositionScore,
+    reliability,
+    patch: value.patch,
+    rank,
+    rankScoped: value.rankScoped,
+    isStale: value.isStale,
+    availability: value.availability,
+    byAlly,
+  };
+};
+
+const normalizeRecommendationEvidence = (value: unknown): RecommendationEvidence | null => {
+  if (!isRecord(value) || !isRecord(value.matchups) || !isRecord(value.meta)) return null;
+  const opponentsCovered = nonNegativeInteger(value.matchups.opponentsCovered);
+  const opponentsTotal = nonNegativeInteger(value.matchups.opponentsTotal);
+  const games = nonNegativeInteger(value.matchups.games);
+  const minimumGames = nonNegativeInteger(value.matchups.minimumGames);
+  const weightedWinRate =
+    value.matchups.weightedWinRate === null ? null : unitNumber(value.matchups.weightedWinRate);
+  const expectedWinRate = unitNumber(value.matchups.expectedWinRate);
+  const metaGames = nonNegativeInteger(value.meta.games);
+  const wins = nonNegativeInteger(value.meta.wins);
+  const winRate = unitNumber(value.meta.winRate);
+  const matchupRank = value.matchups.rank === null ? null : rankBracket(value.matchups.rank);
+  const byOpponent = Array.isArray(value.matchups.byOpponent)
+    ? value.matchups.byOpponent
+        .map(normalizePairEvidence)
+        .filter((item): item is RecommendationPairEvidence => item !== null)
+        .slice(0, 5)
+    : null;
+  const synergy = normalizeSynergyEvidence(value.synergy);
+  if (
+    typeof value.matchups.source !== 'string' ||
+    !value.matchups.source ||
+    opponentsCovered === null ||
+    opponentsTotal === null ||
+    games === null ||
+    minimumGames === null ||
+    (value.matchups.weightedWinRate !== null && weightedWinRate === null) ||
+    expectedWinRate === null ||
+    typeof value.meta.source !== 'string' ||
+    !value.meta.source ||
+    metaGames === null ||
+    wins === null ||
+    winRate === null ||
+    typeof value.meta.rankScoped !== 'boolean' ||
+    !isPosition(value.meta.position) ||
+    (value.meta.positionApproximate !== null &&
+      typeof value.meta.positionApproximate !== 'boolean') ||
+    typeof value.meta.isStale !== 'boolean'
+  ) {
+    return null;
+  }
+  return {
+    matchups: {
+      source: value.matchups.source,
+      opponentsCovered,
+      opponentsTotal,
+      games,
+      minimumGames,
+      weightedWinRate,
+      expectedWinRate,
+      ...(typeof value.matchups.patch === 'string' && value.matchups.patch
+        ? { patch: value.matchups.patch }
+        : {}),
+      ...(value.matchups.rank === null || matchupRank !== null ? { rank: matchupRank } : {}),
+      ...(typeof value.matchups.rankScoped === 'boolean'
+        ? { rankScoped: value.matchups.rankScoped }
+        : {}),
+      ...(nonNegativeInteger(value.matchups.rankOpponentsCovered) === null
+        ? {}
+        : { rankOpponentsCovered: Number(value.matchups.rankOpponentsCovered) }),
+      ...(nonNegativeInteger(value.matchups.rankGames) === null
+        ? {}
+        : { rankGames: Number(value.matchups.rankGames) }),
+      ...(nonNegativeInteger(value.matchups.patchGames) === null
+        ? {}
+        : { patchGames: Number(value.matchups.patchGames) }),
+      ...(nonNegativeInteger(value.matchups.minimumPatchGames) === null
+        ? {}
+        : { minimumPatchGames: Number(value.matchups.minimumPatchGames) }),
+      ...(typeof value.matchups.isStale === 'boolean' ? { isStale: value.matchups.isStale } : {}),
+      ...(value.matchups.availability === 'ready' || value.matchups.availability === 'unavailable'
+        ? { availability: value.matchups.availability }
+        : {}),
+      ...(byOpponent ? { byOpponent } : {}),
+    },
+    ...(synergy ? { synergy } : {}),
+    meta: {
+      source: value.meta.source,
+      games: metaGames,
+      wins,
+      winRate,
+      rankScoped: value.meta.rankScoped,
+      position: value.meta.position,
+      positionApproximate: value.meta.positionApproximate,
+      isStale: value.meta.isStale,
+    },
+  };
+};
+
+const normalizeRecommendationProvenance = (value: unknown): RecommendationProvenance | null => {
+  if (
+    !isRecord(value) ||
+    typeof value.engineVersion !== 'string' ||
+    !value.engineVersion ||
+    typeof value.scoringVersion !== 'string' ||
+    !value.scoringVersion ||
+    typeof value.aiAssisted !== 'boolean'
+  ) {
+    return null;
+  }
+  return {
+    engineVersion: value.engineVersion,
+    scoringVersion: value.scoringVersion,
+    aiAssisted: value.aiAssisted,
+    ...(typeof value.model === 'string' && value.model ? { model: value.model } : {}),
+    ...(typeof value.promptVersion === 'string' && value.promptVersion
+      ? { promptVersion: value.promptVersion }
+      : {}),
+    ...(typeof value.fallbackReason === 'string' && value.fallbackReason
+      ? { fallbackReason: value.fallbackReason }
+      : {}),
+  };
+};
+
 const normalizeRecommendation = (value: unknown, index: number): Recommendation | null => {
   if (!isRecord(value)) return null;
   const hero = normalizeHero(value.hero);
   if (!hero) return null;
   const fallbackLabels = ['best', 'reliable', 'fallback'] as const;
+  const metrics = normalizeRecommendationMetrics(value.metrics);
+  const scoreBreakdown = normalizeScoreBreakdown(value.scoreBreakdown);
+  const evidence = normalizeRecommendationEvidence(value.evidence);
   return {
     hero,
     score: typeof value.score === 'number' && Number.isFinite(value.score) ? value.score : 0,
@@ -381,6 +674,12 @@ const normalizeRecommendation = (value: unknown, index: number): Recommendation 
       typeof value.label === 'string'
         ? (value.label as Recommendation['label'])
         : (fallbackLabels[Math.min(index, fallbackLabels.length - 1)] ?? 'fallback'),
+    ...(value.confidence === 'high' || value.confidence === 'medium' || value.confidence === 'low'
+      ? { confidence: value.confidence }
+      : {}),
+    ...(metrics ? { metrics } : {}),
+    ...(scoreBreakdown ? { scoreBreakdown } : {}),
+    ...(evidence ? { evidence } : {}),
     reasons: normalizeStringArray(value.reasons),
     risks: normalizeStringArray(value.risks),
     laneFit: typeof value.laneFit === 'string' ? value.laneFit : '',
@@ -403,6 +702,7 @@ const normalizeAnalysisResult = (value: unknown): AnalysisResult | null => {
       : typeof value.serverId === 'string'
         ? 'server'
         : 'offline';
+  const provenance = normalizeRecommendationProvenance(value.provenance);
   return {
     id: value.id,
     ...(typeof value.serverId === 'string' ? { serverId: value.serverId } : {}),
@@ -417,6 +717,7 @@ const normalizeAnalysisResult = (value: unknown): AnalysisResult | null => {
     dataUpdatedAt: typeof value.dataUpdatedAt === 'string' ? value.dataUpdatedAt : createdAt,
     createdAt,
     source,
+    ...(provenance ? { provenance } : {}),
   };
 };
 

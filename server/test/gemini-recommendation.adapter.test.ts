@@ -42,18 +42,30 @@ function advisorInput(): RecommendationAdvisorInput {
   const heroes = Array.from({ length: 10 }, (_, index) => hero(index + 1));
   const snapshot: MetaSnapshot = {
     heroes,
-    patch: '7.41 · rolling matchups',
+    patch: '7.41',
     fetchedAt: '2026-07-27T12:00:00.000Z',
     matchupByEnemy: new Map([
       [1, new Map(heroes.slice(1).map((candidate) => [
         candidate.id,
         {
           heroId: candidate.id,
-          gamesPlayed: 500,
-          wins: 250,
+          patchGames: 500,
+          patchWins: 250,
+          rankGames: 500,
+          rankWins: 250,
         },
       ]))],
     ]),
+    synergyByAlly: new Map(),
+    pairScope: {
+      patch: '7.41',
+      rank: null,
+      rankFilter: 'all_ranks',
+      window: 'current_patch',
+      fetchedAt: '2026-07-27T12:00:00.000Z',
+      isStale: false,
+      availability: 'ready',
+    },
   };
   const request: RankRequest = {
     draft: {

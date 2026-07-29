@@ -3,13 +3,14 @@ import type { AppConfig } from '../../config/env.js';
 import { ExternalServiceError, NotFoundError } from '../../lib/errors.js';
 import { TtlCache } from './cache.js';
 import type {
+  DraftPairScope,
+  DraftPairStat,
   HeroBuildItem,
   HeroBuildVariant,
   HeroDetail,
   HeroMeta,
   HeroPosition,
   HeroPositionStat,
-  MatchupStat,
   MetaPositionSnapshot,
   MetaSnapshot,
   PatchMeta,
@@ -30,6 +31,11 @@ const POSITION_CACHE_STALE_MS = 24 * 60 * 60 * 1_000;
 const POSITION_WINDOW_DAYS = 30;
 const POSITION_MATCH_LIMIT = 20_000;
 const POSITION_MIN_GAMES = 10;
+const PAIR_CACHE_FRESH_MS = 15 * 60 * 1_000;
+const PAIR_CACHE_RETRY_MS = 60 * 1_000;
+const PAIR_CACHE_STALE_MS = 24 * 60 * 60 * 1_000;
+const PAIR_CACHE_MAX_ENTRIES = 256;
+const PAIR_QUERY_TIMEOUT_MS = 5_000;
 const BUILD_SAMPLE_LIMIT = 400;
 const BUILD_TUPLE_SIZE = 3;
 const BUILD_ITEM_LIMIT = 6;
@@ -50,12 +56,6 @@ const heroStatsSchema = z.array(z.object({
   pub_pick: z.number().nonnegative().optional().default(0),
   pub_win: z.number().nonnegative().optional().default(0),
 }).loose());
-
-const matchupSchema = z.array(z.object({
-  hero_id: z.number().int().positive(),
-  games_played: z.number().int().nonnegative(),
-  wins: z.number().int().nonnegative(),
-}));
 
 const patchesSchema = z.array(z.object({
   name: z.string(),
@@ -111,6 +111,21 @@ const explorerPositionResponseSchema = z.object({
   err: z.string().nullable().optional(),
 }).loose();
 
+const explorerPairRowSchema = z.object({
+  relation: z.enum(['matchup', 'synergy']),
+  selected_id: z.coerce.number().int().positive(),
+  candidate_id: z.coerce.number().int().positive(),
+  patch_games: z.coerce.number().int().nonnegative(),
+  patch_wins: z.coerce.number().int().nonnegative(),
+  rank_games: z.coerce.number().int().nonnegative(),
+  rank_wins: z.coerce.number().int().nonnegative(),
+}).loose();
+
+const explorerPairResponseSchema = z.object({
+  rows: z.array(explorerPairRowSchema).optional().default([]),
+  err: z.string().nullable().optional(),
+}).loose();
+
 const purchaseEntrySchema = z.object({
   key: z.string().min(1),
   time: z.coerce.number(),
@@ -151,20 +166,32 @@ type MetaPositionCacheEntry = {
   staleUntil: number;
 };
 
+type DraftPairSnapshot = {
+  matchupByEnemy: Map<number, Map<number, DraftPairStat>>;
+  synergyByAlly: Map<number, Map<number, DraftPairStat>>;
+  scope: DraftPairScope;
+};
+
+type DraftPairCacheEntry = {
+  value: DraftPairSnapshot;
+  freshUntil: number;
+  staleUntil: number;
+};
+
 export class OpenDotaAdapter {
   private readonly heroesCache: TtlCache<RawHero[]>;
   private readonly patchCache: TtlCache<PatchMeta>;
-  private readonly matchupCache: TtlCache<MatchupStat[]>;
   private readonly itemsCache: TtlCache<RawItems>;
   private readonly detailCache = new Map<string, HeroDetailCacheEntry>();
   private readonly detailPending = new Map<string, Promise<HeroDetail>>();
   private readonly positionCache = new Map<string, MetaPositionCacheEntry>();
   private readonly positionPending = new Map<string, Promise<MetaPositionSnapshot>>();
+  private readonly pairCache = new Map<string, DraftPairCacheEntry>();
+  private readonly pairPending = new Map<string, Promise<DraftPairSnapshot>>();
 
   public constructor(private readonly config: AppConfig['openDota']) {
     this.heroesCache = new TtlCache(config.cacheTtlMs, config.cacheStaleMs);
     this.patchCache = new TtlCache(config.cacheTtlMs, config.cacheStaleMs);
-    this.matchupCache = new TtlCache(config.cacheTtlMs, config.cacheStaleMs);
     this.itemsCache = new TtlCache(
       Math.max(config.cacheTtlMs, ITEMS_CACHE_FRESH_MS),
       Math.max(config.cacheStaleMs, ITEMS_CACHE_STALE_MS),
@@ -330,37 +357,35 @@ export class OpenDotaAdapter {
     return request;
   }
 
-  public async getMatchups(heroId: number): Promise<MatchupStat[]> {
-    return this.matchupCache.get(String(heroId), async () => {
-      const result = matchupSchema.parse(await this.request(`/heroes/${heroId}/matchups`));
-      return result.map((matchup) => ({
-        heroId: matchup.hero_id,
-        gamesPlayed: matchup.games_played,
-        wins: matchup.wins,
-      }));
-    });
-  }
-
-  public async getSnapshot(rank: RankBracket | undefined, enemyIds: number[]): Promise<MetaSnapshot> {
+  public async getSnapshot(
+    rank: RankBracket | undefined,
+    enemyIds: number[],
+    allyIds: number[] = [],
+    prefetchedHeroes?: HeroMeta[],
+  ): Promise<MetaSnapshot> {
     const fetchedAt = new Date().toISOString();
-    const [heroes, allRankHeroes, patch, matchupResults, positionMeta] = await Promise.all([
-      this.getHeroes(rank),
-      rank ? this.getHeroes() : Promise.resolve(undefined),
-      this.getPatch().catch(() => 'unknown'),
-      Promise.allSettled(enemyIds.map(async (enemyId) => [enemyId, await this.getMatchups(enemyId)] as const)),
+    const patchRequest = this.getPatchInfo().catch(() => undefined);
+    const pairRequest = patchRequest.then((patch) =>
+      patch
+        ? this.getDraftPairSnapshot(patch.name, rank, enemyIds, allyIds)
+        : undefined);
+    const [heroes, patch, pairSnapshot, positionMeta] = await Promise.all([
+      prefetchedHeroes ?? this.getHeroes(rank),
+      patchRequest,
+      pairRequest,
       this.getRecommendationPositionMeta(rank),
     ]);
-    const matchups = matchupResults.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []);
 
     return {
       heroes,
-      patch: patch === 'unknown' ? 'rolling meta' : `${patch} · rolling matchups`,
+      patch: patch?.name ?? 'unknown patch',
       fetchedAt,
-      matchupByEnemy: new Map(matchups.map(([enemyId, stats]) => [
-        enemyId,
-        new Map(stats.map((stat) => [stat.heroId, stat])),
-      ])),
-      matchupBaselineByHero: new Map((allRankHeroes ?? heroes).map((hero) => [
+      matchupByEnemy: pairSnapshot?.matchupByEnemy
+        ?? new Map<number, Map<number, DraftPairStat>>(),
+      synergyByAlly: pairSnapshot?.synergyByAlly
+        ?? new Map<number, Map<number, DraftPairStat>>(),
+      pairScope: pairSnapshot?.scope ?? null,
+      matchupBaselineByHero: new Map(heroes.map((hero) => [
         hero.id,
         hero.winRate,
       ])),
@@ -377,7 +402,7 @@ export class OpenDotaAdapter {
         new Promise<undefined>((resolve) => {
           timeout = setTimeout(
             () => resolve(undefined),
-            Math.min(2_500, Math.max(750, this.config.timeoutMs)),
+            Math.min(1_200, Math.max(600, this.config.timeoutMs)),
           );
         }),
       ]);
@@ -386,6 +411,213 @@ export class OpenDotaAdapter {
         clearTimeout(timeout);
       }
     }
+  }
+
+  private async getDraftPairSnapshot(
+    patch: string,
+    rank: RankBracket | undefined,
+    enemyIds: number[],
+    allyIds: number[],
+  ): Promise<DraftPairSnapshot> {
+    const normalizedEnemies = [...new Set(enemyIds)].toSorted((left, right) => left - right);
+    const normalizedAllies = [...new Set(allyIds)].toSorted((left, right) => left - right);
+    const key = `${patch}:${rank ?? 'all'}:${normalizedEnemies.join(',')}:${normalizedAllies.join(',')}`;
+    const now = Date.now();
+    const cached = this.getCachedDraftPair(key);
+    if (cached && cached.freshUntil > now) {
+      return cached.value;
+    }
+
+    const pending = this.pairPending.get(key);
+    if (pending) {
+      return pending;
+    }
+
+    const request = this.loadDraftPairSnapshot(patch, rank, normalizedEnemies, normalizedAllies)
+      .then((value) => {
+        const loadedAt = Date.now();
+        this.cacheDraftPair(key, {
+          value,
+          freshUntil: loadedAt + Math.max(this.config.cacheTtlMs, PAIR_CACHE_FRESH_MS),
+          staleUntil: loadedAt + Math.max(this.config.cacheStaleMs, PAIR_CACHE_STALE_MS),
+        });
+        return value;
+      })
+      .catch(() => {
+        const failedAt = Date.now();
+        if (cached && cached.staleUntil > failedAt) {
+          const staleValue = {
+            ...cached.value,
+            scope: {
+              ...cached.value.scope,
+              isStale: true,
+            },
+          };
+          this.cacheDraftPair(key, {
+            value: staleValue,
+            freshUntil: Math.min(failedAt + PAIR_CACHE_RETRY_MS, cached.staleUntil),
+            staleUntil: cached.staleUntil,
+          });
+          return staleValue;
+        }
+        const unavailable = this.emptyDraftPairSnapshot(patch, rank, 'unavailable');
+        this.cacheDraftPair(key, {
+          value: unavailable,
+          freshUntil: failedAt + PAIR_CACHE_RETRY_MS,
+          staleUntil: failedAt + PAIR_CACHE_RETRY_MS,
+        });
+        return unavailable;
+      })
+      .finally(() => {
+        this.pairPending.delete(key);
+      });
+
+    this.pairPending.set(key, request);
+    return request;
+  }
+
+  private getCachedDraftPair(key: string) {
+    const cached = this.pairCache.get(key);
+    if (!cached) {
+      return undefined;
+    }
+    this.pairCache.delete(key);
+    this.pairCache.set(key, cached);
+    return cached;
+  }
+
+  private cacheDraftPair(key: string, entry: DraftPairCacheEntry) {
+    this.pairCache.delete(key);
+    this.pairCache.set(key, entry);
+    while (this.pairCache.size > PAIR_CACHE_MAX_ENTRIES) {
+      const oldestKey = this.pairCache.keys().next().value;
+      if (oldestKey === undefined) {
+        break;
+      }
+      this.pairCache.delete(oldestKey);
+    }
+  }
+
+  private async loadDraftPairSnapshot(
+    patch: string,
+    rank: RankBracket | undefined,
+    enemyIds: number[],
+    allyIds: number[],
+  ): Promise<DraftPairSnapshot> {
+    const patchLiteral = patch.replaceAll("'", "''");
+    const enemyArray = `ARRAY[${enemyIds.join(',')}]::integer[]`;
+    const allyArray = `ARRAY[${allyIds.join(',')}]::integer[]`;
+    const rankPredicate = rank ? `average_rank = ${rank}` : 'TRUE';
+    const branches = [
+      [
+        "SELECT 'matchup'::text AS relation, selected_id, candidate_id,",
+        'NOT pub.radiant_win AS candidate_won, FLOOR(pub.avg_rank_tier / 10)::int AS average_rank',
+        'FROM public_matches pub',
+        'JOIN match_patch mp USING(match_id)',
+        'CROSS JOIN LATERAL unnest(pub.radiant_team) selected_id',
+        'CROSS JOIN LATERAL unnest(pub.dire_team) candidate_id',
+        `WHERE mp.patch = '${patchLiteral}'`,
+        `AND pub.radiant_team && ${enemyArray}`,
+        `AND selected_id = ANY(${enemyArray})`,
+      ].join(' '),
+      [
+        "SELECT 'matchup'::text AS relation, selected_id, candidate_id,",
+        'pub.radiant_win AS candidate_won, FLOOR(pub.avg_rank_tier / 10)::int AS average_rank',
+        'FROM public_matches pub',
+        'JOIN match_patch mp USING(match_id)',
+        'CROSS JOIN LATERAL unnest(pub.dire_team) selected_id',
+        'CROSS JOIN LATERAL unnest(pub.radiant_team) candidate_id',
+        `WHERE mp.patch = '${patchLiteral}'`,
+        `AND pub.dire_team && ${enemyArray}`,
+        `AND selected_id = ANY(${enemyArray})`,
+      ].join(' '),
+      ...(allyIds.length > 0
+        ? [
+            [
+              "SELECT 'synergy'::text AS relation, selected_id, candidate_id,",
+              'pub.radiant_win AS candidate_won, FLOOR(pub.avg_rank_tier / 10)::int AS average_rank',
+              'FROM public_matches pub',
+              'JOIN match_patch mp USING(match_id)',
+              'CROSS JOIN LATERAL unnest(pub.radiant_team) selected_id',
+              'CROSS JOIN LATERAL unnest(pub.radiant_team) candidate_id',
+              `WHERE mp.patch = '${patchLiteral}'`,
+              `AND pub.radiant_team && ${allyArray}`,
+              `AND selected_id = ANY(${allyArray})`,
+              'AND candidate_id <> selected_id',
+            ].join(' '),
+            [
+              "SELECT 'synergy'::text AS relation, selected_id, candidate_id,",
+              'NOT pub.radiant_win AS candidate_won, FLOOR(pub.avg_rank_tier / 10)::int AS average_rank',
+              'FROM public_matches pub',
+              'JOIN match_patch mp USING(match_id)',
+              'CROSS JOIN LATERAL unnest(pub.dire_team) selected_id',
+              'CROSS JOIN LATERAL unnest(pub.dire_team) candidate_id',
+              `WHERE mp.patch = '${patchLiteral}'`,
+              `AND pub.dire_team && ${allyArray}`,
+              `AND selected_id = ANY(${allyArray})`,
+              'AND candidate_id <> selected_id',
+            ].join(' '),
+          ]
+        : []),
+    ];
+    const sql = [
+      `WITH pair_observations AS (${branches.join(' UNION ALL ')})`,
+      'SELECT relation, selected_id, candidate_id,',
+      'COUNT(*)::int AS patch_games,',
+      'SUM(CASE WHEN candidate_won THEN 1 ELSE 0 END)::int AS patch_wins,',
+      `COUNT(*) FILTER (WHERE ${rankPredicate})::int AS rank_games,`,
+      `SUM(CASE WHEN candidate_won AND ${rankPredicate} THEN 1 ELSE 0 END)::int AS rank_wins`,
+      'FROM pair_observations',
+      'GROUP BY relation, selected_id, candidate_id',
+      'ORDER BY relation, selected_id, patch_games DESC',
+    ].join(' ');
+    const response = explorerPairResponseSchema.parse(await this.request(
+      `/explorer?sql=${encodeURIComponent(sql)}`,
+      Math.min(PAIR_QUERY_TIMEOUT_MS, Math.max(750, this.config.timeoutMs)),
+    ));
+    if (response.err) {
+      throw new ExternalServiceError('Dota draft pair data is temporarily unavailable', {
+        provider: 'OpenDota',
+        cause: response.err,
+      });
+    }
+
+    const snapshot = this.emptyDraftPairSnapshot(patch, rank, 'ready');
+    for (const row of response.rows) {
+      const target = row.relation === 'matchup'
+        ? snapshot.matchupByEnemy
+        : snapshot.synergyByAlly;
+      const entries = target.get(row.selected_id) ?? new Map<number, DraftPairStat>();
+      entries.set(row.candidate_id, {
+        heroId: row.candidate_id,
+        patchGames: row.patch_games,
+        patchWins: row.patch_wins,
+        rankGames: row.rank_games,
+        rankWins: row.rank_wins,
+      });
+      target.set(row.selected_id, entries);
+    }
+    return snapshot;
+  }
+
+  private emptyDraftPairSnapshot(
+    patch: string,
+    rank: RankBracket | undefined,
+    availability: DraftPairScope['availability'],
+  ): DraftPairSnapshot {
+    return {
+      matchupByEnemy: new Map(),
+      synergyByAlly: new Map(),
+      scope: {
+        patch,
+        rank: rank ?? null,
+        rankFilter: rank ? 'average_match_rank' : 'all_ranks',
+        window: 'current_patch',
+        fetchedAt: new Date().toISOString(),
+        isStale: false,
+        availability,
+      },
+    };
   }
 
   private async loadHeroDetail(hero: RawHero, patch: PatchMeta): Promise<HeroDetail> {

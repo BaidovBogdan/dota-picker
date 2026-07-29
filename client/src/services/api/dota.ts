@@ -11,7 +11,16 @@ import { refreshNetworkState } from '@/services/network';
 import { analyzeOffline } from '@/services/offline-engine';
 import { resetToLocalGuest } from '@/services/session';
 import { flushAppPersistence, getSessionScope, useAppStore } from '@/store/app-store';
-import type { AnalysisResult, Draft, Hero, Position, RecognizedDraft } from '@/types/domain';
+import type {
+  AnalysisResult,
+  Draft,
+  Hero,
+  Position,
+  RecommendationEvidence,
+  RecommendationMetrics,
+  RecommendationProvenance,
+  RecognizedDraft,
+} from '@/types/domain';
 
 const positionSchema = z.union([
   z.literal(1),
@@ -52,10 +61,110 @@ const backendRecognizedPickSchema = z.object({
   needsReview: z.boolean(),
 });
 
+const recommendationMetricsSchema = z.object({
+  roleFit: z.number().min(0).max(1),
+  counter: z.number().min(0).max(1),
+  meta: z.number().min(0).max(1),
+  synergy: z.number().min(0).max(1),
+  reliability: z.number().min(0).max(1).optional(),
+  coverage: z.number().min(0).max(1).optional(),
+  worstMatchup: z.number().min(0).max(1).optional(),
+});
+
+const recommendationScoreBreakdownSchema = z.object({
+  role: z.number().finite(),
+  matchup: z.number().finite(),
+  meta: z.number().finite(),
+  teamFit: z.number().finite(),
+  reliability: z.number().finite(),
+  advisor: z.number().finite(),
+  diversity: z.number().finite(),
+  total: z.number().finite(),
+});
+
+const recommendationPairEvidenceSchema = z.object({
+  heroId: z.number().int().positive(),
+  rankGames: z.number().int().nonnegative(),
+  rankWins: z.number().int().nonnegative(),
+  patchGames: z.number().int().nonnegative(),
+  patchWins: z.number().int().nonnegative(),
+  winRate: z.number().min(0).max(1),
+  expectedWinRate: z.number().min(0).max(1),
+  advantage: z.number().min(-1).max(1),
+  reliability: z.number().min(0).max(1),
+});
+
+const recommendationEvidenceSchema = z.object({
+  matchups: z.object({
+    source: z.string().min(1),
+    opponentsCovered: z.number().int().nonnegative(),
+    opponentsTotal: z.number().int().nonnegative(),
+    games: z.number().int().nonnegative(),
+    minimumGames: z.number().int().nonnegative(),
+    weightedWinRate: z.number().min(0).max(1).nullable(),
+    expectedWinRate: z.number().min(0).max(1),
+    patch: z.string().min(1).optional(),
+    rank: z.number().int().min(1).max(8).nullable().optional(),
+    rankScoped: z.boolean().optional(),
+    rankOpponentsCovered: z.number().int().nonnegative().optional(),
+    rankGames: z.number().int().nonnegative().optional(),
+    patchGames: z.number().int().nonnegative().optional(),
+    minimumPatchGames: z.number().int().nonnegative().optional(),
+    isStale: z.boolean().optional(),
+    availability: z.enum(['ready', 'unavailable']).optional(),
+    byOpponent: z.array(recommendationPairEvidenceSchema).max(5).optional(),
+  }),
+  synergy: z
+    .object({
+      source: z.string().min(1),
+      alliesCovered: z.number().int().nonnegative(),
+      alliesTotal: z.number().int().nonnegative(),
+      rankAlliesCovered: z.number().int().nonnegative(),
+      games: z.number().int().nonnegative(),
+      rankGames: z.number().int().nonnegative(),
+      patchGames: z.number().int().nonnegative(),
+      minimumGames: z.number().int().nonnegative(),
+      weightedWinRate: z.number().min(0).max(1).nullable(),
+      expectedWinRate: z.number().min(0).max(1).nullable(),
+      pairScore: z.number().min(0).max(1),
+      compositionScore: z.number().min(0).max(1),
+      reliability: z.number().min(0).max(1),
+      patch: z.string().min(1).nullable(),
+      rank: z.number().int().min(1).max(8).nullable(),
+      rankScoped: z.boolean(),
+      isStale: z.boolean(),
+      availability: z.enum(['ready', 'unavailable']),
+      byAlly: z.array(recommendationPairEvidenceSchema).max(4),
+    })
+    .optional(),
+  meta: z.object({
+    source: z.string().min(1),
+    games: z.number().int().nonnegative(),
+    wins: z.number().int().nonnegative(),
+    winRate: z.number().min(0).max(1),
+    rankScoped: z.boolean(),
+    position: positionSchema,
+    positionApproximate: z.boolean().nullable(),
+    isStale: z.boolean(),
+  }),
+});
+
+const recommendationProvenanceSchema = z.object({
+  engineVersion: z.string().min(1),
+  scoringVersion: z.string().min(1),
+  aiAssisted: z.boolean(),
+  model: z.string().min(1).optional(),
+  promptVersion: z.string().min(1).optional(),
+  fallbackReason: z.string().min(1).optional(),
+});
+
 const backendRecommendationSchema = z.object({
   hero: backendHeroSchema,
   score: z.number().finite(),
   confidence: z.enum(['low', 'medium', 'high']),
+  metrics: recommendationMetricsSchema.optional(),
+  scoreBreakdown: recommendationScoreBreakdownSchema.optional(),
+  evidence: recommendationEvidenceSchema.optional(),
   reasons: z.array(z.string()),
 });
 
@@ -73,6 +182,7 @@ const backendAnalysisSchema = z.object({
     patch: z.string().min(1),
     metaFetchedAt: z.string().min(1),
     recommendations: z.array(backendRecommendationSchema).min(1),
+    provenance: recommendationProvenanceSchema.optional(),
   }),
   createdAt: z.string().min(1),
 });
@@ -243,8 +353,90 @@ const reasonKeys: Record<string, string> = {
   good_role_fit: 'recommendation.reason.roleFit',
   meta_favorite: 'recommendation.reason.meta',
   fills_team_need: 'recommendation.reason.teamNeed',
+  strong_synergy: 'recommendation.reason.strongSynergy',
+  stable_across_draft: 'recommendation.reason.stableAcrossDraft',
   limited_matchup_data: 'recommendation.reason.limitedData',
 };
+
+const mapRecommendationMetrics = (
+  metrics: z.infer<typeof recommendationMetricsSchema>,
+): RecommendationMetrics => ({
+  roleFit: metrics.roleFit,
+  counter: metrics.counter,
+  meta: metrics.meta,
+  synergy: metrics.synergy,
+  ...(typeof metrics.reliability === 'number' ? { reliability: metrics.reliability } : {}),
+  ...(typeof metrics.coverage === 'number' ? { coverage: metrics.coverage } : {}),
+  ...(typeof metrics.worstMatchup === 'number' ? { worstMatchup: metrics.worstMatchup } : {}),
+});
+
+const mapRecommendationEvidence = (
+  evidence: z.infer<typeof recommendationEvidenceSchema>,
+): RecommendationEvidence => {
+  const matchups = evidence.matchups;
+  return {
+    matchups: {
+      source: matchups.source,
+      opponentsCovered: matchups.opponentsCovered,
+      opponentsTotal: matchups.opponentsTotal,
+      games: matchups.games,
+      minimumGames: matchups.minimumGames,
+      weightedWinRate: matchups.weightedWinRate,
+      expectedWinRate: matchups.expectedWinRate,
+      ...(matchups.patch ? { patch: matchups.patch } : {}),
+      ...(matchups.rank !== undefined ? { rank: matchups.rank } : {}),
+      ...(typeof matchups.rankScoped === 'boolean' ? { rankScoped: matchups.rankScoped } : {}),
+      ...(typeof matchups.rankOpponentsCovered === 'number'
+        ? { rankOpponentsCovered: matchups.rankOpponentsCovered }
+        : {}),
+      ...(typeof matchups.rankGames === 'number' ? { rankGames: matchups.rankGames } : {}),
+      ...(typeof matchups.patchGames === 'number' ? { patchGames: matchups.patchGames } : {}),
+      ...(typeof matchups.minimumPatchGames === 'number'
+        ? { minimumPatchGames: matchups.minimumPatchGames }
+        : {}),
+      ...(typeof matchups.isStale === 'boolean' ? { isStale: matchups.isStale } : {}),
+      ...(matchups.availability ? { availability: matchups.availability } : {}),
+      ...(matchups.byOpponent ? { byOpponent: matchups.byOpponent } : {}),
+    },
+    ...(evidence.synergy
+      ? {
+          synergy: {
+            source: evidence.synergy.source,
+            alliesCovered: evidence.synergy.alliesCovered,
+            alliesTotal: evidence.synergy.alliesTotal,
+            rankAlliesCovered: evidence.synergy.rankAlliesCovered,
+            games: evidence.synergy.games,
+            rankGames: evidence.synergy.rankGames,
+            patchGames: evidence.synergy.patchGames,
+            minimumGames: evidence.synergy.minimumGames,
+            weightedWinRate: evidence.synergy.weightedWinRate,
+            expectedWinRate: evidence.synergy.expectedWinRate,
+            pairScore: evidence.synergy.pairScore,
+            compositionScore: evidence.synergy.compositionScore,
+            reliability: evidence.synergy.reliability,
+            patch: evidence.synergy.patch,
+            rank: evidence.synergy.rank,
+            rankScoped: evidence.synergy.rankScoped,
+            isStale: evidence.synergy.isStale,
+            availability: evidence.synergy.availability,
+            byAlly: evidence.synergy.byAlly,
+          },
+        }
+      : {}),
+    meta: evidence.meta,
+  };
+};
+
+const mapRecommendationProvenance = (
+  provenance: z.infer<typeof recommendationProvenanceSchema>,
+): RecommendationProvenance => ({
+  engineVersion: provenance.engineVersion,
+  scoringVersion: provenance.scoringVersion,
+  aiAssisted: provenance.aiAssisted,
+  ...(provenance.model ? { model: provenance.model } : {}),
+  ...(provenance.promptVersion ? { promptVersion: provenance.promptVersion } : {}),
+  ...(provenance.fallbackReason ? { fallbackReason: provenance.fallbackReason } : {}),
+});
 
 const mapAnalysis = (analysis: BackendAnalysis): AnalysisResult => ({
   id: analysis.id,
@@ -261,10 +453,14 @@ const mapAnalysis = (analysis: BackendAnalysis): AnalysisResult => ({
     hero: mapHero(item.hero),
     score: item.score,
     label: index === 0 ? 'best' : index === 1 ? 'reliable' : 'fallback',
+    confidence: item.confidence,
+    ...(item.metrics ? { metrics: mapRecommendationMetrics(item.metrics) } : {}),
+    ...(item.scoreBreakdown ? { scoreBreakdown: item.scoreBreakdown } : {}),
+    ...(item.evidence ? { evidence: mapRecommendationEvidence(item.evidence) } : {}),
     reasons: item.reasons.map((reason) =>
       reasonKeys[reason] ? `i18n:${reasonKeys[reason]}` : reason,
     ),
-    risks: ['i18n:recommendation.risk.comfort'],
+    risks: item.evidence ? [] : ['i18n:recommendation.risk.comfort'],
     laneFit: analysis.input.rank
       ? `i18n:recommendation.lane.rank|${analysis.input.rank}`
       : 'i18n:recommendation.lane.general',
@@ -274,6 +470,9 @@ const mapAnalysis = (analysis: BackendAnalysis): AnalysisResult => ({
   dataUpdatedAt: analysis.result.metaFetchedAt,
   createdAt: analysis.createdAt,
   source: 'server',
+  ...(analysis.result.provenance
+    ? { provenance: mapRecommendationProvenance(analysis.result.provenance) }
+    : {}),
 });
 
 export async function getHeroes(): Promise<Hero[]> {
@@ -337,9 +536,9 @@ export const META_SNAPSHOT_COLLECTING_RETRY_MS = 30 * 1_000;
 export const isMetaSnapshotIncomplete = (snapshot?: MetaSnapshot) =>
   Boolean(
     snapshot &&
-      (snapshot.availability === 'collecting' ||
-        snapshot.positionStats.length === 0 ||
-        snapshot.catalog.length === 0),
+    (snapshot.availability === 'collecting' ||
+      snapshot.positionStats.length === 0 ||
+      snapshot.catalog.length === 0),
   );
 
 const selectMetaRotation = (
@@ -560,7 +759,11 @@ export async function recognizePhoto(input: {
     const uploadBlob = sourceBlob.type === type ? sourceBlob : new Blob([sourceBlob], { type });
     form.append('image', uploadBlob, `draft.${extension}`);
   } else {
-    form.append('image', new File(input.uri), 'draft.jpg');
+    const imageFile = new File(input.uri);
+    const imageType = imageFile.type.toLowerCase();
+    const extension =
+      imageType === 'image/png' ? 'png' : imageType === 'image/webp' ? 'webp' : 'jpg';
+    form.append('image', imageFile, `draft.${extension}`);
   }
   const payload = await apiRequest<z.infer<typeof photoResponseSchema>>(
     '/analyses/photo/recognize',

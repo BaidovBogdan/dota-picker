@@ -1,6 +1,6 @@
 import {
   GoogleGenAI,
-  MediaResolution,
+  PartMediaResolutionLevel,
   ThinkingLevel,
   type GenerateContentParameters,
   type GenerateContentResponse,
@@ -15,6 +15,7 @@ import { recognitionOutputSchema } from './photo.schemas.js';
 
 const allowedMimeTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const MAX_VISION_REQUEST_MS = 15_000;
+const AUTO_ACCEPT_CONFIDENCE = 0.98;
 const recognitionJsonSchema = z.toJSONSchema(recognitionOutputSchema);
 Reflect.deleteProperty(recognitionJsonSchema, '$schema');
 const strongDraftUiEvidence = new Set([
@@ -134,6 +135,11 @@ export class GeminiPhotoAdapter implements PhotoRecognizer {
           data: candidate.image.toString('base64'),
           mimeType: candidate.mimeType,
         },
+        mediaResolution: {
+          level: candidate.reliability === 'low'
+            ? PartMediaResolutionLevel.MEDIA_RESOLUTION_MEDIUM
+            : PartMediaResolutionLevel.MEDIA_RESOLUTION_HIGH,
+        },
       },
     ]);
 
@@ -150,9 +156,8 @@ export class GeminiPhotoAdapter implements PhotoRecognizer {
         config: {
           responseMimeType: 'application/json',
           responseJsonSchema: recognitionJsonSchema,
-          maxOutputTokens: 1_024,
+          maxOutputTokens: 768,
           seed: 17,
-          mediaResolution: MediaResolution.MEDIA_RESOLUTION_HIGH,
           thinkingConfig: {
             thinkingLevel: ThinkingLevel.MINIMAL,
           },
@@ -196,13 +201,14 @@ export class GeminiPhotoAdapter implements PhotoRecognizer {
         entry: z.infer<typeof recognitionOutputSchema>['recognized'][number];
         hero: HeroMeta | undefined;
         heroKey: string | undefined;
+        matchedExactly: boolean;
       }>();
       const duplicatePositions = new Set<string>();
       const confidenceCeiling = selectedCandidate?.reliability === 'high'
-        ? 0.79
+        ? 0.99
         : selectedCandidate?.reliability === 'medium'
-          ? 0.69
-          : 0.59;
+          ? 0.89
+          : 0.79;
 
       if (baseQuality !== 'not_dota' && baseQuality !== 'too_blurry') {
         for (const entry of parsed.data.recognized) {
@@ -233,6 +239,7 @@ export class GeminiPhotoAdapter implements PhotoRecognizer {
               },
               hero,
               heroKey,
+              matchedExactly: Boolean(exact),
             });
           }
         }
@@ -258,8 +265,10 @@ export class GeminiPhotoAdapter implements PhotoRecognizer {
           heroName: candidate.entry.heroName,
           localizedName: candidate.hero?.localizedName ?? null,
           confidence: candidate.entry.confidence,
-          needsReview: candidate.entry.confidence < 0.9
+          needsReview: baseQuality !== 'clear'
+            || candidate.entry.confidence < AUTO_ACCEPT_CONFIDENCE
             || !candidate.hero
+            || !candidate.matchedExactly
             || candidate.entry.side === 'unknown'
             || selectedCandidate?.reliability !== 'high'
             || selectedCandidate.enhanced
@@ -276,20 +285,15 @@ export class GeminiPhotoAdapter implements PhotoRecognizer {
       const quality: z.infer<typeof recognitionOutputSchema>['quality'] = baseQuality === 'clear'
         && (
           hasNonSlotDetection
-          || normalizedRecognized.length > 0
           || duplicatePositions.size > 0
           || conflictingHeroes.size > 0
           || normalizedRecognized.some((entry) => entry.needsReview)
         )
         ? 'partial'
         : baseQuality;
-      const recognized = quality === 'partial'
-        ? normalizedRecognized.map((entry) => ({ ...entry, needsReview: true }))
-        : normalizedRecognized;
-
       return {
         quality,
-        recognized,
+        recognized: normalizedRecognized,
         model: response.modelVersion ?? this.config.visionModel,
       };
     } catch (error) {

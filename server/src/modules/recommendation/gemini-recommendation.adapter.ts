@@ -73,7 +73,14 @@ function suppliedEvidence({ request, candidates }: RecommendationAdvisorInput) {
     },
     dataScope: {
       patchLabel: request.snapshot.patch,
-      matchup: 'rolling_all_ranks',
+      matchup: request.snapshot.pairScope
+        ? {
+            window: request.snapshot.pairScope.window,
+            rankFilter: request.snapshot.pairScope.rankFilter,
+            availability: request.snapshot.pairScope.availability,
+            isStale: request.snapshot.pairScope.isStale,
+          }
+        : null,
       positionMeta: request.snapshot.positionMeta?.window ?? null,
       positionMetaRankFilter: request.snapshot.positionMeta?.rankFilter ?? null,
       positionMetaStale: request.snapshot.positionMeta?.isStale ?? null,
@@ -158,7 +165,7 @@ export class GeminiRecommendationAdvisor implements RecommendationAdvisor {
       'Return every supplied candidate hero ID exactly once and never add a hero outside the supplied candidate list.',
       'Preserve deterministic ordering when score differences are meaningful.',
       'Only reorder close candidates when supplied role fit, team fit, enemy coverage, worst matchup, sample reliability, or recommendation diversity justifies it.',
-      'Do not treat rolling all-rank matchup evidence as current-patch or rank-specific evidence.',
+      'Respect each evidence item’s patch, rankScoped, availability, and sample-size fields.',
       'Output JSON only.',
     ].join(' ');
 

@@ -26,7 +26,6 @@ import { OpenDotaAdapter } from './modules/heroes/opendota.adapter.js';
 import { IdempotencyService } from './modules/idempotency/idempotency.service.js';
 import { GeminiPhotoAdapter } from './modules/photo/gemini-photo.adapter.js';
 import { QuotaService } from './modules/quota/quota.service.js';
-import { GeminiRecommendationAdvisor } from './modules/recommendation/gemini-recommendation.adapter.js';
 import { RecommendationEngine } from './modules/recommendation/recommendation.engine.js';
 import { reviewRoutes } from './modules/reviews/review.routes.js';
 import { ReviewService } from './modules/reviews/review.service.js';
@@ -61,8 +60,7 @@ export function buildApp(config: AppConfig = loadConfig()) {
   const otpService = new OtpService(db, config);
   const authService = new AuthService(db, config, otpService);
   const metaAdapter = new OpenDotaAdapter(config.openDota);
-  const recommendationAdvisor = new GeminiRecommendationAdvisor(config.gemini);
-  const recommendationEngine = new RecommendationEngine(recommendationAdvisor);
+  const recommendationEngine = new RecommendationEngine();
   const analysisService = new AnalysisService(
     db,
     metaAdapter,

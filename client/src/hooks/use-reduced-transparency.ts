@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import { AccessibilityInfo } from 'react-native';
+import { AccessibilityInfo, Platform } from 'react-native';
 
 let reducedTransparency = false;
 let nativeSubscription: ReturnType<typeof AccessibilityInfo.addEventListener> | null = null;
@@ -13,7 +13,7 @@ const publish = (next: boolean) => {
 };
 
 const start = () => {
-  if (nativeSubscription) return;
+  if (nativeSubscription || Platform.OS === 'web') return;
   const generation = ++initialization;
   void AccessibilityInfo.isReduceTransparencyEnabled()
     .then((next) => {

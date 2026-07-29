@@ -27,10 +27,109 @@ export type Draft = {
   updatedAt: string;
 };
 
+export type RecommendationMetrics = {
+  roleFit: number;
+  counter: number;
+  meta: number;
+  synergy: number;
+  reliability?: number;
+  coverage?: number;
+  worstMatchup?: number;
+};
+
+export type RecommendationScoreBreakdown = {
+  role: number;
+  matchup: number;
+  meta: number;
+  teamFit: number;
+  reliability: number;
+  advisor: number;
+  diversity: number;
+  total: number;
+};
+
+export type RecommendationPairEvidence = {
+  heroId: number;
+  rankGames: number;
+  rankWins: number;
+  patchGames: number;
+  patchWins: number;
+  winRate: number;
+  expectedWinRate: number;
+  advantage: number;
+  reliability: number;
+};
+
+export type RecommendationEvidence = {
+  matchups: {
+    source: string;
+    opponentsCovered: number;
+    opponentsTotal: number;
+    games: number;
+    minimumGames: number;
+    weightedWinRate: number | null;
+    expectedWinRate: number;
+    patch?: string;
+    rank?: number | null;
+    rankScoped?: boolean;
+    rankOpponentsCovered?: number;
+    rankGames?: number;
+    patchGames?: number;
+    minimumPatchGames?: number;
+    isStale?: boolean;
+    availability?: 'ready' | 'unavailable';
+    byOpponent?: RecommendationPairEvidence[];
+  };
+  synergy?: {
+    source: string;
+    alliesCovered: number;
+    alliesTotal: number;
+    rankAlliesCovered: number;
+    games: number;
+    rankGames: number;
+    patchGames: number;
+    minimumGames: number;
+    weightedWinRate: number | null;
+    expectedWinRate: number | null;
+    pairScore: number;
+    compositionScore: number;
+    reliability: number;
+    patch: string | null;
+    rank: number | null;
+    rankScoped: boolean;
+    isStale: boolean;
+    availability: 'ready' | 'unavailable';
+    byAlly: RecommendationPairEvidence[];
+  };
+  meta: {
+    source: string;
+    games: number;
+    wins: number;
+    winRate: number;
+    rankScoped: boolean;
+    position: Position;
+    positionApproximate: boolean | null;
+    isStale: boolean;
+  };
+};
+
+export type RecommendationProvenance = {
+  engineVersion: string;
+  scoringVersion: string;
+  aiAssisted: boolean;
+  model?: string;
+  promptVersion?: string;
+  fallbackReason?: string;
+};
+
 export type Recommendation = {
   hero: Hero;
   score: number;
   label: 'best' | 'reliable' | 'fallback' | 'Лучший ответ' | 'Надёжный выбор' | 'Запасной план';
+  confidence?: 'high' | 'medium' | 'low';
+  metrics?: RecommendationMetrics;
+  scoreBreakdown?: RecommendationScoreBreakdown;
+  evidence?: RecommendationEvidence;
   reasons: string[];
   risks: string[];
   laneFit: string;
@@ -47,6 +146,7 @@ export type AnalysisResult = {
   dataUpdatedAt: string;
   createdAt: string;
   source: 'server' | 'offline';
+  provenance?: RecommendationProvenance;
 };
 
 export type HistoryRecord = AnalysisResult;

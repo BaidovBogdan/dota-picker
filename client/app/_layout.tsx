@@ -62,7 +62,9 @@ function ThemedRootLayout() {
   }, [colors, isDark]);
 
   useEffect(() => {
-    Appearance.setColorScheme(mode === 'system' ? 'unspecified' : resolvedMode);
+    if (Platform.OS !== 'web') {
+      Appearance.setColorScheme(mode === 'system' ? 'unspecified' : resolvedMode);
+    }
   }, [mode, resolvedMode]);
 
   useEffect(() => {

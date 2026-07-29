@@ -16,6 +16,8 @@ export type RecommendationReason =
   | 'good_role_fit'
   | 'meta_favorite'
   | 'fills_team_need'
+  | 'strong_synergy'
+  | 'stable_across_draft'
   | 'limited_matchup_data';
 
 export type RecommendationMetrics = {
@@ -47,14 +49,51 @@ export type RecommendationScoreBreakdown = {
 
 export type RecommendationEvidence = {
   matchups: {
-    source: 'opendota_rolling_all_ranks';
+    source:
+      | 'opendota_rolling_all_ranks'
+      | 'opendota_current_patch_rank_pairs'
+      | 'opendota_current_patch_all_ranks_pairs';
     opponentsCovered: number;
     opponentsTotal: number;
     games: number;
     minimumGames: number;
     weightedWinRate: number | null;
     expectedWinRate: number;
+    patch?: string | undefined;
+    rank?: RankBracket | null | undefined;
+    rankScoped?: boolean | undefined;
+    rankOpponentsCovered?: number | undefined;
+    rankGames?: number | undefined;
+    patchGames?: number | undefined;
+    minimumPatchGames?: number | undefined;
+    isStale?: boolean | undefined;
+    availability?: 'ready' | 'unavailable' | undefined;
+    byOpponent?: RecommendationPairEvidence[] | undefined;
   };
+  synergy?: {
+    source:
+      | 'opendota_current_patch_rank_pairs'
+      | 'opendota_current_patch_all_ranks_pairs'
+      | 'team_composition_only';
+    alliesCovered: number;
+    alliesTotal: number;
+    rankAlliesCovered: number;
+    games: number;
+    rankGames: number;
+    patchGames: number;
+    minimumGames: number;
+    weightedWinRate: number | null;
+    expectedWinRate: number | null;
+    pairScore: number;
+    compositionScore: number;
+    reliability: number;
+    patch: string | null;
+    rank: RankBracket | null;
+    rankScoped: boolean;
+    isStale: boolean;
+    availability: 'ready' | 'unavailable';
+    byAlly: RecommendationPairEvidence[];
+  } | undefined;
   meta: {
     source:
       | 'opendota_current_patch_30d_position'
@@ -68,6 +107,18 @@ export type RecommendationEvidence = {
     positionApproximate: boolean | null;
     isStale: boolean;
   };
+};
+
+export type RecommendationPairEvidence = {
+  heroId: number;
+  rankGames: number;
+  rankWins: number;
+  patchGames: number;
+  patchWins: number;
+  winRate: number;
+  expectedWinRate: number;
+  advantage: number;
+  reliability: number;
 };
 
 export type Recommendation = {
@@ -94,8 +145,8 @@ export type RecommendationFallbackReason =
   | 'provider_error';
 
 export type RecommendationProvenance = {
-  engineVersion: 'hybrid-v2';
-  scoringVersion: 'data-first-v2';
+  engineVersion: 'hybrid-v2' | 'deterministic-v3';
+  scoringVersion: 'data-first-v2' | 'draft-pairs-v3';
   aiAssisted: boolean;
   model?: string | undefined;
   promptVersion?: string | undefined;

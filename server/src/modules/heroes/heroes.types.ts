@@ -14,17 +14,31 @@ export type HeroMeta = {
   winRate: number;
 };
 
-export type MatchupStat = {
+export type DraftPairStat = {
   heroId: number;
-  gamesPlayed: number;
-  wins: number;
+  patchGames: number;
+  patchWins: number;
+  rankGames: number;
+  rankWins: number;
+};
+
+export type DraftPairScope = {
+  patch: string;
+  rank: RankBracket | null;
+  rankFilter: 'average_match_rank' | 'all_ranks';
+  window: 'current_patch';
+  fetchedAt: string;
+  isStale: boolean;
+  availability: 'ready' | 'unavailable';
 };
 
 export type MetaSnapshot = {
   heroes: HeroMeta[];
   patch: string;
   fetchedAt: string;
-  matchupByEnemy: Map<number, Map<number, MatchupStat>>;
+  matchupByEnemy: Map<number, Map<number, DraftPairStat>>;
+  synergyByAlly: Map<number, Map<number, DraftPairStat>>;
+  pairScope: DraftPairScope | null;
   matchupBaselineByHero?: Map<number, number>;
   positionMeta?: MetaPositionSnapshot;
 };
