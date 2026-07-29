@@ -15,7 +15,7 @@ const config: ExpoConfig = {
   name: 'Counterpick',
   slug: 'dota-picker',
   version: '0.1.0',
-  icon: './assets/brand/app-icon-modern-v4.png',
+  icon: './assets/brand/counterpick-icon.png',
   orientation: 'portrait',
   scheme: 'counterpick',
   userInterfaceStyle: 'automatic',
@@ -32,8 +32,8 @@ const config: ExpoConfig = {
   },
   android: {
     adaptiveIcon: {
-      foregroundImage: './assets/brand/app-icon-modern-v4.png',
-      backgroundColor: '#2049D8',
+      foregroundImage: './assets/brand/counterpick-icon.png',
+      backgroundColor: '#F1F0E8',
     },
     package: 'app.counterpick.mobile',
     predictiveBackGestureEnabled: true,
@@ -45,11 +45,12 @@ const config: ExpoConfig = {
     [
       'expo-splash-screen',
       {
-        image: './assets/brand/app-icon-modern-v4.png',
-        imageWidth: 164,
+        image: './assets/brand/counterpick-mark-light.png',
+        imageWidth: 184,
         backgroundColor: '#F1F0E8',
+        resizeMode: 'contain',
         dark: {
-          image: './assets/brand/app-icon-modern-v4.png',
+          image: './assets/brand/counterpick-mark-dark.png',
           backgroundColor: '#101112',
         },
       },
@@ -63,6 +64,7 @@ const config: ExpoConfig = {
       },
     ],
     'expo-secure-store',
+    './plugins/with-android-video-pip-capability',
   ],
   experiments: {
     typedRoutes: true,

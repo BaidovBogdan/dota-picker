@@ -1,62 +1,98 @@
 # Counterpick
 
-Мобильный Dota draft assistant: пользователь фотографирует экран драфта или выбирает героев вручную, а приложение предлагает контрпики с учётом позиции, ранга и актуальных данных OpenDota. Регистрация необязательна: гостевой режим, бесплатная квота, история и переход на Pro уже заложены в клиент и API.
+Counterpick is a Dota 2 draft assistant that turns a visible or manually entered draft into role-aware hero recommendations. It combines current OpenDota statistics with a constrained Gemini reranker and a deterministic fallback, so a recommendation can still be produced when the AI provider is unavailable.
 
-## Что находится в проекте
+The repository contains the mobile product, API, administration prototype, public landing page, desktop research probes, and archived design explorations.
 
-- `client` — Expo SDK 54 / React Native 0.81 / React 19 приложение для iOS, Android и web
-- `server` — Fastify 5 / PostgreSQL 18 / Drizzle API
-- `admin` — Vite / React административная панель с демо-данными
-- `design-preview` — сохранённые дизайн-концепты и интерактивные прототипы
+## Repository map
 
-Подробные команды и переменные окружения находятся в `client/README.md` и `server/README.md`. Секреты хранятся только в локальных `.env`; в репозиторий добавляются исключительно `.env.example`.
+| Directory | Purpose | Status |
+| --- | --- | --- |
+| [`client`](client/README.md) | Expo application for iOS and Android | Main product |
+| [`server`](server/README.md) | Fastify API, PostgreSQL data layer, OpenDota and Gemini integrations | Main backend |
+| [`admin`](admin/README.md) | Lightweight React/Vite operations dashboard | Mock-data prototype |
+| [`landing`](landing/README.md) | Astro marketing site for the future Windows client | Canonical landing |
+| [`desktop/gsi-probe`](desktop/gsi-probe/README.md) | Local Valve Game State Integration research receiver | Research tool |
+| [`desktop/capture-probe`](desktop/capture-probe/README.md) | Safe Windows window-capture proof of concept | Research tool |
+| [`design-preview`](design-preview) | Historical UI directions and interactive prototypes | Design archive |
 
-## Актуальный интерфейс
+There is no root npm workspace. Install dependencies and run commands inside the package you are working on.
 
-- светлая тема включена по умолчанию, тёмная выбирается в профиле и сохраняется локально;
-- главный сценарий построен вокруг крупной карточки сканирования драфта, а ручной выбор остаётся рядом как второй путь;
-- современная типографика Manrope, компактные подписи, иконки и плавные анимации без тяжёлого фэнтезийного декора;
-- отдельная навигация для платформ: glass-эффект на iOS и кастомный Dota-inspired tab bar на Android;
-- основная иконка и splash используют `client/assets/brand/app-icon-modern-v4.png`;
-- авторская иллюстрация сканирования находится в `client/assets/brand/draft-scan-hero-light.jpg`.
+## Product capabilities
 
-## Быстрый web-запуск на Windows
+- Guest-first onboarding with optional OTP-gated account flows.
+- Draft recognition from a JPEG, PNG, or WebP image.
+- Four-step manual draft entry for opponents, allies, rank, and position.
+- Three explainable counterpick recommendations with risks and confidence signals.
+- Live hero meta, rank-specific win rates, build timing examples, wishlist, and history.
+- Free and Pro quotas, RevenueCat billing adapter, and analysis feedback.
+- Russian and English localization with system, light, and dark themes.
+- A deterministic recommendation path when Gemini reranking is disabled or unavailable.
 
-Нативная сборка для первого просмотра не нужна. В PowerShell:
+## Technology
 
-```powershell
-Set-Location C:\Users\Bogdan\Desktop\Frontend\dota-picker\client
-Copy-Item .env.example .env
-npm install
-npm run web
-```
+- Mobile: Expo 57, React Native 0.86, React 19, Expo Router, Reanimated, TanStack Query, and Zustand.
+- API: Node.js 24, Fastify 5, TypeScript, PostgreSQL, Drizzle ORM, OpenDota, and Gemini.
+- Admin: React 19 and Vite 6.
+- Landing: Astro 7, GSAP, and Tailwind CSS 4.
+- Desktop research: Node.js GSI tooling and a Windows C++20 capture probe.
 
-Expo откроет web-версию, обычно на `http://localhost:8081`. Если браузер не открылся автоматически, адрес можно открыть вручную. Для запуска общего dev-меню используйте `npm run start`, затем клавишу `w`.
+## Quick start
 
-Без запущенного API клиент открывается и сохраняет локальный драфт; сетевые данные, авторизация, серверная история, распознавание фото и свежий анализ требуют backend.
-
-## Требования backend
-
-Для локального API нужны:
-
-1. Node.js 24 LTS и npm.
-2. PostgreSQL 18 либо Docker Desktop с Compose.
-3. `.env` в папке `server`, созданный из `.env.example`.
-4. Доступ к `https://api.opendota.com` для каталога, меты и matchup-статистики.
-5. `GEMINI_API_KEY` только для распознавания героев по фото.
-6. RevenueCat, App Store и Google Play только для проверки реальных покупок Pro.
-
-Минимальный локальный запуск API в отдельном PowerShell:
+Use Node.js 24 and npm. Run each block from the repository root in a separate terminal. Start the API first:
 
 ```powershell
-Set-Location C:\Users\Bogdan\Desktop\Frontend\dota-picker\server
+cd server
 Copy-Item .env.example .env
 docker compose up -d postgres
-npm install
+npm ci
 npm run db:migrate
 npm run dev
 ```
 
-API будет доступен на `http://localhost:4000`, Swagger UI — на `http://localhost:4000/docs`. Для web-клиента значение `EXPO_PUBLIC_API_URL=http://localhost:4000/v1` подходит без изменений. На физическом телефоне вместо `localhost` нужен LAN-адрес компьютера или публичный HTTPS URL.
+In another terminal, start the mobile client:
 
-Проект не требует Redis или Kafka на текущем объёме: PostgreSQL закрывает аккаунты, квоты, историю, идемпотентность и кеш меты. Добавлять отдельную очередь или распределённый кеш имеет смысл только после появления подтверждённой нагрузки.
+```powershell
+cd client
+Copy-Item .env.example .env
+npm ci
+npm start
+```
+
+For a local API, set `EXPO_PUBLIC_API_URL=http://localhost:4000/v1` in `client/.env`. A physical phone must use an address it can reach over the local network or HTTPS; `localhost` on the phone refers to the phone itself.
+
+Package-specific setup, environment variables, and operational notes are documented in the linked README files above.
+
+## Quality checks
+
+Run each relevant block from the repository root:
+
+```powershell
+cd client
+npm run typecheck
+npm run lint
+```
+
+```powershell
+cd server
+npm run typecheck
+npm run lint
+npm test
+```
+
+```powershell
+cd landing
+npm run check
+npm run build
+```
+
+## Security
+
+- Keep secrets in local or deployment environment variables. Commit only `.env.example` files.
+- Never place Gemini, admin, database, JWT, or RevenueCat secret keys in the mobile bundle.
+- The static OTP code is a pre-launch convenience and must be disabled before public production use.
+- Do not point local development or QA scripts at production databases or billing data.
+
+## Current scope
+
+The mobile client and API are the primary product. The Astro package is the canonical public landing, and the admin panel is currently a mock-data prototype. The desktop probes validate possible data-capture approaches; they are not yet a distributable overlay client.

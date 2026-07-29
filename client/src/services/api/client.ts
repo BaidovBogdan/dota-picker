@@ -1,4 +1,5 @@
 import Constants from 'expo-constants';
+import { fetch as expoFetch } from 'expo/fetch';
 import { z, type ZodType } from 'zod';
 
 import { translate } from '@/i18n';
@@ -219,7 +220,10 @@ async function fetchWithTimeout(
   }, timeoutMs);
 
   try {
-    return await Promise.race([fetch(input, { ...init, signal: controller.signal }), interruption]);
+    return await Promise.race([
+      expoFetch(input, { ...init, signal: controller.signal }),
+      interruption,
+    ]);
   } catch (error) {
     if (timedOut) throw new ApiError(translate('errors.timeout'), 0, 'TIMEOUT');
     if (externalSignal?.aborted)

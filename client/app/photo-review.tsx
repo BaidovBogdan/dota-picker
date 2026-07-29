@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Pressable, useWindowDimensions, View } from 'react-native';
 
 import { DraftBoard } from '@/components/draft/draft-board';
+import { PositionPicker } from '@/components/draft/position-picker';
 import { MessageState } from '@/components/feedback/states';
 import {
   FLOATING_ACTION_BAR_BOTTOM_INSET,
@@ -345,23 +346,29 @@ export default function PhotoReviewScreen() {
     if (!canAnalyze) {
       if (hasUnresolvedPicks) {
         setReviewMessageKey('photo.resolveBeforeAnalysis');
+      } else if (!draft.position) {
+        setReviewMessageKey('photo.choosePosition');
+      } else if (draft.enemies.length === 0) {
+        setReviewMessageKey('home.needEnemy');
       } else {
-        router.replace('/(tabs)');
+        setReviewMessageKey('errors.validationDraft');
       }
       return;
     }
     analysisLock.current = true;
     setAnalysisStarting(true);
     confirmed.current = true;
-    const idempotencyKey = createId('manual');
+    const idempotencyKey = createId('photo');
     router.replace({ pathname: '/analysis', params: { idempotencyKey } });
   };
 
   const actionLabel = hasUnresolvedPicks
     ? t('photo.review')
-    : coreDraftReady
-      ? t('home.analyze')
-      : t('nav.draft');
+    : !draft.position
+      ? t('home.needPosition')
+      : draft.enemies.length === 0
+        ? t('home.needEnemy')
+        : t('home.analyze');
 
   return (
     <>
@@ -568,6 +575,29 @@ export default function PhotoReviewScreen() {
               ))}
             </View>
           </View>
+        ) : null}
+
+        {mutation.isSuccess || mutation.isError ? (
+          <Panel style={{ marginBottom: 14 }}>
+            <AppText variant="data" color={colors.cobalt}>
+              {t('photo.positionEyebrow')}
+            </AppText>
+            <AppText
+              variant="inscription"
+              numberOfLines={2}
+              adjustsFontSizeToFit
+              minimumFontScale={0.72}
+              style={{ marginTop: 4, fontSize: 22, lineHeight: 25 }}
+            >
+              {t('photo.positionTitle')}
+            </AppText>
+            <AppText variant="caption" color={colors.textMuted} style={{ marginTop: 5 }}>
+              {t('photo.positionBody')}
+            </AppText>
+            <View style={{ marginTop: 12 }}>
+              <PositionPicker contained onSelect={() => setReviewMessageKey(null)} />
+            </View>
+          </Panel>
         ) : null}
 
         <DraftBoard />

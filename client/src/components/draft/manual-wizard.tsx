@@ -1,4 +1,5 @@
 import CloseIcon from '@expo/material-symbols/close.xml';
+import SkipNextIcon from '@expo/material-symbols/skip_next.xml';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useQuery } from '@tanstack/react-query';
 import { Image } from 'expo-image';
@@ -76,6 +77,12 @@ const selectedRailHeight = 72;
 const catalogStateHeight = 320;
 const rankIconUrl = (rank: number) =>
   `https://www.opendota.com/assets/images/dota2/rank_icons/rank_icon_${rank}.png`;
+const heroCatalogKey = (item: HeroCatalogItem) =>
+  item.kind === 'rail-spacer'
+    ? 'selected-hero-rail-spacer'
+    : item.kind === 'letter'
+      ? `letter-${item.letter}`
+      : `hero-${item.hero.id}`;
 
 const closeRoute = () => {
   if (router.canGoBack()) router.back();
@@ -193,10 +200,11 @@ function WizardHeader({
         {onSkip ? (
           <Stack.Toolbar.Button
             accessibilityLabel={t('manual.skip')}
+            icon={Platform.OS === 'android' ? SkipNextIcon : undefined}
             separateBackground
             onPress={onSkip}
           >
-            {t('manual.skip')}
+            {Platform.OS === 'ios' ? t('manual.skip') : null}
           </Stack.Toolbar.Button>
         ) : null}
         <Stack.Toolbar.View>
@@ -257,7 +265,7 @@ const SelectedHeroAvatar = memo(function SelectedHeroAvatar({
 }: {
   hero?: Hero;
   index: number;
-  onRemove?: () => void;
+  onRemove: (heroId: number) => void;
   team: DraftTeam;
 }) {
   const { colors, alpha } = useAppTheme();
@@ -290,7 +298,7 @@ const SelectedHeroAvatar = memo(function SelectedHeroAvatar({
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={t('draft.removeHero', { name: hero.name })}
-      onPress={onRemove}
+      onPress={() => onRemove(hero.id)}
       style={{
         width: 50,
         height: 50,
@@ -367,8 +375,8 @@ const SelectedHeroesRail = memo(function SelectedHeroesRail({
             key={`${team}-${index}`}
             index={index}
             team={team}
+            onRemove={onRemove}
             {...(hero ? { hero } : {})}
-            {...(heroId ? { onRemove: () => onRemove(heroId) } : {})}
           />
         );
       })}
@@ -619,6 +627,15 @@ function HeroPicker({
       viewPosition: 0,
     });
   }, []);
+  const getItemLayout = useCallback(
+    (_data: ArrayLike<HeroCatalogItem> | null | undefined, index: number) =>
+      catalog.layouts[index] ?? {
+        index,
+        length: heroRowHeight,
+        offset: catalog.layouts.at(-1)?.offset ?? 0,
+      },
+    [catalog.layouts, heroRowHeight],
+  );
 
   const renderItem = useCallback(
     ({ item }: { item: HeroCatalogItem }) => {
@@ -690,20 +707,8 @@ function HeroPicker({
       <FlatList
         ref={listRef}
         data={catalog.items}
-        keyExtractor={(item) =>
-          item.kind === 'rail-spacer'
-            ? 'selected-hero-rail-spacer'
-            : item.kind === 'letter'
-              ? `letter-${item.letter}`
-              : `hero-${item.hero.id}`
-        }
-        getItemLayout={(_data, index) =>
-          catalog.layouts[index] ?? {
-            index,
-            length: heroRowHeight,
-            offset: catalog.layouts.at(-1)?.offset ?? 0,
-          }
-        }
+        keyExtractor={heroCatalogKey}
+        getItemLayout={getItemLayout}
         initialNumToRender={12}
         maxToRenderPerBatch={8}
         updateCellsBatchingPeriod={50}

@@ -5,6 +5,7 @@ import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Stack, useLocalSearchParams } from 'expo-router';
 import { useHeaderHeight } from 'expo-router/react-navigation';
+import { StatusBar } from 'expo-status-bar';
 import { type ReactNode, useCallback, useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
 import Animated, {
@@ -32,6 +33,8 @@ import { getSessionScope, useAppStore } from '@/store/app-store';
 import { layout, shape } from '@/theme/tokens';
 import { useAppTheme } from '@/theme/use-app-theme';
 
+const FavoriteFilledIcon = require('../../assets/icons/favorite-filled.xml');
+
 export default function HeroDetailScreen() {
   const params = useLocalSearchParams<{ id?: string }>();
   const heroId = Number(params.id);
@@ -57,7 +60,7 @@ export default function HeroDetailScreen() {
     enabled: Boolean(session && validHeroId),
     staleTime: (cachedQuery) => heroDetailStaleTime(cachedQuery.state.data),
   });
-  const { colors, alpha } = useAppTheme();
+  const { colors, alpha, isDark } = useAppTheme();
   const { t } = useTranslation();
   const hero = query.data?.hero;
   const wishlisted = Boolean(hero && wishlistIds.includes(hero.id));
@@ -66,6 +69,8 @@ export default function HeroDetailScreen() {
   const gutter = width >= 700 ? layout.tabletGutter : layout.phoneGutter;
   const compactTitleThreshold = Math.max(96, artworkHeight - headerHeight - 48);
   const compactTitleVisible = compactTitleState.heroId === heroId && compactTitleState.visible;
+  const artworkVisible = validHeroId && (query.isPending || Boolean(query.data));
+  const headerForeground = artworkVisible && !compactTitleVisible ? '#FFFFFF' : colors.text;
   const updateCompactTitle = useCallback(
     (visible: boolean) => {
       setCompactTitleState({ heroId, visible });
@@ -90,22 +95,40 @@ export default function HeroDetailScreen() {
 
   return (
     <>
+      <StatusBar
+        animated
+        style={artworkVisible && !compactTitleVisible ? 'light' : isDark ? 'light' : 'dark'}
+      />
       <Stack.Screen
         options={{
           ...nativeHeaderOptions(colors),
           title: compactTitleVisible ? (hero?.name ?? '') : '',
           headerLargeTitleEnabled: false,
           headerBackButtonDisplayMode: 'minimal',
+          headerTransparent: true,
+          headerTintColor: headerForeground,
+          headerStyle: {
+            backgroundColor: compactTitleVisible ? colors.background : 'transparent',
+          },
+          headerTitleStyle: { color: headerForeground },
         }}
       />
       <Stack.Toolbar placement="right">
         <Stack.Toolbar.Button
           accessibilityLabel={t(wishlisted ? 'wishlist.removeOne' : 'wishlist.addOne')}
           icon={
-            process.env.EXPO_OS === 'ios' ? (wishlisted ? 'heart.fill' : 'heart') : FavoriteIcon
+            process.env.EXPO_OS === 'ios'
+              ? wishlisted
+                ? 'heart.fill'
+                : 'heart'
+              : wishlisted
+                ? FavoriteFilledIcon
+                : FavoriteIcon
           }
           disabled={!hero}
-          tintColor={wishlisted ? colors.live : colors.text}
+          tintColor={wishlisted ? colors.live : headerForeground}
+          selected={false}
+          variant="plain"
           onPress={() => {
             if (hero) toggleWishlist(hero.id);
           }}

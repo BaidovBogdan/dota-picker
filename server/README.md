@@ -1,144 +1,193 @@
-# Dota Picker API
+# Counterpick API
 
-Backend мобильного Dota Picker: гостевой вход без обязательной регистрации, email/password-аккаунты, лимиты попыток, подбор контрпиков по актуальной статистике OpenDota, распознавание драфта по изображению, история и минимальная интеграция RevenueCat.
+The Counterpick API provides guest and account authentication, quota management, Dota 2 hero data, image recognition, counterpick recommendations, analysis history, feedback, and billing synchronization for the mobile application.
 
-## Стек
+Recommendations use a hybrid pipeline:
 
-- Node.js 24 LTS, Fastify 5, TypeScript strict
-- Zod 4 и `fastify-type-provider-zod`
-- PostgreSQL 18, Drizzle ORM и SQL-миграции
-- JWT access tokens, ротируемые opaque refresh tokens, Argon2id
-- Gemini API, мультимодальный `inlineData`, JSON Schema и повторная проверка через Zod
-- Swagger/OpenAPI, Helmet, CORS, rate limiting, Pino
-- Vitest и ESLint
+1. OpenDota data produces a deterministic, role-compatible candidate pool.
+2. Gemini may rerank only those candidates under a constrained response schema.
+3. The deterministic ranking remains the safe fallback when Gemini is disabled, unavailable, invalid, or too slow.
 
-## Локальная подготовка на Windows
+## Stack
 
-Требования:
+- Node.js 24 and TypeScript 6
+- Fastify 5 with Zod validation
+- PostgreSQL and Drizzle ORM
+- JWT access tokens, rotating opaque refresh tokens, and Argon2id
+- OpenDota for heroes, meta, and matchup statistics
+- Gemini for photo recognition and optional recommendation reranking
+- Swagger/OpenAPI, Helmet, CORS, rate limiting, and Pino
+- Vitest and ESLint
 
-- Node.js 24 LTS и npm;
-- PostgreSQL 18+ либо Docker Desktop с Compose;
-- свободные локальные порты `4000` для API и `5432` для PostgreSQL;
-- доступ к `https://api.opendota.com` для каталога, меты и matchup-статистики.
+## Local setup
 
-В PowerShell из папки `server`:
+Requirements:
+
+- Node.js 24 and npm
+- Docker Desktop with Compose, or an accessible PostgreSQL instance
+- Access to the OpenDota API
+- A Gemini API key only if photo recognition or AI reranking must run
+
+From the `server` directory:
 
 ```powershell
 Copy-Item .env.example .env
 docker compose up -d postgres
-npm install
+npm ci
 npm run db:migrate
 npm run dev
 ```
 
-`docker compose` поднимает только PostgreSQL; API запускается отдельной командой `npm run dev`. Если локальный PostgreSQL уже установлен, Docker не нужен: создайте базу и укажите её адрес в `DATABASE_URL`.
+The API starts on `http://localhost:4000` by default. Useful local endpoints:
 
-Для старта обязательны корректные `DATABASE_URL`, `JWT_SECRET` длиной не меньше 32 символов и `REVENUECAT_WEBHOOK_SECRET` длиной не меньше 24 символов. Значения из `.env.example` подходят только для локальной разработки. `GEMINI_API_KEY` можно оставить пустым, если распознавание фото пока не тестируется. RevenueCat app IDs и store-настройки нужны только для реальных покупок.
+- OpenAPI UI: `http://localhost:4000/docs`
+- Liveness: `http://localhost:4000/health/live`
+- Readiness, including the database check: `http://localhost:4000/health/ready`
 
-После запуска API доступен на `http://localhost:4000`, Swagger UI — на `http://localhost:4000/docs`, readiness — на `http://localhost:4000/health/ready`. Миграции при старте сервера автоматически не применяются.
+Migrations do not run automatically when the server starts.
 
-Проверки выполняются отдельно:
+## Environment
 
-```powershell
-npm run typecheck
-npm run lint
-npm test
-npm run build
-```
+Use `.env.example` as the complete source of supported variables. The main groups are:
 
-## API
+| Group | Variables |
+| --- | --- |
+| Runtime | `NODE_ENV`, `HOST`, `PORT`, `TRUST_PROXY`, `LOG_LEVEL`, `CORS_ORIGINS` |
+| Database | `DATABASE_URL`, `MIGRATION_DATABASE_URL` |
+| Authentication | `JWT_SECRET`, `ACCESS_TOKEN_TTL`, `REFRESH_TOKEN_TTL_DAYS` |
+| OTP | `OTP_STATIC_CODE`, `ALLOW_STATIC_OTP_IN_PRODUCTION`, TTL, attempt, cooldown, and rate-window settings |
+| Quotas | `FREE_QUOTA_*`, `PRO_QUOTA_*` |
+| OpenDota | `OPEN_DOTA_BASE_URL`, timeout, fresh-cache, and stale-cache settings |
+| Gemini | `GEMINI_API_KEY`, vision and recommendation models, and timeouts |
+| Uploads | `MAX_IMAGE_BYTES` |
+| Idempotency | `IDEMPOTENCY_TTL_HOURS`, `IDEMPOTENCY_LEASE_SECONDS` |
+| Billing | RevenueCat webhook secret, entitlement ID, app IDs, and sandbox policy |
+| Administration | `ADMIN_API_KEY` |
 
-Base URL: `/v1`. Все пользовательские маршруты, кроме auth, требуют `Authorization: Bearer <accessToken>`.
+`JWT_SECRET` must contain at least 32 characters. `REVENUECAT_WEBHOOK_SECRET` must contain at least 24 characters for the server to boot.
 
-| Метод | Маршрут | Назначение |
-|---|---|---|
-| POST | `/v1/auth/guest` | Создать или восстановить гостя по `deviceId` |
-| POST | `/v1/auth/register` | Создать email/password аккаунт |
-| POST | `/v1/auth/login` | Войти |
-| POST | `/v1/auth/upgrade-guest` | Превратить текущего гостя в аккаунт без потери данных |
-| POST | `/v1/auth/refresh` | Ротировать refresh token |
-| POST | `/v1/auth/logout` | Отозвать refresh token |
-| GET | `/v1/me` | Профиль и текущая квота |
-| DELETE | `/v1/me` | Удалить гостя или аккаунт и связанные серверные данные |
-| GET | `/v1/quota` | Остаток попыток |
-| GET | `/v1/heroes?rank=1` | Каталог героев и мета для ранга 1–8 |
-| GET | `/v1/heroes/meta` | Текущий патч и свежесть данных |
-| POST | `/v1/analyses/manual` | Подобрать три героя по подтверждённому драфту |
-| POST | `/v1/analyses/photo/recognize` | Распознать фото драфта |
-| GET | `/v1/analyses/history` | История с cursor pagination |
-| GET | `/v1/analyses/history/:id` | Один сохранённый результат |
-| GET | `/v1/billing/status` | Entitlement, срок Pro и квота |
-| POST | `/v1/billing/webhooks/revenuecat` | Закрытый webhook RevenueCat |
-| GET | `/health/live` | Liveness |
-| GET | `/health/ready` | Readiness с проверкой PostgreSQL |
+`MIGRATION_DATABASE_URL` is optional locally. In hosted PostgreSQL environments, use a pooled URL for `DATABASE_URL` and a direct URL for migrations when the provider recommends that split.
 
-Для `POST /v1/analyses/manual` и `POST /v1/analyses/photo/recognize` обязателен уникальный заголовок `Idempotency-Key` длиной 8–128 символов. Повтор завершённого запроса с тем же телом возвращает сохранённый ответ. Повтор того же ключа с другим телом отклоняется. Незавершённая операция удерживает короткую lease, длительность которой задаётся `IDEMPOTENCY_LEASE_SECONDS`. После её истечения повторный запрос может продолжить связанный анализ или восстановить уже сохранённый ответ; уникальные события квоты не допускают повторного списания.
+## OTP status
 
-### Ручной анализ
+OTP challenges use four digits. The current pre-launch environment can accept the static code `1234` when `OTP_STATIC_CODE=1234` is configured.
 
-```json
-{
-  "source": "manual",
-  "position": 3,
-  "allyHeroIds": [1, 5],
-  "enemyHeroIds": [2, 14, 26],
-  "rank": 5
-}
-```
+This mode does not send email and is not suitable for a public release. Before production traffic:
 
-`source` можно установить в `photo`, если пользователь подтвердил распознанный драфт. Попытка резервируется атомарно и возвращается при любой ошибке до успешного результата. Ответ содержит три рекомендации, итоговый score, confidence, отдельные метрики и reason codes для локализации на клиенте.
+- integrate an email provider;
+- remove `OTP_STATIC_CODE`;
+- set `ALLOW_STATIC_OTP_IN_PRODUCTION=false`;
+- verify resend throttling, expiry, attempt limits, and abuse monitoring.
 
-### Фото
+The Render blueprint currently enables the static code intentionally for private pre-launch testing.
 
-Фото отправляется как `multipart/form-data`, поле `image`. Разрешены JPEG, PNG и WEBP. Максимальный размер задаётся `MAX_IMAGE_BYTES`, по умолчанию 5 MiB. Файл не сохраняется: он находится в памяти только на время запроса и передаётся в Gemini API как base64 `inlineData`. Распознавание доступно только при ненулевой квоте, ограничено тарифным лимитом, rate limit `3/min` по ID аутентифицированного аккаунта и дополнительным IP-лимитом `12/min`.
+## API overview
 
-Rate limit хранится в памяти процесса и корректен для одной реплики API. Перед горизонтальным масштабированием нужно подключить общий store, например Redis, к `@fastify/rate-limit`; иначе каждая реплика будет считать лимит отдельно.
+All product routes use the `/v1` prefix. Request and response schemas are available in Swagger.
 
-Ответ содержит распознанную сторону, слот, героя, confidence и `needsReview`. Клиент должен показать экран подтверждения и только после него отправить драфт в `/v1/analyses/manual` с `source: "photo"`.
+### Authentication
 
-## Рекомендации и мета
+| Method | Route | Purpose |
+| --- | --- | --- |
+| `POST` | `/v1/auth/guest` | Create or resume a device-bound guest account |
+| `POST` | `/v1/auth/otp/request` | Request an OTP challenge for registration, login, or reset |
+| `POST` | `/v1/auth/otp/request-authenticated` | Request an OTP challenge for an authenticated account action |
+| `POST` | `/v1/auth/register` | Create an account after a valid OTP challenge |
+| `POST` | `/v1/auth/login` | Sign in with password and OTP verification |
+| `POST` | `/v1/auth/upgrade-guest` | Convert the authenticated guest into an account |
+| `POST` | `/v1/auth/password/reset` | Reset a password with an OTP challenge |
+| `POST` | `/v1/auth/password/change` | Change a password with current credentials and OTP |
+| `POST` | `/v1/auth/refresh` | Rotate a refresh token and issue a new access token |
+| `POST` | `/v1/auth/logout` | Revoke a refresh token |
 
-Ranking выполняется детерминированным серверным движком, а не языковой моделью. Он учитывает соответствие позиции, win rate выбранного rank bracket, накопленную выборку матчей против каждого противника и базовый баланс состава. Matchup-данные OpenDota являются rolling-агрегацией и не выдаются за статистику только текущего патча; версия клиента отображается рядом как контекст. OpenDota-запросы кэшируются; после истечения свежего TTL сервер пытается обновить данные, а при временной ошибке может вернуть последний результат в пределах stale TTL. Если пригодных кэшированных данных нет, API честно отвечает `503`.
+Registration, login, guest upgrade, and password operations consume the `challengeId` returned by the OTP request plus a four-digit code delivered out of band. In the current pre-launch static mode, that code is `1234`.
 
-## Квота
+### Account and quota
 
-По умолчанию Free получает 3 попытки и восстанавливает 1 раз в 24 часа. Pro получает максимум 100 и суточное пополнение до 100. Значения полностью настраиваются через env. Квота изменяется внутри транзакции с блокировкой аккаунта, поэтому параллельные запросы не могут потратить одну попытку дважды.
+| Method | Route | Purpose |
+| --- | --- | --- |
+| `GET` | `/v1/me` | Read the authenticated account |
+| `DELETE` | `/v1/me` | Delete the authenticated account |
+| `GET` | `/v1/quota` | Read the authoritative quota state |
+| `POST` | `/v1/quota/reset` | Reset quota in non-production environments only |
 
-## RevenueCat
+Default limits are three free attempts with one refill every 24 hours, and a Pro capacity of 100 refilled to 100 every 24 hours. All values are configurable.
 
-Клиент должен идентифицироваться в RevenueCat значением `account.revenueCatAppUserId`, которое равно UUID аккаунта. Webhook настраивается на `/v1/billing/webhooks/revenuecat`, а в Authorization header передаётся секрет из `REVENUECAT_WEBHOOK_SECRET`. `REVENUECAT_PRO_ENTITLEMENT_ID` задаёт entitlement Pro.
+### Heroes and meta
 
-Каждый webhook сохраняется по уникальному RevenueCat event ID. Успешно применённое событие не меняет подписку второй раз, а временно неприменимое остаётся в состоянии `pending` и получает `503`, чтобы RevenueCat повторил доставку. Более старые lifecycle-события не перезаписывают новое состояние. Активное entitlement переводит аккаунт на Pro и пополняет квоту; `EXPIRATION` или refund возвращает Free и ограничивает остаток Free-лимитом. `SUBSCRIPTION_PAUSED` сохраняет доступ до фактического истечения периода, а `TRANSFER` переносит активный серверный тариф между известными аккаунтами и сохранёнными tombstone. Поэтому `TRANSFER`, пришедший раньше purchase webhook, безопасно доигрывается после его получения. Если все автоматические повторы RevenueCat исчерпаны, pending event нужно повторно отправить из dashboard; перед production-нагрузкой стоит добавить фоновую reconciliation-задачу с RevenueCat REST credentials. `REVENUECAT_APP_IDS` ограничивает допустимые приложения, а `REVENUECAT_ALLOW_SANDBOX` должен быть выключен в production. Реальные App Store, Google Play и RevenueCat public SDK keys в репозитории отсутствуют.
+| Method | Route | Purpose |
+| --- | --- | --- |
+| `GET` | `/v1/heroes` | Hero catalog and rank-aware statistics |
+| `GET` | `/v1/heroes/meta` | Current patch and data-refresh metadata |
+| `GET` | `/v1/heroes/meta-positions` | Eligible hero-position statistics for the selected rank |
+| `GET` | `/v1/heroes/:heroId/detail` | Rank win rates and recent build timing groups |
 
-## Обязательные внешние настройки
+Meta responses use a fresh cache and may use a bounded stale snapshot when OpenDota is temporarily unavailable.
 
-- `DATABASE_URL`
-- `JWT_SECRET` не короче 32 символов
-- `REVENUECAT_WEBHOOK_SECRET` не короче 24 символов
-- `REVENUECAT_APP_IDS` со списком разрешённых RevenueCat app IDs для production
-- `REVENUECAT_ALLOW_SANDBOX=false` для production
-- `GEMINI_API_KEY` для распознавания фото
-- доступ к `https://api.opendota.com`
+### Analyses
 
-Модель фото задаётся `GEMINI_VISION_MODEL`. Значение по умолчанию — стабильная мультимодальная `gemini-3.5-flash-lite`. Таймаут задаётся через `GEMINI_TIMEOUT_MS`. Ответ модели ограничен JSON Schema и повторно проверяется Zod перед использованием.
+| Method | Route | Purpose |
+| --- | --- | --- |
+| `POST` | `/v1/analyses/manual` | Create recommendations from a structured draft |
+| `POST` | `/v1/analyses/photo/recognize` | Recognize heroes from one image |
+| `GET` | `/v1/analyses/history` | Read paginated account history |
+| `GET` | `/v1/analyses/history/:id` | Read one saved analysis |
 
-## Ошибки
+Both POST routes require `Authorization: Bearer <token>` and a unique `Idempotency-Key`. Reusing the same key with the same request returns the stored result; reusing it for different input is rejected.
 
-Все ошибки имеют единый формат:
+Photo recognition accepts one multipart field named `image`. Supported types are JPEG, PNG, and WebP. The default maximum size is 5 MiB. The image is validated, EXIF-oriented, bounded, and processed in memory rather than stored as an analysis attachment. A direct narrow pick bar stays intact; full screenshots, letterboxed captures, and portrait or landscape monitor photos use bounded horizontal candidate extraction so the central hero grid is not submitted as a pick list. Recognized identities remain review-required because provider confidence is not independent visual proof.
 
-```json
-{
-  "error": {
-    "code": "QUOTA_EXHAUSTED",
-    "message": "No analysis attempts remaining",
-    "details": {},
-    "requestId": "req-1"
-  }
-}
-```
+### Reviews
 
-Исходные изображения, refresh tokens и пароли не логируются. Refresh tokens хранятся только в виде SHA-256 hash, пароли — Argon2id hash.
+| Method | Route | Purpose |
+| --- | --- | --- |
+| `POST` | `/v1/analyses/:id/review` | Create or update the authenticated user's review |
+| `GET` | `/v1/account/reviews` | List the authenticated user's reviews |
+| `DELETE` | `/v1/account/reviews/:id` | Delete the authenticated user's review |
+| `GET` | `/v1/admin/reviews` | List reviews for moderation |
+| `DELETE` | `/v1/admin/reviews/:id` | Delete a review as an administrator |
 
-При upgrade гостя все старые refresh tokens атомарно отзываются, а версия access token увеличивается. Обнаружение повторного использования уже ротированного refresh token отзывает всю его token family и также инвалидирует активные access tokens.
+Admin review routes use the `x-admin-key` header. That key must remain server-side and must never be embedded in the admin browser bundle.
 
-Удаление через `DELETE /v1/me` каскадно удаляет email, password hash, историю, refresh tokens, события квоты и idempotency records. Для любого удалённого аккаунта временно остаётся privacy-minimal billing tombstone: исходный UUID не хранится, вместо него записывается HMAC. Для Free это только hash и retention-метаданные; для активного Pro дополнительно сохраняются продукт, срок и остаток квоты. Tombstone позволяет принять запоздавший purchase webhook и затем перенести уже оплаченное право на новую сессию. Он очищается после окончания retention, а entitlement-данные обнуляются после переноса. Удаление аккаунта не отменяет подписку в App Store или Google Play, поэтому клиент отдельно предупреждает пользователя и даёт открыть системное управление подпиской.
+### Billing
+
+| Method | Route | Purpose |
+| --- | --- | --- |
+| `GET` | `/v1/billing/status` | Read the current entitlement and quota state |
+| `POST` | `/v1/billing/webhooks/revenuecat` | Apply verified RevenueCat entitlement events |
+
+## Scripts
+
+| Command | Purpose |
+| --- | --- |
+| `npm run dev` | Start the TypeScript server in watch mode |
+| `npm run build` | Compile the production server |
+| `npm start` | Run the compiled server |
+| `npm run typecheck` | Type-check without emitting files |
+| `npm run lint` | Run ESLint |
+| `npm test` | Run the Vitest suite once |
+| `npm run test:watch` | Run Vitest in watch mode |
+| `npm run eval:photo` | Run the opt-in real-provider photo corpus; requires `QA_EMAIL` and `QA_PASSWORD` |
+| `npm run db:generate` | Generate a Drizzle migration |
+| `npm run db:migrate` | Apply pending migrations |
+
+## Deployment
+
+The repository includes:
+
+- `server/Dockerfile` for a production container;
+- `render.yaml` for the current Render service;
+- a readiness endpoint at `/health/ready`;
+- a CI workflow that can run checks and database migrations before deployment.
+
+Use deployment secrets for the database, JWT, Gemini, RevenueCat, and admin values. Do not commit a populated `.env`.
+
+## Operational guarantees
+
+- Authenticated analysis ownership is checked before history or review access.
+- Refresh tokens rotate and can be revoked.
+- Photo recognition has user and IP rate limits.
+- Analysis creation is idempotent and quota-aware.
+- Gemini output is schema-validated and cannot introduce heroes outside the deterministic candidate pool.
+- Provider failures map to controlled API errors or the deterministic recommendation fallback.
+- Sensitive authorization and admin headers are redacted from logs.

@@ -9,12 +9,23 @@ import { z } from 'zod';
 import type { AppConfig } from '../../config/env.js';
 import { AppError, ExternalServiceError } from '../../lib/errors.js';
 import type { HeroMeta } from '../heroes/heroes.types.js';
+import { prepareDraftVisionInput } from './draft-pick-bar.js';
 import type { PhotoRecognizer } from './photo-recognizer.js';
 import { recognitionOutputSchema } from './photo.schemas.js';
 
 const allowedMimeTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const MAX_VISION_REQUEST_MS = 15_000;
 const recognitionJsonSchema = z.toJSONSchema(recognitionOutputSchema);
 Reflect.deleteProperty(recognitionJsonSchema, '$schema');
+const strongDraftUiEvidence = new Set([
+  'opposing_team_slots',
+  'pick_ban_phase',
+]);
+const sideOrder = {
+  ally: 0,
+  enemy: 1,
+  unknown: 2,
+} as const;
 
 type GeminiClient = {
   generateContent(parameters: GenerateContentParameters): Promise<GenerateContentResponse>;
@@ -60,8 +71,8 @@ export class GeminiPhotoAdapter implements PhotoRecognizer {
     const sdk = new GoogleGenAI({
       apiKey: config.apiKey,
       httpOptions: {
-        timeout: config.timeoutMs,
-        retryOptions: { attempts: 2 },
+        timeout: Math.min(config.timeoutMs, MAX_VISION_REQUEST_MS),
+        retryOptions: { attempts: 1 },
       },
     });
     this.client = {
@@ -80,16 +91,51 @@ export class GeminiPhotoAdapter implements PhotoRecognizer {
     }
 
     const catalog = heroes.map((hero) => hero.localizedName).join(', ');
+    const visionInput = await prepareDraftVisionInput(image);
+    const candidateSummary = visionInput.candidates
+      .map((candidate) => (
+        `${candidate.id}: ${candidate.strategy}, vertical source range `
+        + `${Math.round(candidate.sourceTopRatio * 100)}-${Math.round(candidate.sourceBottomRatio * 100)}%`
+      ))
+      .join('; ');
     const prompt = [
-      'Inspect this Dota 2 draft, match, or hero-selection screenshot.',
-      'Identify only hero portraits that are visibly present and never infer hidden picks.',
+      `The server extracted ${visionInput.candidates.length} horizontal candidate region(s) from a ${visionInput.sourceKind} image: ${candidateSummary}.`,
+      'Each following image is preceded by its candidate letter. Candidate regions can overlap.',
+      'Select exactly one candidate with the strongest official Dota 2 hero-pick or draft-phase evidence, or select none.',
+      'Return detections only from selectedCandidate. Never merge or duplicate detections across candidates.',
+      'A candidate can be a direct narrow pick-bar screenshot, the top of a full screenshot, or a horizontal band from a camera photo of a monitor.',
+      'First classify whether the selected candidate comes from the official Dota 2 game client hero-pick or draft-phase interface.',
+      'Set screenContext to dota_draft only when at least two independent draft UI signals from draftUiEvidence are directly visible, including opposing_team_slots or pick_ban_phase.',
+      'A centered countdown together with ALL PICK or PICK PHASE and opposing player-slot rows is conclusive draft structure, even if a recording playback control overlaps one corner.',
+      'Some candidate bands can contain the central hero-selection grid. It must never be treated as pick evidence.',
+      'A hero portrait, Dota logo, the words Dota or draft, five generic cards, or Dota-themed artwork are never draft UI evidence by themselves.',
+      'Companion apps, websites, dashboards, Counterpick screens, hero lists, guides, result cards, post-match screens, and the live-match HUD are not Dota draft screens even when they contain real hero portraits.',
+      'Use not_dota_draft for those excluded screens and uncertain when the required structural evidence is not clearly visible.',
+      'When screenContext is not dota_draft, set quality to not_dota and return an empty recognized array.',
+      'Recognize picks only from occupied team pick slots in the draft interface, usually the opposing team bars at the top or sides.',
+      'An occupied team slot contains hero artwork. Rank medals, rank numbers, player avatars, player names, role labels, empty banners, and profile decorations inside an unpicked player card are not heroes.',
+      'If only two of five cards on one side contain hero artwork, return only those two occupied picks.',
+      'Hero cosmetics can change colors and headgear. Use distinctive face, anatomy, and silhouette rather than dominant color.',
+      'When a cosmetic portrait is ambiguous between multiple heroes, omit that slot instead of guessing or returning a visual lookalike.',
+      'Never return portraits from the central hero-selection grid, attribute rows, hover preview, recommendation panel, friends-and-foes panel, ads, artwork, or background.',
+      'Set sourceRegion to team_pick_slot only when the portrait is visibly inside an occupied team pick slot; otherwise use the matching non-slot sourceRegion.',
+      'Slots are zero-based within each team pick bar in visual order from left to right or top to bottom.',
+      'Identify only picks that are visibly present and never infer hidden picks.',
       "Never assume Radiant is the user's ally team.",
       'Use ally or enemy only when labels, layout, selection highlight, or a player marker makes the side unambiguous.',
       'Use unknown when the side is ambiguous so the user can confirm it.',
-      'Slots are zero-based within each side and must be between 0 and 4.',
       'Use quality clear only when every visible portrait is reliably identifiable, partial when only some are reliable, not_dota for unrelated images, and too_blurry when no reliable identification is possible.',
       `Use exact hero names from this catalog: ${catalog}.`,
     ].join(' ');
+    const imageParts = visionInput.candidates.flatMap((candidate) => [
+      { text: `Candidate ${candidate.id}` },
+      {
+        inlineData: {
+          data: candidate.image.toString('base64'),
+          mimeType: candidate.mimeType,
+        },
+      },
+    ]);
 
     try {
       const response = await this.client.generateContent({
@@ -98,18 +144,14 @@ export class GeminiPhotoAdapter implements PhotoRecognizer {
           role: 'user',
           parts: [
             { text: prompt },
-            {
-              inlineData: {
-                data: image.toString('base64'),
-                mimeType,
-              },
-            },
+            ...imageParts,
           ],
         }],
         config: {
           responseMimeType: 'application/json',
           responseJsonSchema: recognitionJsonSchema,
-          maxOutputTokens: 2_048,
+          maxOutputTokens: 1_024,
+          seed: 17,
           mediaResolution: MediaResolution.MEDIA_RESOLUTION_HIGH,
           thinkingConfig: {
             thinkingLevel: ThinkingLevel.MINIMAL,
@@ -133,36 +175,120 @@ export class GeminiPhotoAdapter implements PhotoRecognizer {
         throw new AppError(422, 'IMAGE_RECOGNITION_FAILED', 'The recognition response was invalid');
       }
 
+      const selectedCandidate = visionInput.candidates.find(
+        (candidate) => candidate.id === parsed.data.selectedCandidate,
+      );
+      const evidence = new Set(parsed.data.draftUiEvidence);
+      const isConfirmedDraft = Boolean(selectedCandidate)
+        && parsed.data.screenContext === 'dota_draft'
+        && evidence.size >= 2
+        && [...evidence].some((item) => strongDraftUiEvidence.has(item));
+      const baseQuality: z.infer<typeof recognitionOutputSchema>['quality'] = parsed.data.quality === 'too_blurry'
+        ? 'too_blurry'
+        : isConfirmedDraft && parsed.data.quality !== 'not_dota'
+          ? parsed.data.quality
+          : 'not_dota';
       const indexed = heroes.flatMap((hero) => [
         { key: normalizeName(hero.localizedName), hero },
         { key: normalizeName(hero.name), hero },
       ]);
-      const recognized = parsed.data.quality === 'not_dota' || parsed.data.quality === 'too_blurry'
-        ? []
-        : parsed.data.recognized.map((entry) => {
-            const key = normalizeName(entry.heroName);
-            const exact = indexed.find((item) => item.key === key)?.hero;
-            const fuzzy = indexed.reduce<{ hero: HeroMeta; distance: number } | undefined>(
-              (closest, item) => {
-                const distance = editDistance(key, item.key);
-                return !closest || distance < closest.distance ? { hero: item.hero, distance } : closest;
+      const bestByPosition = new Map<string, {
+        entry: z.infer<typeof recognitionOutputSchema>['recognized'][number];
+        hero: HeroMeta | undefined;
+        heroKey: string | undefined;
+      }>();
+      const duplicatePositions = new Set<string>();
+      const confidenceCeiling = selectedCandidate?.reliability === 'high'
+        ? 0.79
+        : selectedCandidate?.reliability === 'medium'
+          ? 0.69
+          : 0.59;
+
+      if (baseQuality !== 'not_dota' && baseQuality !== 'too_blurry') {
+        for (const entry of parsed.data.recognized) {
+          if (entry.sourceRegion !== 'team_pick_slot') continue;
+
+          const key = normalizeName(entry.heroName);
+          const exact = indexed.find((item) => item.key === key)?.hero;
+          const fuzzy = indexed.reduce<{ hero: HeroMeta; distance: number } | undefined>(
+            (closest, item) => {
+              const distance = editDistance(key, item.key);
+              return !closest || distance < closest.distance ? { hero: item.hero, distance } : closest;
+            },
+            undefined,
+          );
+          const hero = exact ?? (fuzzy && fuzzy.distance <= 2 ? fuzzy.hero : undefined);
+          const heroKey = hero ? `id:${hero.id}` : key ? `name:${key}` : undefined;
+          const positionKey = entry.side === 'unknown'
+            ? `${entry.side}:${entry.slot}:${heroKey ?? 'unresolved'}`
+            : `${entry.side}:${entry.slot}`;
+          const existing = bestByPosition.get(positionKey);
+
+          if (existing) duplicatePositions.add(positionKey);
+          if (!existing || entry.confidence > existing.entry.confidence) {
+            bestByPosition.set(positionKey, {
+              entry: {
+                ...entry,
+                confidence: Math.min(entry.confidence, confidenceCeiling),
               },
-              undefined,
-            );
-            const hero = exact ?? (fuzzy && fuzzy.distance <= 2 ? fuzzy.hero : undefined);
-            return {
-              side: entry.side,
-              slot: entry.slot,
-              heroId: hero?.id ?? null,
-              heroName: entry.heroName,
-              localizedName: hero?.localizedName ?? null,
-              confidence: entry.confidence,
-              needsReview: entry.confidence < 0.82 || !hero || entry.side === 'unknown',
-            };
-          });
+              hero,
+              heroKey,
+            });
+          }
+        }
+      }
+
+      const positionsByHero = new Map<string, Set<string>>();
+      for (const [positionKey, candidate] of bestByPosition) {
+        if (!candidate.heroKey) continue;
+        const positions = positionsByHero.get(candidate.heroKey) ?? new Set<string>();
+        positions.add(positionKey);
+        positionsByHero.set(candidate.heroKey, positions);
+      }
+      const conflictingHeroes = new Set(
+        [...positionsByHero]
+          .filter(([, positions]) => positions.size > 1)
+          .map(([heroKey]) => heroKey),
+      );
+      const normalizedRecognized = [...bestByPosition]
+        .map(([positionKey, candidate]) => ({
+          side: candidate.entry.side,
+          slot: candidate.entry.slot,
+          heroId: candidate.hero?.id ?? null,
+          heroName: candidate.entry.heroName,
+          localizedName: candidate.hero?.localizedName ?? null,
+          confidence: candidate.entry.confidence,
+          needsReview: candidate.entry.confidence < 0.9
+            || !candidate.hero
+            || candidate.entry.side === 'unknown'
+            || selectedCandidate?.reliability !== 'high'
+            || selectedCandidate.enhanced
+            || duplicatePositions.has(positionKey)
+            || Boolean(candidate.heroKey && conflictingHeroes.has(candidate.heroKey)),
+        }))
+        .sort((left, right) => (
+          sideOrder[left.side] - sideOrder[right.side]
+          || left.slot - right.slot
+        ));
+      const hasNonSlotDetection = parsed.data.recognized.some(
+        (entry) => entry.sourceRegion !== 'team_pick_slot',
+      );
+      const quality: z.infer<typeof recognitionOutputSchema>['quality'] = baseQuality === 'clear'
+        && (
+          hasNonSlotDetection
+          || normalizedRecognized.length > 0
+          || duplicatePositions.size > 0
+          || conflictingHeroes.size > 0
+          || normalizedRecognized.some((entry) => entry.needsReview)
+        )
+        ? 'partial'
+        : baseQuality;
+      const recognized = quality === 'partial'
+        ? normalizedRecognized.map((entry) => ({ ...entry, needsReview: true }))
+        : normalizedRecognized;
 
       return {
-        quality: parsed.data.quality,
+        quality,
         recognized,
         model: response.modelVersion ?? this.config.visionModel,
       };

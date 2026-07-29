@@ -1,4 +1,5 @@
 import { onlineManager } from '@tanstack/react-query';
+import { File } from 'expo-file-system';
 import { Platform } from 'react-native';
 import { z } from 'zod';
 
@@ -559,11 +560,7 @@ export async function recognizePhoto(input: {
     const uploadBlob = sourceBlob.type === type ? sourceBlob : new Blob([sourceBlob], { type });
     form.append('image', uploadBlob, `draft.${extension}`);
   } else {
-    form.append('image', {
-      uri: input.uri,
-      name: 'draft.jpg',
-      type: 'image/jpeg',
-    } as unknown as Blob);
+    form.append('image', new File(input.uri), 'draft.jpg');
   }
   const payload = await apiRequest<z.infer<typeof photoResponseSchema>>(
     '/analyses/photo/recognize',
@@ -572,7 +569,7 @@ export async function recognizePhoto(input: {
       body: form,
       headers: { 'Idempotency-Key': input.idempotencyKey },
       ...(input.signal ? { signal: input.signal } : {}),
-      timeoutMs: 25_000,
+      timeoutMs: 40_000,
       schema: photoResponseSchema,
     },
   );

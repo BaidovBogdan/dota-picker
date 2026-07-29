@@ -7,8 +7,15 @@ import { useTranslation } from '@/i18n';
 import { useAppStore } from '@/store/app-store';
 import { layout, shape } from '@/theme/tokens';
 import { useAppTheme } from '@/theme/use-app-theme';
+import type { Position } from '@/types/domain';
 
-export function PositionPicker({ contained = false }: { contained?: boolean }) {
+export function PositionPicker({
+  contained = false,
+  onSelect,
+}: {
+  contained?: boolean;
+  onSelect?: (position: Position) => void;
+}) {
   const selected = useAppStore((state) => state.draft.position);
   const setPosition = useAppStore((state) => state.setPosition);
   const { width } = useWindowDimensions();
@@ -38,6 +45,7 @@ export function PositionPicker({ contained = false }: { contained?: boolean }) {
             onPress={() => {
               Haptics.selectionAsync().catch(() => {});
               setPosition(position.id);
+              onSelect?.(position.id);
             }}
             style={{
               minHeight: 58,

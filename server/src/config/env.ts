@@ -58,7 +58,7 @@ const envSchema = z.object({
   }),
   GEMINI_VISION_MODEL: z.string().min(1).default('gemini-3.5-flash-lite'),
   GEMINI_RECOMMENDATION_MODEL: z.string().min(1).default('gemini-3.5-flash-lite'),
-  GEMINI_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(30_000),
+  GEMINI_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(15_000),
   GEMINI_RECOMMENDATION_TIMEOUT_MS: z.coerce.number().int().min(10_000).max(30_000).default(15_000),
   MAX_IMAGE_BYTES: z.coerce.number().int().min(1_024).max(8 * 1_024 * 1_024).default(5 * 1_024 * 1_024),
   IDEMPOTENCY_TTL_HOURS: z.coerce.number().positive().default(24),

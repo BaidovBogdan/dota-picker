@@ -1,5 +1,7 @@
 import type { GenerateContentParameters, GenerateContentResponse } from '@google/genai';
-import { describe, expect, it, vi } from 'vitest';
+import { readFile } from 'node:fs/promises';
+import sharp from 'sharp';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { GeminiPhotoAdapter } from '../src/modules/photo/gemini-photo.adapter.js';
 import type { HeroMeta } from '../src/modules/heroes/heroes.types.js';
 
@@ -9,34 +11,49 @@ const config = {
   timeoutMs: 30_000,
 } as const;
 
-const heroes: HeroMeta[] = [
-  {
-    id: 1,
-    name: 'npc_dota_hero_antimage',
-    localizedName: 'Anti-Mage',
+function hero(id: number, name: string, localizedName: string): HeroMeta {
+  return {
+    id,
+    name,
+    localizedName,
     primaryAttribute: 'agi',
     attackType: 'Melee',
     roles: ['Carry'],
-    imageUrl: 'https://example.com/antimage.png',
-    iconUrl: 'https://example.com/antimage-icon.png',
+    imageUrl: `https://example.com/${id}.png`,
+    iconUrl: `https://example.com/${id}-icon.png`,
     picks: 100,
     wins: 52,
     winRate: 0.52,
-  },
-  {
-    id: 2,
-    name: 'npc_dota_hero_axe',
-    localizedName: 'Axe',
-    primaryAttribute: 'str',
-    attackType: 'Melee',
-    roles: ['Initiator'],
-    imageUrl: 'https://example.com/axe.png',
-    iconUrl: 'https://example.com/axe-icon.png',
-    picks: 80,
-    wins: 40,
-    winRate: 0.5,
-  },
+  };
+}
+
+const heroes: HeroMeta[] = [
+  hero(1, 'npc_dota_hero_antimage', 'Anti-Mage'),
+  hero(2, 'npc_dota_hero_axe', 'Axe'),
+  hero(3, 'npc_dota_hero_bane', 'Bane'),
+  hero(20, 'npc_dota_hero_vengefulspirit', 'Vengeful Spirit'),
+  hero(23, 'npc_dota_hero_kunkka', 'Kunkka'),
+  hero(25, 'npc_dota_hero_lina', 'Lina'),
+  hero(34, 'npc_dota_hero_tinker', 'Tinker'),
+  hero(39, 'npc_dota_hero_queenofpain', 'Queen of Pain'),
+  hero(40, 'npc_dota_hero_venomancer', 'Venomancer'),
+  hero(46, 'npc_dota_hero_templar_assassin', 'Templar Assassin'),
+  hero(54, 'npc_dota_hero_life_stealer', 'Lifestealer'),
+  hero(73, 'npc_dota_hero_alchemist', 'Alchemist'),
+  hero(120, 'npc_dota_hero_pangolier', 'Pangolier'),
 ];
+let testImage = Buffer.alloc(0);
+
+beforeAll(async () => {
+  testImage = await sharp({
+    create: {
+      width: 800,
+      height: 450,
+      channels: 3,
+      background: '#17202A',
+    },
+  }).jpeg().toBuffer();
+});
 
 function response(value: unknown, modelVersion = 'gemini-3.5-flash-lite-001') {
   return {
@@ -50,29 +67,34 @@ describe('GeminiPhotoAdapter', () => {
     const generateContent = vi
       .fn<(parameters: GenerateContentParameters) => Promise<GenerateContentResponse>>()
       .mockResolvedValue(response({
+        selectedCandidate: 'A',
+        screenContext: 'dota_draft',
+        draftUiEvidence: ['opposing_team_slots', 'draft_countdown', 'draft_mode_label'],
         quality: 'clear',
         recognized: [
           {
+            sourceRegion: 'team_pick_slot',
             side: 'enemy',
             slot: 0,
             heroName: 'Anti Mage',
             confidence: 0.96,
           },
           {
+            sourceRegion: 'team_pick_slot',
             side: 'unknown',
             slot: 1,
             heroName: 'Axe',
             confidence: 0.7,
           },
         ],
-      }));
+    }));
     const adapter = new GeminiPhotoAdapter(config, { generateContent });
-    const image = Buffer.from([0xff, 0xd8, 0xff, 0xdb]);
+    const image = testImage;
 
     const result = await adapter.recognize(image, 'image/jpeg', heroes);
 
     expect(result).toEqual({
-      quality: 'clear',
+      quality: 'partial',
       recognized: [
         {
           side: 'enemy',
@@ -80,8 +102,8 @@ describe('GeminiPhotoAdapter', () => {
           heroId: 1,
           heroName: 'Anti Mage',
           localizedName: 'Anti-Mage',
-          confidence: 0.96,
-          needsReview: false,
+          confidence: 0.79,
+          needsReview: true,
         },
         {
           side: 'unknown',
@@ -104,20 +126,202 @@ describe('GeminiPhotoAdapter', () => {
       },
     });
     expect(JSON.stringify(request?.contents)).toContain('Anti-Mage, Axe');
-    expect(JSON.stringify(request?.contents)).toContain(image.toString('base64'));
+    expect(JSON.stringify(request?.contents)).not.toContain(image.toString('base64'));
+    expect(JSON.stringify(request?.contents)).toContain('Companion apps, websites, dashboards');
+    expect(JSON.stringify(request?.contents)).toContain('at least two independent draft UI signals');
+    expect(JSON.stringify(request?.contents)).toContain('Never return portraits from the central hero-selection grid');
+    expect(JSON.stringify(request?.contents)).toContain('Rank medals, rank numbers');
+    const requestPayload = JSON.parse(JSON.stringify(request)) as {
+      contents: { parts: { inlineData?: { data: string; mimeType: string } }[] }[];
+    };
+    const inlineData = requestPayload.contents[0]?.parts.find((part) => part.inlineData)?.inlineData;
+    expect(inlineData?.mimeType).toBe('image/jpeg');
+    const pickBar = Buffer.from(inlineData?.data ?? '', 'base64');
+    expect(pickBar.equals(image)).toBe(false);
+    await expect(sharp(pickBar).metadata()).resolves.toMatchObject({
+      format: 'jpeg',
+      width: 1_200,
+      height: 108,
+    });
     expect(request?.config?.responseJsonSchema).toMatchObject({
       type: 'object',
-      required: ['quality', 'recognized'],
+      required: ['selectedCandidate', 'screenContext', 'draftUiEvidence', 'quality', 'recognized'],
     });
     expect(request?.config?.responseJsonSchema).not.toHaveProperty('$schema');
+  });
+
+  it('deduplicates positions, flags hero conflicts, and returns stable partial output', async () => {
+    const generateContent = vi
+      .fn<(parameters: GenerateContentParameters) => Promise<GenerateContentResponse>>()
+      .mockResolvedValue(response({
+        selectedCandidate: 'A',
+        screenContext: 'dota_draft',
+        draftUiEvidence: ['opposing_team_slots', 'draft_countdown'],
+        quality: 'clear',
+        recognized: [
+          {
+            sourceRegion: 'team_pick_slot',
+            side: 'enemy',
+            slot: 2,
+            heroName: 'Axe',
+            confidence: 0.68,
+          },
+          {
+            sourceRegion: 'team_pick_slot',
+            side: 'unknown',
+            slot: 0,
+            heroName: 'Bane',
+            confidence: 0.99,
+          },
+          {
+            sourceRegion: 'team_pick_slot',
+            side: 'enemy',
+            slot: 3,
+            heroName: 'Unknown Hero',
+            confidence: 0.97,
+          },
+          {
+            sourceRegion: 'team_pick_slot',
+            side: 'ally',
+            slot: 4,
+            heroName: 'Anti-Mage',
+            confidence: 0.91,
+          },
+          {
+            sourceRegion: 'team_pick_slot',
+            side: 'enemy',
+            slot: 2,
+            heroName: 'Anti Mage',
+            confidence: 0.96,
+          },
+          {
+            sourceRegion: 'team_pick_slot',
+            side: 'enemy',
+            slot: 4,
+            heroName: 'Axe',
+            confidence: 0.81,
+          },
+        ],
+      }));
+    const adapter = new GeminiPhotoAdapter(config, { generateContent });
+
+    const result = await adapter.recognize(testImage, 'image/jpeg', heroes);
+
+    expect(result).toEqual({
+      quality: 'partial',
+      recognized: [
+        {
+          side: 'ally',
+          slot: 4,
+          heroId: 1,
+          heroName: 'Anti-Mage',
+          localizedName: 'Anti-Mage',
+          confidence: 0.79,
+          needsReview: true,
+        },
+        {
+          side: 'enemy',
+          slot: 2,
+          heroId: 1,
+          heroName: 'Anti Mage',
+          localizedName: 'Anti-Mage',
+          confidence: 0.79,
+          needsReview: true,
+        },
+        {
+          side: 'enemy',
+          slot: 3,
+          heroId: null,
+          heroName: 'Unknown Hero',
+          localizedName: null,
+          confidence: 0.79,
+          needsReview: true,
+        },
+        {
+          side: 'enemy',
+          slot: 4,
+          heroId: 2,
+          heroName: 'Axe',
+          localizedName: 'Axe',
+          confidence: 0.79,
+          needsReview: true,
+        },
+        {
+          side: 'unknown',
+          slot: 0,
+          heroId: 3,
+          heroName: 'Bane',
+          localizedName: 'Bane',
+          confidence: 0.79,
+          needsReview: true,
+        },
+      ],
+      model: 'gemini-3.5-flash-lite-001',
+    });
+  });
+
+  it('preserves distinct unknown-side heroes reported in the same slot', async () => {
+    const generateContent = vi
+      .fn<(parameters: GenerateContentParameters) => Promise<GenerateContentResponse>>()
+      .mockResolvedValue(response({
+        selectedCandidate: 'A',
+        screenContext: 'dota_draft',
+        draftUiEvidence: ['opposing_team_slots', 'draft_countdown'],
+        quality: 'clear',
+        recognized: [
+          {
+            sourceRegion: 'team_pick_slot',
+            side: 'unknown',
+            slot: 0,
+            heroName: 'Axe',
+            confidence: 0.94,
+          },
+          {
+            sourceRegion: 'team_pick_slot',
+            side: 'unknown',
+            slot: 0,
+            heroName: 'Bane',
+            confidence: 0.92,
+          },
+        ],
+      }));
+    const adapter = new GeminiPhotoAdapter(config, { generateContent });
+
+    const result = await adapter.recognize(testImage, 'image/jpeg', heroes);
+
+    expect(result.quality).toBe('partial');
+    expect(result.recognized).toEqual([
+      {
+        side: 'unknown',
+        slot: 0,
+        heroId: 2,
+        heroName: 'Axe',
+        localizedName: 'Axe',
+        confidence: 0.79,
+        needsReview: true,
+      },
+      {
+        side: 'unknown',
+        slot: 0,
+        heroId: 3,
+        heroName: 'Bane',
+        localizedName: 'Bane',
+        confidence: 0.79,
+        needsReview: true,
+      },
+    ]);
   });
 
   it('returns no picks when Gemini classifies the image as unrelated', async () => {
     const generateContent = vi
       .fn<(parameters: GenerateContentParameters) => Promise<GenerateContentResponse>>()
       .mockResolvedValue(response({
+        selectedCandidate: 'A',
+        screenContext: 'not_dota_draft',
+        draftUiEvidence: [],
         quality: 'not_dota',
         recognized: [{
+          sourceRegion: 'hero_selection_grid',
           side: 'enemy',
           slot: 0,
           heroName: 'Axe',
@@ -126,10 +330,200 @@ describe('GeminiPhotoAdapter', () => {
       }));
     const adapter = new GeminiPhotoAdapter(config, { generateContent });
 
-    const result = await adapter.recognize(Buffer.from('image'), 'image/png', heroes);
+    const result = await adapter.recognize(testImage, 'image/jpeg', heroes);
 
     expect(result.quality).toBe('not_dota');
     expect(result.recognized).toEqual([]);
+  });
+
+  it('rejects hero detections from a non-draft Dota companion screen', async () => {
+    const generateContent = vi
+      .fn<(parameters: GenerateContentParameters) => Promise<GenerateContentResponse>>()
+      .mockResolvedValue(response({
+        selectedCandidate: 'A',
+        screenContext: 'not_dota_draft',
+        draftUiEvidence: [],
+        quality: 'clear',
+        recognized: [
+          {
+            sourceRegion: 'hero_selection_grid',
+            side: 'enemy',
+            slot: 0,
+            heroName: 'Axe',
+            confidence: 0.98,
+          },
+        ],
+      }));
+    const adapter = new GeminiPhotoAdapter(config, { generateContent });
+
+    const result = await adapter.recognize(testImage, 'image/jpeg', heroes);
+
+    expect(result).toMatchObject({
+      quality: 'not_dota',
+      recognized: [],
+    });
+  });
+
+  it('requires two independent draft UI signals including one strong signal', async () => {
+    const generateContent = vi
+      .fn<(parameters: GenerateContentParameters) => Promise<GenerateContentResponse>>()
+      .mockResolvedValue(response({
+        selectedCandidate: 'A',
+        screenContext: 'dota_draft',
+        draftUiEvidence: ['draft_countdown'],
+        quality: 'clear',
+        recognized: [
+          {
+            sourceRegion: 'team_pick_slot',
+            side: 'enemy',
+            slot: 0,
+            heroName: 'Axe',
+            confidence: 0.98,
+          },
+        ],
+      }));
+    const adapter = new GeminiPhotoAdapter(config, { generateContent });
+
+    const result = await adapter.recognize(testImage, 'image/jpeg', heroes);
+
+    expect(result).toMatchObject({
+      quality: 'not_dota',
+      recognized: [],
+    });
+  });
+
+  it('never promotes model confidence to a review-free identity result', async () => {
+    const generateContent = vi
+      .fn<(parameters: GenerateContentParameters) => Promise<GenerateContentResponse>>()
+      .mockResolvedValue(response({
+        selectedCandidate: 'A',
+        screenContext: 'dota_draft',
+        draftUiEvidence: ['opposing_team_slots', 'draft_countdown'],
+        quality: 'clear',
+        recognized: [{
+          sourceRegion: 'team_pick_slot',
+          side: 'enemy',
+          slot: 0,
+          heroName: 'Axe',
+          confidence: 1,
+        }],
+      }));
+    const adapter = new GeminiPhotoAdapter(config, { generateContent });
+
+    const result = await adapter.recognize(testImage, 'image/jpeg', heroes);
+
+    expect(result).toMatchObject({
+      quality: 'partial',
+      recognized: [{
+        heroId: 2,
+        confidence: 0.79,
+        needsReview: true,
+      }],
+    });
+  });
+
+  it('keeps the all-pick team bars in slot order and ignores grid portraits', async () => {
+    const generateContent = vi
+      .fn<(parameters: GenerateContentParameters) => Promise<GenerateContentResponse>>()
+      .mockResolvedValue(response({
+        selectedCandidate: 'A',
+        screenContext: 'dota_draft',
+        draftUiEvidence: ['opposing_team_slots', 'draft_countdown', 'draft_mode_label'],
+        quality: 'clear',
+        recognized: [
+          {
+            sourceRegion: 'team_pick_slot',
+            side: 'ally',
+            slot: 0,
+            heroName: 'Kunkka',
+            confidence: 0.97,
+          },
+          {
+            sourceRegion: 'team_pick_slot',
+            side: 'ally',
+            slot: 1,
+            heroName: 'Alchemist',
+            confidence: 0.95,
+          },
+          {
+            sourceRegion: 'team_pick_slot',
+            side: 'ally',
+            slot: 2,
+            heroName: 'Lina',
+            confidence: 0.96,
+          },
+          {
+            sourceRegion: 'team_pick_slot',
+            side: 'ally',
+            slot: 3,
+            heroName: 'Tinker',
+            confidence: 0.94,
+          },
+          {
+            sourceRegion: 'team_pick_slot',
+            side: 'enemy',
+            slot: 0,
+            heroName: 'Templar Assassin',
+            confidence: 0.96,
+          },
+          {
+            sourceRegion: 'team_pick_slot',
+            side: 'enemy',
+            slot: 1,
+            heroName: 'Lifestealer',
+            confidence: 0.95,
+          },
+          {
+            sourceRegion: 'team_pick_slot',
+            side: 'enemy',
+            slot: 2,
+            heroName: 'Anti-Mage',
+            confidence: 0.94,
+          },
+          {
+            sourceRegion: 'team_pick_slot',
+            side: 'enemy',
+            slot: 3,
+            heroName: 'Vengeful Spirit',
+            confidence: 0.93,
+          },
+          {
+            sourceRegion: 'team_pick_slot',
+            side: 'enemy',
+            slot: 4,
+            heroName: 'Pangolier',
+            confidence: 0.92,
+          },
+          {
+            sourceRegion: 'hero_selection_grid',
+            side: 'enemy',
+            slot: 1,
+            heroName: 'Venomancer',
+            confidence: 0.99,
+          },
+        ],
+    }));
+    const adapter = new GeminiPhotoAdapter(config, { generateContent });
+    const allPickImage = await readFile(new URL('./fixtures/dota-all-pick.jpg', import.meta.url));
+
+    const result = await adapter.recognize(allPickImage, 'image/jpeg', heroes);
+
+    expect(allPickImage).toHaveLength(388_978);
+    expect(JSON.stringify(generateContent.mock.calls[0]?.[0].contents)).not.toContain(
+      allPickImage.toString('base64'),
+    );
+    expect(result.quality).toBe('partial');
+    expect(result.recognized.map(({ side, slot, heroId }) => ({ side, slot, heroId }))).toEqual([
+      { side: 'ally', slot: 0, heroId: 23 },
+      { side: 'ally', slot: 1, heroId: 73 },
+      { side: 'ally', slot: 2, heroId: 25 },
+      { side: 'ally', slot: 3, heroId: 34 },
+      { side: 'enemy', slot: 0, heroId: 46 },
+      { side: 'enemy', slot: 1, heroId: 54 },
+      { side: 'enemy', slot: 2, heroId: 1 },
+      { side: 'enemy', slot: 3, heroId: 20 },
+      { side: 'enemy', slot: 4, heroId: 120 },
+    ]);
   });
 
   it('fails safely when no Gemini key is configured', async () => {
@@ -153,7 +547,7 @@ describe('GeminiPhotoAdapter', () => {
     const adapter = new GeminiPhotoAdapter(config, { generateContent });
 
     await expect(
-      adapter.recognize(Buffer.from('image'), 'image/jpeg', heroes),
+      adapter.recognize(testImage, 'image/jpeg', heroes),
     ).rejects.toMatchObject({
       statusCode: 422,
       code: 'IMAGE_RECOGNITION_FAILED',

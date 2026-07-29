@@ -1,43 +1,84 @@
-# Counterpick landing exploration
+# Counterpick landing
 
-Five independent static marketing directions for the upcoming Counterpick Windows desktop client. The original single-page draft is not imported by the new routes.
+This is the canonical public marketing site for the planned Counterpick Windows desktop application. It presents the live-draft problem, visualizes the future overlay workflow, explains the recommendation signal, and routes visitors to the available release or beta action.
 
-## Local development
+The current implementation is one animated page at `/`. Earlier multi-route design directions are retained only as research documents and are not live application routes.
 
-```bash
-npm install
+## Stack
+
+- Astro 7 with static output
+- TypeScript
+- GSAP and ScrollTrigger
+- Tailwind CSS 4
+- Local Satoshi web fonts
+
+Node.js `>=22.12` and npm are required. The repository-wide Node.js 24 version is supported.
+
+## Development
+
+```powershell
+npm ci
 npm run dev
 ```
 
-## Release links
+Build and preview the static site:
 
-Copy `.env.example` to `.env` and set one or both values:
+```powershell
+npm run build
+npm run preview
+```
+
+The production output is written to `dist`.
+
+## Release actions
+
+Create a local environment file when a real release or beta destination exists:
+
+```powershell
+Copy-Item .env.example .env
+```
 
 ```dotenv
 PUBLIC_DOWNLOAD_URL=https://example.com/counterpick-installer.exe
 PUBLIC_BETA_URL=https://example.com/beta
 ```
 
-`PUBLIC_DOWNLOAD_URL` has priority. When neither URL is set, conversion controls honestly display the Windows development state.
+`PUBLIC_DOWNLOAD_URL` has priority over `PUBLIC_BETA_URL`. Root-relative, HTTP, and HTTPS destinations are accepted. When neither value is configured, the interface communicates that the Windows release is still in development instead of presenting a non-functional download.
 
-## Routes
+These values are public and are compiled into the static page. Do not place secrets in variables prefixed with `PUBLIC_`.
 
-- `/` — neutral concept gallery
-- `/timer` — Redline, icon 10
-- `/collapse` — Candidate Collapse, icon 01
-- `/aperture` — Predictive Aperture, icon 03
-- `/branch` — Branching Decision, icon 06
-- `/counterforce` — Counterforce, icon 07
-- `/previous` — preserved earlier single-page draft
+## Page structure
 
-All five concept routes are `noindex` until a final production direction is selected. Product truth, visual rationale, performance choices, and the route matrix live in `FIVE_DIRECTIONS.md`.
+| Component | Responsibility |
+| --- | --- |
+| `Hero.astro` | Product promise and first conversion action |
+| `SignalSurface.astro` | Live draft signal and overlay preview |
+| `DraftStage.astro` | Recognition of the current pick state |
+| `DecisionReel.astro` | Recommendation reasoning and candidate progression |
+| `ConversionEnd.astro` | Final release or beta action |
+| `ReleaseAction.astro` | Shared release-link rendering and external-link behavior |
+| `motion.ts` | GSAP timelines, scroll behavior, and reduced-motion handling |
 
-## Verification
+`src/pages/index.astro` composes the page and selects the configured download, beta, or development state. `src/styles/global.css` owns the visual system.
 
-```bash
+## Assets and attribution
+
+Public hero and brand assets live in `public`. Their origin and usage notes are recorded in [`public/SOURCES.md`](public/SOURCES.md).
+
+The design rationale is documented in [`DESIGN_DIRECTION.md`](DESIGN_DIRECTION.md). [`FIVE_DIRECTIONS.md`](FIVE_DIRECTIONS.md) is an archive of the exploration that preceded the selected implementation.
+
+## Quality checks
+
+```powershell
 npm run check
 npm run build
-npm run preview
 ```
 
-The production output is generated in `dist`. New external asset provenance lives in `public/v2/SOURCES.md`.
+Before release, verify:
+
+- keyboard navigation and visible focus;
+- reduced-motion behavior;
+- small mobile layouts and wide desktop layouts;
+- no horizontal overflow;
+- working download or beta destinations;
+- optimized asset sizes and no accidental third-party network requests.

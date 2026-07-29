@@ -1,121 +1,132 @@
 # Counterpick mobile
 
-Expo-приложение для быстрого выбора контрпика под видимый Dota-драфт. Пользователь может сфотографировать экран или собрать союзников и противников вручную. Регистрация необязательна: при первом открытии создаётся гостевая сессия, а аккаунт нужен для синхронизации и Pro.
+The Counterpick mobile application helps a Dota 2 player choose a hero under draft-time pressure. A user can import a draft image or enter heroes manually, select the match rank and position, and receive three explainable counterpick recommendations.
 
-## Интерфейс
+Account creation is optional. The app starts in guest mode and supports OTP-gated registration, sign-in, guest upgrade, password reset, and password change. The current pre-launch backend can use a shared static code instead of real email delivery.
 
-Текущий UI — лёгкий продуктовый дизайн с Dota-акцентами через цвета команд, портреты героев и иллюстрацию поля:
+## Features
 
-- светлая тема используется по умолчанию;
-- тёмная тема переключается в профиле и сохраняется между запусками;
-- крупная карточка «Выбрать фото» — главный action первого экрана;
-- ручной драфт, позиция и ранг доступны без лишних промежуточных экранов;
-- Manrope используется как основной шрифт, JetBrains Mono — для числовых и технических данных;
-- Reanimated, Gesture Handler и platform haptics отвечают за короткие transform/opacity-анимации;
-- Reduce Motion отключает необязательное движение;
-- iOS использует плавающую навигацию с blur, Android — кастомный Dota-inspired tab bar;
-- контент учитывает safe area, крупные touch targets и ограничение ширины на web/tablet.
+- Camera and gallery draft import with server-side hero recognition.
+- Four-step manual draft flow for opponents, optional allies, rank, and position.
+- Counterpick results with strengths, risks, role context, and match-rank context.
+- Current meta catalog, filters, search, hero profiles, rank win rates, and build timings.
+- Local and synchronized analysis history.
+- Wishlist with multi-select removal.
+- Analysis feedback and a personal reviews list.
+- Free and Pro quota states through a RevenueCat adapter.
+- Russian and English localization.
+- System, light, and dark appearance modes.
+- Reduced-motion support, safe-area handling, native Stack navigation, native search, and platform sheets where appropriate.
 
-Активные бренд-ассеты:
+## Stack
 
-- `assets/brand/app-icon-modern-v4.png` — иконка приложения, adaptive icon и splash mark;
-- `assets/brand/draft-scan-hero-light.jpg` — иллюстрация главной карточки сканирования.
+- Expo 57 and Expo Router 57
+- React Native 0.86 and React 19.2
+- TypeScript 6
+- TanStack Query, Zustand, React Hook Form, and Zod
+- React Native Reanimated, Gesture Handler, FlashList, Expo Image, Expo Video, and Lottie
+- Expo Secure Store and AsyncStorage
+- RevenueCat React Native SDK
+- Oswald, IBM Plex Sans, and IBM Plex Mono
 
-## Стек
+## Requirements
 
-- Expo SDK 54, React Native 0.81, React 19, TypeScript strict
-- Expo Router 6 и React Navigation
-- NativeWind 4 / Tailwind CSS 3
-- Reanimated 4 и Gesture Handler
-- TanStack Query 5 для server state и кеширования
-- Zustand 5 + AsyncStorage для темы, драфта, квоты и локальной истории
-- React Hook Form + Zod для форм и runtime-проверки API DTO
-- Expo Image, Image Picker, Image Manipulator, Haptics, Blur и Linear Gradient
-- FlashList 2 для каталога героев и истории
-- RevenueCat через изолированный billing adapter
+- Node.js 24 and npm
+- Expo Go for JavaScript-only development flows
+- A native development build for real RevenueCat purchase testing
 
-## Переменные окружения
+The app can launch, create a local guest, and perform its basic manual offline flow without the API. A deployed or local Counterpick API is required for server-backed authentication, current meta data, photo recognition, synchronized history, authoritative quota, reviews, and billing state.
 
-Создайте `.env` на основе `.env.example`:
+## Environment
 
-```env
-EXPO_PUBLIC_API_URL=http://localhost:4000/v1
+Create the local environment file:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Available public variables:
+
+```dotenv
+EXPO_PUBLIC_API_URL=https://example.com/v1
 EXPO_PUBLIC_REVENUECAT_IOS_API_KEY=
 EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY=
 EXPO_PUBLIC_REVENUECAT_ENTITLEMENT_ID=pro
 ```
 
-Для web на том же компьютере оставьте `localhost`. На iPhone, Android-телефоне или удалённом эмуляторе укажите LAN-адрес компьютера, например `http://192.168.1.10:4000/v1`, либо публичный HTTPS URL.
+For an API running on the same computer:
 
-Production EAS build прерывается, если не заданы API URL и оба RevenueCat public SDK key. Это защищает store-сборку от случайного подключения к `localhost`.
-
-## Локальный web-запуск на Windows
-
-Нативная сборка, Xcode и Android Studio для web-просмотра не нужны. В PowerShell:
-
-```powershell
-Set-Location C:\Users\Bogdan\Desktop\Frontend\dota-picker\client
-Copy-Item .env.example .env
-npm install
-npm run web
+```dotenv
+EXPO_PUBLIC_API_URL=http://localhost:4000/v1
 ```
 
-Обычно Expo поднимает приложение на `http://localhost:8081`. Если вкладка не открылась автоматически, откройте этот адрес вручную.
+Android emulators normally reach the host through `http://10.0.2.2:4000/v1`. A physical device needs a reachable LAN or HTTPS address. Restart Expo after changing public environment variables.
 
-Альтернативный общий dev-режим:
+Production EAS profiles require an API URL and both platform RevenueCat public SDK keys. These public keys are safe for the client; database, Gemini, JWT, webhook, and admin secrets are not.
+
+## Development
+
+Install and start:
 
 ```powershell
-npm run start
+npm ci
+npm start
 ```
 
-После старта нажмите:
+Useful commands:
 
-- `w` — web;
-- `a` — Android Expo Go или эмулятор;
-- отсканируйте QR-код камерой iPhone — iOS Expo Go.
+| Command | Purpose |
+| --- | --- |
+| `npm run start:clear` | Start Expo after clearing the Metro cache |
+| `npm run android` | Start Expo and open the Android target |
+| `npm run web` | Start the React Native web target |
+| `npm run native:android` | Generate and run a native Android development build |
+| `npm run native:ios` | Generate and run a native iOS development build; requires macOS locally |
+| `npm run doctor` | Check Expo package and configuration compatibility |
+| `npm run typecheck` | Run TypeScript without emitting files |
+| `npm run lint` | Run Expo ESLint |
+| `npm run format` | Format the package with Prettier |
+| `npm run format:check` | Check Prettier formatting |
 
-`npm run android` также запускает dev-режим Expo Go и не собирает APK. `npm run native:android` и `npm run native:ios` предназначены для development build и для первого web-теста не нужны. iOS development build можно собрать через EAS с Windows, но установка на физический iPhone требует Apple Developer Program.
+## Application structure
 
-## Что работает без backend
+```text
+app/                 Expo Router routes and native navigation configuration
+languages/           Native app-name localization metadata
+src/components/      Shared product and system-aware UI
+src/data/            Static Dota and presentation data
+src/hooks/           Reusable application and domain hooks
+src/i18n/            Runtime localization provider and translations
+src/navigation/      Shared navigation primitives
+src/providers/       Root application providers
+src/services/        API, session, billing, image, network, and offline services
+src/store/           Persistent and in-memory application state
+src/theme/           Tokens, type, color, and shape definitions
+src/types/           Shared TypeScript contracts
+src/utils/           Framework-independent helpers
+assets/              Brand, role, state, and Lottie assets
+```
 
-Клиент откроется и без API: тема, навигация, ручной драфт и локальная история сохраняются на устройстве. При недоступном сервере ручной анализ может вернуть явно помеченный базовый offline-результат.
+## Runtime behavior
 
-Для следующих функций нужен запущенный `server`:
+- System language mode continues to follow the device language until the user overrides it; unsupported languages fall back to English.
+- System appearance mode continues to follow the device theme until the user explicitly chooses light or dark.
+- Native targets store access and refresh credentials through Secure Store. The web development target uses `localStorage` with an in-memory fallback and should not be treated as equivalent secure storage.
+- Guest history remains usable without registration and can be associated with an upgraded account.
+- API data is cached through TanStack Query, while durable user preferences use local storage.
+- Photo analysis requires the backend and Gemini vision. Manual recommendations retain a deterministic backend fallback when AI reranking is unavailable.
 
-- гостевая серверная сессия и email/password auth;
-- свежий каталог, патч и matchup-данные OpenDota;
-- серверные рекомендации и синхронизированная история;
-- квота Free/Pro;
-- распознавание фото через Gemini;
-- подтверждение покупок через RevenueCat.
+## Billing
 
-Полная подготовка API описана в `../server/README.md`.
+Expo Go does not include the native RevenueCat module required for real purchases. Use a development build or a store build to test products, restoration, and entitlement updates. The server remains the authority for quota state and validates RevenueCat webhook events.
 
-## Хранение и приватность
-
-Access/refresh tokens и guest credential меняются через единый auth coordinator. На iOS/Android секреты хранятся в Secure Store, в локальном web-режиме — в `localStorage`. Запоздавший запрос старой сессии не может перезаписать токены или квоту нового аккаунта.
-
-Фото уменьшается на устройстве до 1600 px по длинной стороне и JPEG quality 0.78, затем отправляется multipart без base64. URI фото не попадает в persisted store. Временный JPEG удаляется после выхода из review-экрана и не сохраняется в истории.
-
-## Проверки без запуска приложения
+## Before submitting a change
 
 ```powershell
-npm run doctor
 npm run typecheck
 npm run lint
 npm run format:check
+npm run doctor
 ```
 
-## Expo Go и покупки
-
-SDK 54 закреплён для совместимости с соответствующим runtime Expo Go. Если установленный Expo Go не принимает runtime проекта, web и Android dev-режим остаются доступными, а для iOS потребуется совместимая версия Expo Go либо development build.
-
-Реальные покупки отключены в Expo Go и web. Для них нужен development build (`eas build --profile development`), RevenueCat offering с monthly/annual packages и entitlement, совпадающий с `EXPO_PUBLIC_REVENUECAT_ENTITLEMENT_ID` и серверным `REVENUECAT_PRO_ENTITLEMENT_ID`.
-
-## Перед релизом
-
-- production API URL с HTTPS;
-- реальные RevenueCat keys, products, offering и webhook;
-- Apple/Google signing, privacy manifests и store metadata;
-- проверка прав на маркетинговое использование названия Dota и игровых изображений Valve;
-- device QA на нескольких версиях iOS, Android API и размерах экранов.
+Verify both themes, both languages, guest and authenticated states, quota exhaustion, offline/error states, keyboard avoidance, and the critical draft-to-result flow on the platforms affected by the change.

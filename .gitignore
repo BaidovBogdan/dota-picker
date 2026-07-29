@@ -8,6 +8,12 @@
 **/.playwright-cli/
 **/.codebase-memory/
 **/output/
+**/.gradle/
+**/.gradle-user-home/
+
+.g/
+client-native-build-*/
+qa-artifacts/
 
 client/.sdk-migration-backup/
 client/ios/

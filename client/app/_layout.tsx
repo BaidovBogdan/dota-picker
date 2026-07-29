@@ -19,6 +19,7 @@ import { AppProviders } from '@/providers/app-providers';
 import { AppThemeProvider, useAppTheme } from '@/theme/use-app-theme';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
+SplashScreen.setOptions({ duration: 180, fade: true });
 
 export const unstable_settings = {
   anchor: '(tabs)',

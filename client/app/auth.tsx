@@ -1,7 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation } from '@tanstack/react-query';
-import { Redirect, router, Stack } from 'expo-router';
+import { Redirect, router, Stack, useNavigation } from 'expo-router';
 import { usePreventRemove } from 'expo-router/react-navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
@@ -55,6 +55,7 @@ const closeAuth = () => {
 };
 
 export default function AuthScreen() {
+  const navigation = useNavigation();
   const currentSession = useAppStore((state) => state.session);
   const { colors } = useAppTheme();
   const { t } = useTranslation();
@@ -230,7 +231,7 @@ export default function AuthScreen() {
   const pending = networkPending || authenticationCompletion !== null;
   const navigationLocked =
     networkPending || (authenticationCompletion?.animated === true && !completionReady);
-  const interceptInternalBack = step !== 'credentials' && authenticationCompletion === null;
+  const interceptInternalBack = step !== 'credentials';
 
   useEffect(() => {
     challengeRef.current = authChallenge ?? resetChallenge;
@@ -243,7 +244,11 @@ export default function AuthScreen() {
     [],
   );
 
-  usePreventRemove(navigationLocked || interceptInternalBack, () => {
+  usePreventRemove(navigationLocked || interceptInternalBack, ({ data }) => {
+    if (navigationStartedRef.current) {
+      navigation.dispatch(data.action);
+      return;
+    }
     if (navigationLocked) return;
     goBackStep();
   });
