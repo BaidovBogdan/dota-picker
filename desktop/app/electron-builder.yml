@@ -1,0 +1,28 @@
+appId: com.counterpick.desktop
+productName: Counterpick
+directories:
+  output: release
+files:
+  - out/**
+  - package.json
+extraResources:
+  - from: ../../client/assets/brand/counterpick-icon.png
+    to: brand/counterpick-icon.png
+asar: true
+win:
+  target:
+    - nsis
+  artifactName: Counterpick-${version}-${arch}.${ext}
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+mac:
+  target:
+    - dmg
+  category: public.app-category.utilities
+linux:
+  target:
+    - AppImage
+  category: Utility

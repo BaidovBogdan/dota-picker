@@ -40,6 +40,7 @@ describe('application composition', () => {
     expect(document.paths).toHaveProperty('/v1/quota/reset');
     expect(document.paths).toHaveProperty('/v1/heroes/meta-positions');
     expect(document.paths).toHaveProperty('/v1/heroes/{heroId}/detail');
+    expect(document.paths).toHaveProperty('/v1/analyses/desktop');
     expect(document.paths).toHaveProperty('/v1/analyses/{id}/review');
     expect(document.paths).toHaveProperty('/v1/account/reviews');
     expect(document.paths).toHaveProperty('/v1/account/reviews/{id}');

@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import type { AppConfig } from '../../config/env.js';
@@ -8,10 +7,21 @@ import type { OpenDotaAdapter } from '../heroes/opendota.adapter.js';
 import type { IdempotencyService } from '../idempotency/idempotency.service.js';
 import type { PhotoRecognizer } from '../photo/photo-recognizer.js';
 import { recognitionResponseSchema } from '../photo/photo.schemas.js';
+import {
+  readDraftImageUpload,
+  recognizeDraftImage,
+} from '../photo/photo-upload.js';
 import type { QuotaService } from '../quota/quota.service.js';
 import { draftSchema } from '../recommendation/recommendation.schemas.js';
-import { analysisResponseSchema, historyDetailResponseSchema, historyResponseSchema } from './analysis.schemas.js';
+import {
+  analysisResponseSchema,
+  desktopAnalysisQuerySchema,
+  desktopAnalysisResponseSchema,
+  historyDetailResponseSchema,
+  historyResponseSchema,
+} from './analysis.schemas.js';
 import { AnalysisConsistencyError, type AnalysisService } from './analysis.service.js';
+import { createDesktopDraft } from './desktop-analysis.js';
 
 type Dependencies = {
   config: AppConfig;
@@ -22,21 +32,7 @@ type Dependencies = {
   quotaService: QuotaService;
 };
 
-const allowedImageTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
-
-function hasMatchingSignature(image: Buffer, mimeType: string) {
-  if (mimeType === 'image/jpeg') {
-    return image.length >= 3 && image[0] === 0xff && image[1] === 0xd8 && image[2] === 0xff;
-  }
-  if (mimeType === 'image/png') {
-    return image.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
-  }
-  if (mimeType === 'image/webp') {
-    return image.subarray(0, 4).toString('ascii') === 'RIFF'
-      && image.subarray(8, 12).toString('ascii') === 'WEBP';
-  }
-  return false;
-}
+const desktopRecognitionBudgetMultiplier = 4;
 
 export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZod {
   return async (app) => {
@@ -114,31 +110,17 @@ export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZo
         },
       },
     }, async (request) => {
-      const file = await request.file({
-        limits: { files: 1, fields: 0, fileSize: dependencies.config.maxImageBytes },
-      });
-      if (file?.fieldname !== 'image') {
-        throw new AppError(400, 'VALIDATION_ERROR', 'Multipart field "image" is required');
-      }
-      if (!allowedImageTypes.has(file.mimetype)) {
-        file.file.resume();
-        throw new AppError(415, 'IMAGE_RECOGNITION_FAILED', 'Only JPEG, PNG, or WEBP is supported');
-      }
-      const image = await file.toBuffer();
-      if (image.length === 0) {
-        throw new AppError(400, 'VALIDATION_ERROR', 'Image is empty');
-      }
-      if (!hasMatchingSignature(image, file.mimetype)) {
-        throw new AppError(415, 'IMAGE_RECOGNITION_FAILED', 'Image content does not match its MIME type');
-      }
+      const upload = await readDraftImageUpload(
+        request,
+        dependencies.config.maxImageBytes,
+      );
 
       const key = request.headers['idempotency-key'];
-      const imageHash = createHash('sha256').update(image).digest('hex');
       const claim = await dependencies.idempotencyService.claim(
         request.user.sub,
         'analyses.photo.recognize',
         key,
-        { imageHash, mimeType: file.mimetype },
+        { imageHash: upload.frameHash, mimeType: upload.mimeType },
       );
       if (claim.kind === 'completed') {
         return recognitionResponseSchema.parse(claim.response);
@@ -158,14 +140,200 @@ export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZo
 
       let response;
       try {
-        const heroes = await dependencies.metaAdapter.getHeroes();
-        response = await dependencies.photoAdapter.recognize(image, file.mimetype, heroes);
+        response = await recognizeDraftImage(
+          upload,
+          dependencies.photoAdapter,
+          dependencies.metaAdapter,
+        );
       } catch (error) {
         await dependencies.idempotencyService.abort(claim.id, claim.leaseToken);
         throw error;
       }
       await dependencies.idempotencyService.complete(claim.id, claim.leaseToken, response);
       return response;
+    });
+
+    app.post('/desktop', {
+      preHandler: [
+        app.authenticate,
+        app.rateLimit({
+          max: 3,
+          timeWindow: '1 minute',
+          groupId: 'desktop-analysis',
+          keyGenerator: (request) => request.user.sub,
+        }),
+      ],
+      config: {
+        rateLimit: {
+          max: 12,
+          timeWindow: '1 minute',
+          groupId: 'desktop-analysis-ip',
+        },
+      },
+      schema: {
+        tags: ['Analyses'],
+        consumes: ['multipart/form-data'],
+        security: [{ bearerAuth: [] }],
+        headers: idempotencyHeadersSchema,
+        querystring: desktopAnalysisQuerySchema,
+        response: {
+          200: desktopAnalysisResponseSchema,
+          400: errorResponseSchema,
+          402: errorResponseSchema,
+          409: errorResponseSchema,
+          413: errorResponseSchema,
+          415: errorResponseSchema,
+          422: errorResponseSchema,
+          429: errorResponseSchema,
+          503: errorResponseSchema,
+        },
+      },
+    }, async (request) => {
+      const upload = await readDraftImageUpload(
+        request,
+        dependencies.config.maxImageBytes,
+      );
+      const key = request.headers['idempotency-key'];
+      const frameClaim = await dependencies.idempotencyService.claim(
+        request.user.sub,
+        'analyses.desktop.frame',
+        key,
+        {
+          sessionId: request.query.sessionId,
+          frameHash: upload.frameHash,
+          mimeType: upload.mimeType,
+          position: request.query.position,
+          rank: request.query.rank ?? null,
+          revision: request.query.revision,
+        },
+      );
+      if (frameClaim.kind === 'completed') {
+        return desktopAnalysisResponseSchema.parse(frameClaim.response);
+      }
+
+      let sessionClaim:
+        | Awaited<ReturnType<IdempotencyService['claim']>>
+        | undefined;
+      let analysisCommitted = false;
+      let response;
+      try {
+        sessionClaim = await dependencies.idempotencyService.claim(
+          request.user.sub,
+          'analyses.desktop.session',
+          request.query.sessionId,
+          {
+            sessionId: request.query.sessionId,
+            position: request.query.position,
+            rank: request.query.rank ?? null,
+          },
+        );
+        if (sessionClaim.kind === 'completed') {
+          response = desktopAnalysisResponseSchema.parse(sessionClaim.response);
+          await dependencies.idempotencyService.complete(
+            frameClaim.id,
+            frameClaim.leaseToken,
+            response,
+          );
+          return response;
+        }
+
+        const quota = await dependencies.quotaService.get(request.user.sub);
+        if (quota.remaining <= 0) {
+          throw new AppError(
+            402,
+            'QUOTA_EXHAUSTED',
+            'No desktop analysis attempts remaining',
+            { nextRefillAt: quota.nextRefillAt },
+          );
+        }
+        const recognitionCount = await dependencies.idempotencyService.countActive(
+          request.user.sub,
+          'analyses.desktop.frame',
+        );
+        const recognitionBudget = Math.max(
+          3,
+          quota.limit * desktopRecognitionBudgetMultiplier,
+        );
+        if (recognitionCount > recognitionBudget) {
+          throw new AppError(
+            429,
+            'RATE_LIMITED',
+            'Desktop recognition budget is exhausted',
+            { limit: recognitionBudget },
+          );
+        }
+
+        const recognition = await recognizeDraftImage(
+          upload,
+          dependencies.photoAdapter,
+          dependencies.metaAdapter,
+        );
+        const decision = createDesktopDraft(
+          recognition,
+          request.query.position,
+          request.query.rank,
+        );
+
+        if (decision.status === 'waiting') {
+          await dependencies.idempotencyService.abort(
+            sessionClaim.id,
+            sessionClaim.leaseToken,
+          );
+          response = {
+            status: 'waiting' as const,
+            reason: decision.reason,
+            revision: request.query.revision,
+            frameHash: upload.frameHash,
+            recognition,
+            quota,
+          };
+        } else {
+          const analyzed = await dependencies.analysisService.analyze(
+            request.user.sub,
+            decision.draft,
+            {
+              idempotencyRecordId: sessionClaim.id,
+              leaseToken: sessionClaim.leaseToken,
+              resourceId: sessionClaim.resourceId,
+            },
+          );
+          analysisCommitted = true;
+          response = {
+            status: 'completed' as const,
+            revision: request.query.revision,
+            frameHash: upload.frameHash,
+            recognition,
+            analysis: analyzed.analysis,
+            quota: analyzed.quota,
+          };
+          await dependencies.idempotencyService.complete(
+            sessionClaim.id,
+            sessionClaim.leaseToken,
+            response,
+          );
+        }
+      } catch (error) {
+        if (!(error instanceof AnalysisConsistencyError)) {
+          if (sessionClaim?.kind === 'acquired' && !analysisCommitted) {
+            await dependencies.idempotencyService.abort(
+              sessionClaim.id,
+              sessionClaim.leaseToken,
+            );
+          }
+          await dependencies.idempotencyService.abort(
+            frameClaim.id,
+            frameClaim.leaseToken,
+          );
+        }
+        throw error;
+      }
+
+      await dependencies.idempotencyService.complete(
+        frameClaim.id,
+        frameClaim.leaseToken,
+        response,
+      );
+      return desktopAnalysisResponseSchema.parse(response);
     });
 
     app.get('/history', {

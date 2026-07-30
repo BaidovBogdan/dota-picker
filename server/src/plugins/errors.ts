@@ -53,6 +53,21 @@ export const errorPlugin = fp(async (app) => {
       });
     }
 
+    if (
+      typeof error === 'object'
+      && error !== null
+      && 'statusCode' in error
+      && (error.statusCode === 406 || error.statusCode === 415)
+    ) {
+      return reply.status(415).send({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Request content type is not supported',
+          requestId: request.id,
+        },
+      });
+    }
+
     if (typeof error === 'object' && error !== null && 'statusCode' in error && error.statusCode === 429) {
       return reply.status(429).send({
         error: {

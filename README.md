@@ -2,7 +2,7 @@
 
 Counterpick is a Dota 2 draft assistant that turns a visible or manually entered draft into role-aware hero recommendations. It combines current OpenDota statistics with a constrained Gemini reranker and a deterministic fallback, so a recommendation can still be produced when the AI provider is unavailable.
 
-The repository contains the mobile product, API, administration prototype, public landing page, desktop research probes, and archived design explorations.
+The repository contains the mobile product, API, Windows desktop companion, administration prototype, public landing page, research probes, and archived design explorations.
 
 ## Repository map
 
@@ -10,6 +10,7 @@ The repository contains the mobile product, API, administration prototype, publi
 | --- | --- | --- |
 | [`client`](client/README.md) | Expo application for iOS and Android | Main product |
 | [`server`](server/README.md) | Fastify API, PostgreSQL data layer, OpenDota and Gemini integrations | Main backend |
+| [`desktop/app`](desktop/app/README.md) | Electron companion with automatic Dota 2 draft detection | Main desktop product |
 | [`admin`](admin/README.md) | Lightweight React/Vite operations dashboard | Mock-data prototype |
 | [`landing`](landing/README.md) | Astro marketing site for the future Windows client | Canonical landing |
 | [`desktop/gsi-probe`](desktop/gsi-probe/README.md) | Local Valve Game State Integration research receiver | Research tool |
@@ -28,11 +29,13 @@ There is no root npm workspace. Install dependencies and run commands inside the
 - Free and Pro quotas, RevenueCat billing adapter, and analysis feedback.
 - Russian and English localization with system, light, and dark themes.
 - A deterministic recommendation path when Gemini reranking is disabled or unavailable.
+- An opt-in Windows assistant that watches the Dota 2 draft, skips unchanged frames, and shows one automatic result per draft session.
 
 ## Technology
 
 - Mobile: Expo 57, React Native 0.86, React 19, Expo Router, Reanimated, TanStack Query, and Zustand.
 - API: Node.js 24, Fastify 5, TypeScript, PostgreSQL, Drizzle ORM, OpenDota, and Gemini.
+- Desktop: Electron 43, React 19, TypeScript, electron-vite, TanStack Query, Zustand, GSAP, and Valve Game State Integration.
 - Admin: React 19 and Vite 6.
 - Landing: Astro 7, GSAP, and Tailwind CSS 4.
 - Desktop research: Node.js GSI tooling and a Windows C++20 capture probe.
@@ -57,6 +60,14 @@ cd client
 Copy-Item .env.example .env
 npm ci
 npm start
+```
+
+To run the Windows desktop companion against the Render API:
+
+```powershell
+cd desktop/app
+npm install
+npm run dev
 ```
 
 For a local API, set `EXPO_PUBLIC_API_URL=http://localhost:4000/v1` in `client/.env`. A physical phone must use an address it can reach over the local network or HTTPS; `localhost` on the phone refers to the phone itself.
@@ -95,4 +106,4 @@ npm run build
 
 ## Current scope
 
-The mobile client and API are the primary product. The Astro package is the canonical public landing, and the admin panel is currently a mock-data prototype. The desktop probes validate possible data-capture approaches; they are not yet a distributable overlay client.
+The mobile client, desktop companion, and API are the primary product surfaces. The desktop app automatically detects Dota 2 hero selection through GSI and analyzes changed window captures; the probes remain isolated research tools. The Astro package is the canonical public landing, and the admin panel is currently a mock-data prototype.

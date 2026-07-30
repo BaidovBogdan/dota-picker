@@ -130,12 +130,15 @@ Meta responses use a fresh cache and may use a bounded stale snapshot when OpenD
 | --- | --- | --- |
 | `POST` | `/v1/analyses/manual` | Create recommendations from a structured draft |
 | `POST` | `/v1/analyses/photo/recognize` | Recognize heroes from one image |
+| `POST` | `/v1/analyses/desktop` | Recognize a desktop draft frame and create at most one result per draft session |
 | `GET` | `/v1/analyses/history` | Read paginated account history |
 | `GET` | `/v1/analyses/history/:id` | Read one saved analysis |
 
-Both POST routes require `Authorization: Bearer <token>` and a unique `Idempotency-Key`. Reusing the same key with the same request returns the stored result; reusing it for different input is rejected.
+Analysis POST routes require `Authorization: Bearer <token>` and a unique `Idempotency-Key`. Reusing the same key with the same request returns the stored result; reusing it for different input is rejected.
 
 Photo recognition accepts one multipart field named `image`. Supported types are JPEG, PNG, and WebP. The default maximum size is 5 MiB. The image is validated, EXIF-oriented, bounded, and processed in memory rather than stored as an analysis attachment. A direct narrow pick bar stays intact; full screenshots, letterboxed captures, and portrait or landscape monitor photos use bounded horizontal candidate extraction so the central hero grid is not submitted as a pick list. Recognized identities remain review-required because provider confidence is not independent visual proof.
+
+Desktop analysis accepts the same in-memory image formats plus `sessionId`, `revision`, `position`, and optional `rank` query parameters. It returns `waiting` until at least two enemy picks are recognized confidently, then reserves one quota attempt and returns `completed`. Frame and session idempotency prevent duplicate recognition and duplicate quota charges.
 
 ### Reviews
 
