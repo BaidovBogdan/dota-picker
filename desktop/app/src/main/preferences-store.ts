@@ -26,35 +26,53 @@ const defaults: Preferences = {
 export class PreferencesStore {
   private value: Preferences = defaults;
   private loaded = false;
+  private loadPromise: Promise<void> | null = null;
+  private mutationQueue: Promise<void> = Promise.resolve();
 
   constructor(private readonly filePath: string) {}
 
   async get(): Promise<Preferences> {
-    if (!this.loaded) await this.load();
+    await this.mutationQueue;
+    await this.ensureLoaded();
     return structuredClone(this.value);
   }
 
   async update(patch: PreferencesPatch): Promise<Preferences> {
-    if (!this.loaded) await this.load();
     const parsedPatch = preferencesPatchSchema.parse(patch);
-    const next = preferencesSchema.parse({
-      ...this.value,
-      ...parsedPatch,
-      captureConsent: parsedPatch.captureConsent
-        ? { ...this.value.captureConsent, ...parsedPatch.captureConsent }
-        : this.value.captureConsent,
-      wishlist: parsedPatch.wishlist
-        ? [...new Set(parsedPatch.wishlist)]
-        : this.value.wishlist,
+    const operation = this.mutationQueue.then(async () => {
+      await this.ensureLoaded();
+      const next = preferencesSchema.parse({
+        ...this.value,
+        ...parsedPatch,
+        captureConsent: parsedPatch.captureConsent
+          ? { ...this.value.captureConsent, ...parsedPatch.captureConsent }
+          : this.value.captureConsent,
+        wishlist: parsedPatch.wishlist
+          ? [...new Set(parsedPatch.wishlist)]
+          : this.value.wishlist,
+      });
+      await this.persist(next);
+      this.value = next;
+      this.applyLoginPreference(next.startWithWindows);
+      return structuredClone(next);
     });
-    this.value = next;
-    await this.persist();
-    this.applyLoginPreference(next.startWithWindows);
-    return structuredClone(next);
+    this.mutationQueue = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    return operation;
   }
 
   async setAssistantEnabled(enabled: boolean): Promise<Preferences> {
     return this.update({ assistantEnabled: enabled });
+  }
+
+  private async ensureLoaded(): Promise<void> {
+    if (this.loaded) return;
+    this.loadPromise ??= this.load().finally(() => {
+      this.loadPromise = null;
+    });
+    await this.loadPromise;
   }
 
   private async load(): Promise<void> {
@@ -70,10 +88,10 @@ export class PreferencesStore {
     this.applyLoginPreference(this.value.startWithWindows);
   }
 
-  private async persist(): Promise<void> {
+  private async persist(value: Preferences): Promise<void> {
     const temporaryPath = `${this.filePath}.${process.pid}.tmp`;
     await fs.mkdir(dirname(this.filePath), { recursive: true });
-    await fs.writeFile(temporaryPath, JSON.stringify(this.value), {
+    await fs.writeFile(temporaryPath, JSON.stringify(value), {
       encoding: 'utf8',
       mode: 0o600,
     });

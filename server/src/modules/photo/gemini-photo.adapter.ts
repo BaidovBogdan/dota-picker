@@ -197,6 +197,12 @@ export class GeminiPhotoAdapter implements PhotoRecognizer {
         { key: normalizeName(hero.localizedName), hero },
         { key: normalizeName(hero.name), hero },
       ]);
+      const exactHeroByName = new Map<string, HeroMeta>();
+      for (const item of indexed) {
+        if (!exactHeroByName.has(item.key)) {
+          exactHeroByName.set(item.key, item.hero);
+        }
+      }
       const bestByPosition = new Map<string, {
         entry: z.infer<typeof recognitionOutputSchema>['recognized'][number];
         hero: HeroMeta | undefined;
@@ -215,14 +221,18 @@ export class GeminiPhotoAdapter implements PhotoRecognizer {
           if (entry.sourceRegion !== 'team_pick_slot') continue;
 
           const key = normalizeName(entry.heroName);
-          const exact = indexed.find((item) => item.key === key)?.hero;
-          const fuzzy = indexed.reduce<{ hero: HeroMeta; distance: number } | undefined>(
-            (closest, item) => {
-              const distance = editDistance(key, item.key);
-              return !closest || distance < closest.distance ? { hero: item.hero, distance } : closest;
-            },
-            undefined,
-          );
+          const exact = exactHeroByName.get(key);
+          const fuzzy = exact
+            ? undefined
+            : indexed.reduce<{ hero: HeroMeta; distance: number } | undefined>(
+                (closest, item) => {
+                  const distance = editDistance(key, item.key);
+                  return !closest || distance < closest.distance
+                    ? { hero: item.hero, distance }
+                    : closest;
+                },
+                undefined,
+              );
           const hero = exact ?? (fuzzy && fuzzy.distance <= 2 ? fuzzy.hero : undefined);
           const heroKey = hero ? `id:${hero.id}` : key ? `name:${key}` : undefined;
           const positionKey = entry.side === 'unknown'

@@ -14,11 +14,31 @@ import { FavoriteButton } from '../components/favorite-button';
 import { RankLabel } from '../components/dota-taxonomy';
 import { formatDateTime, formatPercent, heroName } from '../format';
 import { AsyncState, Badge, HeroArtwork, Page, Panel, Stat } from '../components/ui';
+import type { HeroDetail } from '../types';
 
 const formatDuration = (seconds: number) => {
   const minutes = Math.floor(seconds / 60);
   const rest = seconds % 60;
   return `${minutes}:${String(rest).padStart(2, '0')}`;
+};
+
+const summarizeRanks = (items: HeroDetail['rankWinRates']) => {
+  let bestRank: number | null = null;
+  let bestWinRate: number | null = null;
+  let sampleGames = 0;
+
+  for (const item of items) {
+    sampleGames += item.games;
+    if (
+      item.winRate !== null
+      && (bestWinRate === null || item.winRate > bestWinRate)
+    ) {
+      bestRank = item.rank;
+      bestWinRate = item.winRate;
+    }
+  }
+
+  return { bestRank, sampleGames };
 };
 
 export function HeroPage() {
@@ -51,12 +71,7 @@ export function HeroPage() {
   }
 
   const detail = query.data;
-  const bestRank =
-    detail.rankWinRates
-      .filter((item) => item.winRate !== null)
-      .sort((a, b) => (b.winRate ?? 0) - (a.winRate ?? 0))
-      .map((item) => item.rank)[0] ?? null;
-  const sampleGames = detail.rankWinRates.reduce((total, item) => total + item.games, 0);
+  const { bestRank, sampleGames } = summarizeRanks(detail.rankWinRates);
 
   return (
     <Page

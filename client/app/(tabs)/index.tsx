@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import * as ImagePicker from 'expo-image-picker';
 import { router, useIsFocused } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Platform, ToastAndroid, View } from 'react-native';
 
 import { DraftBoard } from '@/components/draft/draft-board';
@@ -22,7 +22,7 @@ import {
   META_SNAPSHOT_STALE_RETRY_MS,
   syncQuota,
 } from '@/services/api/dota';
-import { prepareDraftPhoto } from '@/services/image';
+import { deleteDraftPhoto, prepareDraftPhoto } from '@/services/image';
 import { useAppStore } from '@/store/app-store';
 import { layout } from '@/theme/tokens';
 import { useAppTheme } from '@/theme/use-app-theme';
@@ -57,10 +57,8 @@ export default function PickerScreen() {
   });
   const [photoBusy, setPhotoBusy] = useState(false);
   const [photoError, setPhotoError] = useState<string | null>(null);
-  const [photoErrorAlert, setPhotoErrorAlert] = useState<{
-    title: string;
-    message: string;
-  } | null>(null);
+  const photoRequestId = useRef(0);
+  const photoErrorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const draftAccess = useDraftAccessGuard();
   const [scrollY] = useState(() => new Animated.Value(0));
   const onScroll = useMemo(
@@ -88,15 +86,25 @@ export default function PickerScreen() {
   const roleValue = role ? `${t(`position.${role}`)} / P${role}` : t('home.noRole');
   const currentRank = latest?.draft.rank ?? draftRank;
   const patch = metaQuery.data?.patch ?? latest?.patch ?? '—';
-  useEffect(() => {
-    if (!photoErrorAlert) return;
-    showNativeAlert(photoErrorAlert.title, photoErrorAlert.message, [
-      { text: t('common.confirm') },
-    ]);
-  }, [photoErrorAlert, t]);
+  const cancelPendingPhotoRequest = useCallback(() => {
+    photoRequestId.current += 1;
+    if (photoErrorTimer.current) clearTimeout(photoErrorTimer.current);
+    photoErrorTimer.current = null;
+    setPhotoBusy(false);
+  }, []);
+
+  useEffect(
+    () => (isFocused ? cancelPendingPhotoRequest : undefined),
+    [cancelPendingPhotoRequest, isFocused],
+  );
 
   const pickPhoto = async (source: 'camera' | 'library') => {
     if (!draftAccess.requestAccess()) return;
+    const requestId = ++photoRequestId.current;
+    if (photoErrorTimer.current) {
+      clearTimeout(photoErrorTimer.current);
+      photoErrorTimer.current = null;
+    }
     setPhotoError(null);
     setPhotoBusy(true);
     try {
@@ -112,23 +120,31 @@ export default function PickerScreen() {
       const uri = result.assets?.[0]?.uri;
       if (!uri) return;
       const prepared = await prepareDraftPhoto(uri);
+      if (photoRequestId.current !== requestId) {
+        deleteDraftPhoto(prepared);
+        return;
+      }
       setPhoto(prepared);
       router.push('/photo-review');
     } catch (error) {
+      if (photoRequestId.current !== requestId) return;
       const message = error instanceof Error ? error.message : t('errors.photoPrepare');
       setPhotoError(message);
-      setTimeout(() => {
+      photoErrorTimer.current = setTimeout(() => {
+        if (photoRequestId.current !== requestId) return;
+        photoErrorTimer.current = null;
         if (Platform.OS === 'android') {
           ToastAndroid.show(message, ToastAndroid.LONG);
           return;
         }
-        setPhotoErrorAlert({
-          title: source === 'camera' ? t('draft.camera') : t('draft.gallery'),
+        showNativeAlert(
+          source === 'camera' ? t('draft.camera') : t('draft.gallery'),
           message,
-        });
+          [{ text: t('common.confirm') }],
+        );
       }, 800);
     } finally {
-      setPhotoBusy(false);
+      if (photoRequestId.current === requestId) setPhotoBusy(false);
     }
   };
 

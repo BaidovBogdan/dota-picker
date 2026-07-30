@@ -87,6 +87,8 @@ export function beginAuthTransition() {
   return authGeneration;
 }
 
+export const getAuthGeneration = () => authGeneration;
+
 export const isAuthGenerationCurrent = (generation: number) => generation === authGeneration;
 
 async function readToken(key: string, generation?: number) {

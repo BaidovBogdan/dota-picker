@@ -80,6 +80,31 @@ type TeamEvaluation = {
   byAlly: RecommendationPairEvidence[];
 };
 
+type PairObservation = {
+  heroId: number;
+  advantage: number;
+  expected: number;
+  games: number;
+  reliability: number;
+  winRate: number;
+  stat: DraftPairStat;
+};
+
+type PairEvidenceAggregate = {
+  games: number;
+  rankGames: number;
+  patchGames: number;
+  minimumGames: number;
+  minimumPatchGames: number;
+  rankCoverageCount: number;
+  reliabilityTotal: number;
+  weightedAdvantage: number;
+  weightedWinRate: number;
+  expectedWinRate: number;
+  worstAdvantage: number;
+  evidence: RecommendationPairEvidence[];
+};
+
 function clamp(value: number, min = 0, max = 1) {
   return Math.min(max, Math.max(min, value));
 }
@@ -213,6 +238,71 @@ function scopedPairRate(
   };
 }
 
+function aggregatePairEvidence(
+  observed: PairObservation[]
+): PairEvidenceAggregate {
+  let games = 0;
+  let rankGames = 0;
+  let patchGames = 0;
+  let minimumGames = Number.POSITIVE_INFINITY;
+  let minimumPatchGames = Number.POSITIVE_INFINITY;
+  let rankCoverageCount = 0;
+  let reliabilityTotal = 0;
+  let totalWeight = 0;
+  let weightedAdvantageTotal = 0;
+  let weightedWinRateTotal = 0;
+  let expectedWinRateTotal = 0;
+  let worstAdvantage = Number.POSITIVE_INFINITY;
+  const evidence: RecommendationPairEvidence[] = [];
+
+  for (const value of observed) {
+    const weight = Math.min(50, Math.sqrt(value.games));
+    games += value.games;
+    rankGames += value.stat.rankGames;
+    patchGames += value.stat.patchGames;
+    minimumGames = Math.min(minimumGames, value.games);
+    minimumPatchGames = Math.min(
+      minimumPatchGames,
+      value.stat.patchGames
+    );
+    if (value.stat.rankGames > 0) {
+      rankCoverageCount += 1;
+    }
+    reliabilityTotal += value.reliability;
+    totalWeight += weight;
+    weightedAdvantageTotal += value.advantage * weight;
+    weightedWinRateTotal += value.winRate * weight;
+    expectedWinRateTotal += value.expected * weight;
+    worstAdvantage = Math.min(worstAdvantage, value.advantage);
+    evidence.push({
+      heroId: value.heroId,
+      rankGames: value.stat.rankGames,
+      rankWins: value.stat.rankWins,
+      patchGames: value.stat.patchGames,
+      patchWins: value.stat.patchWins,
+      winRate: round(value.winRate),
+      expectedWinRate: round(value.expected),
+      advantage: round(value.advantage),
+      reliability: round(value.reliability),
+    });
+  }
+
+  return {
+    games,
+    rankGames,
+    patchGames,
+    minimumGames,
+    minimumPatchGames,
+    rankCoverageCount,
+    reliabilityTotal,
+    weightedAdvantage: weightedAdvantageTotal / totalWeight,
+    weightedWinRate: weightedWinRateTotal / totalWeight,
+    expectedWinRate: expectedWinRateTotal / totalWeight,
+    worstAdvantage,
+    evidence,
+  };
+}
+
 function candidateWinRateAgainstEnemy(
   candidate: HeroMeta,
   enemy: HeroMeta | undefined,
@@ -275,74 +365,30 @@ function matchupEvaluation(
     };
   }
 
-  const totalGames = observed.reduce((total, value) => total + value.games, 0);
-  const rankGames = observed.reduce(
-    (total, value) => total + value.stat.rankGames,
-    0
-  );
-  const patchGames = observed.reduce(
-    (total, value) => total + value.stat.patchGames,
-    0
-  );
-  const totalWeight = observed.reduce(
-    (total, value) => total + Math.min(50, Math.sqrt(value.games)),
-    0
-  );
-  const weightedAdvantage =
-    observed.reduce(
-      (total, value) =>
-        total + value.advantage * Math.min(50, Math.sqrt(value.games)),
-      0
-    ) / totalWeight;
-  const weightedWinRate =
-    observed.reduce(
-      (total, value) =>
-        total + value.winRate * Math.min(50, Math.sqrt(value.games)),
-      0
-    ) / totalWeight;
-  const expectedWinRate =
-    observed.reduce(
-      (total, value) =>
-        total + value.expected * Math.min(50, Math.sqrt(value.games)),
-      0
-    ) / totalWeight;
-  const worstAdvantage = Math.min(...observed.map(value => value.advantage));
+  const aggregate = aggregatePairEvidence(observed);
   const coverage = observed.length / enemyIds.length;
   const rankCoverage =
-    observed.filter(value => value.stat.rankGames > 0).length / enemyIds.length;
+    aggregate.rankCoverageCount / enemyIds.length;
   const coverageShrinkage = Math.sqrt(coverage);
   const robustAdvantage =
-    (weightedAdvantage * 0.75 + worstAdvantage * 0.25) * coverageShrinkage;
-  const reliability =
-    observed.reduce((total, value) => total + value.reliability, 0) /
-    enemyIds.length;
+    (aggregate.weightedAdvantage * 0.75 + aggregate.worstAdvantage * 0.25) *
+    coverageShrinkage;
+  const reliability = aggregate.reliabilityTotal / enemyIds.length;
 
   return {
     score: clamp(0.5 + robustAdvantage / 0.12),
-    worstScore: clamp(0.5 + worstAdvantage / 0.12),
-    games: totalGames,
-    minimumGames: Math.min(...observed.map(value => value.games)),
+    worstScore: clamp(0.5 + aggregate.worstAdvantage / 0.12),
+    games: aggregate.games,
+    minimumGames: aggregate.minimumGames,
     coverage,
     reliability,
-    weightedWinRate,
-    expectedWinRate,
-    rankGames,
-    patchGames,
-    minimumPatchGames: Math.min(
-      ...observed.map(value => value.stat.patchGames)
-    ),
+    weightedWinRate: aggregate.weightedWinRate,
+    expectedWinRate: aggregate.expectedWinRate,
+    rankGames: aggregate.rankGames,
+    patchGames: aggregate.patchGames,
+    minimumPatchGames: aggregate.minimumPatchGames,
     rankCoverage,
-    byOpponent: observed.map(value => ({
-      heroId: value.heroId,
-      rankGames: value.stat.rankGames,
-      rankWins: value.stat.rankWins,
-      patchGames: value.stat.patchGames,
-      patchWins: value.stat.patchWins,
-      winRate: round(value.winRate),
-      expectedWinRate: round(value.expected),
-      advantage: round(value.advantage),
-      reliability: round(value.reliability),
-    })),
+    byOpponent: aggregate.evidence,
   };
 }
 
@@ -495,37 +541,16 @@ function teamEvaluation(
     };
   }
 
-  const totalWeight = observed.reduce(
-    (total, value) => total + Math.min(50, Math.sqrt(value.games)),
-    0
-  );
-  const weightedAdvantage =
-    observed.reduce(
-      (total, value) =>
-        total + value.advantage * Math.min(50, Math.sqrt(value.games)),
-      0
-    ) / totalWeight;
-  const worstAdvantage = Math.min(...observed.map(value => value.advantage));
-  const weightedWinRate =
-    observed.reduce(
-      (total, value) =>
-        total + value.winRate * Math.min(50, Math.sqrt(value.games)),
-      0
-    ) / totalWeight;
-  const expectedWinRate =
-    observed.reduce(
-      (total, value) =>
-        total + value.expected * Math.min(50, Math.sqrt(value.games)),
-      0
-    ) / totalWeight;
+  const aggregate = aggregatePairEvidence(observed);
   const coverage = observed.length / allies.length;
   const rankCoverage =
-    observed.filter(value => value.stat.rankGames > 0).length / allies.length;
-  const reliability =
-    observed.reduce((total, value) => total + value.reliability, 0) /
-    allies.length;
+    aggregate.rankCoverageCount / allies.length;
+  const reliability = aggregate.reliabilityTotal / allies.length;
   const pairScore = clamp(
-    0.5 + (weightedAdvantage * 0.8 + worstAdvantage * 0.2) / 0.1
+    0.5 +
+      (aggregate.weightedAdvantage * 0.8 +
+        aggregate.worstAdvantage * 0.2) /
+        0.1
   );
   const pairWeight = clamp(reliability * Math.sqrt(coverage), 0, 0.8);
   return {
@@ -536,29 +561,13 @@ function teamEvaluation(
     reliability,
     coverage,
     rankCoverage,
-    games: observed.reduce((total, value) => total + value.games, 0),
-    rankGames: observed.reduce(
-      (total, value) => total + value.stat.rankGames,
-      0
-    ),
-    patchGames: observed.reduce(
-      (total, value) => total + value.stat.patchGames,
-      0
-    ),
-    minimumGames: Math.min(...observed.map(value => value.games)),
-    weightedWinRate,
-    expectedWinRate,
-    byAlly: observed.map(value => ({
-      heroId: value.heroId,
-      rankGames: value.stat.rankGames,
-      rankWins: value.stat.rankWins,
-      patchGames: value.stat.patchGames,
-      patchWins: value.stat.patchWins,
-      winRate: round(value.winRate),
-      expectedWinRate: round(value.expected),
-      advantage: round(value.advantage),
-      reliability: round(value.reliability),
-    })),
+    games: aggregate.games,
+    rankGames: aggregate.rankGames,
+    patchGames: aggregate.patchGames,
+    minimumGames: aggregate.minimumGames,
+    weightedWinRate: aggregate.weightedWinRate,
+    expectedWinRate: aggregate.expectedWinRate,
+    byAlly: aggregate.evidence,
   };
 }
 
@@ -646,14 +655,14 @@ function diversityPenalty(
 
 function advisorAdjustment(
   candidate: RecommendationCandidate,
-  advisorOrder: number[] | undefined,
+  advisorRankByHero: ReadonlyMap<number, number> | undefined,
   poolSize: number
 ) {
-  if (!advisorOrder || poolSize <= 1) {
+  if (!advisorRankByHero || poolSize <= 1) {
     return 0;
   }
-  const advisorRank = advisorOrder.indexOf(candidate.heroMeta.id);
-  if (advisorRank < 0) {
+  const advisorRank = advisorRankByHero.get(candidate.heroMeta.id);
+  if (advisorRank === undefined) {
     return 0;
   }
   const rankDelta =
@@ -691,6 +700,33 @@ function withFinalScore(
   };
 }
 
+function indexAdvisorOrder(advisorOrder: number[] | undefined) {
+  if (!advisorOrder) {
+    return undefined;
+  }
+  const result = new Map<number, number>();
+  for (let index = 0; index < advisorOrder.length; index += 1) {
+    const heroId = advisorOrder[index];
+    if (heroId !== undefined && !result.has(heroId)) {
+      result.set(heroId, index);
+    }
+  }
+  return result;
+}
+
+function compareFinalCandidates(
+  left: RecommendationCandidate,
+  right: RecommendationCandidate
+) {
+  return (
+    right.recommendation.scoreBreakdown.total -
+      left.recommendation.scoreBreakdown.total ||
+    right.baseScore - left.baseScore ||
+    left.deterministicRank - right.deterministicRank ||
+    left.heroMeta.id - right.heroMeta.id
+  );
+}
+
 function selectRecommendations(
   pool: RecommendationCandidate[],
   advisorOrder: number[] | undefined,
@@ -698,26 +734,25 @@ function selectRecommendations(
 ) {
   const remaining = [...pool];
   const selected: RecommendationCandidate[] = [];
+  const advisorRankByHero = indexAdvisorOrder(advisorOrder);
   while (remaining.length > 0 && selected.length < limit) {
-    const ranked = remaining
-      .map(candidate => {
-        const advisorPoints = advisorAdjustment(
-          candidate,
-          advisorOrder,
-          pool.length
-        );
-        const diversityPoints = diversityPenalty(candidate, selected);
-        return withFinalScore(candidate, advisorPoints, diversityPoints);
-      })
-      .sort(
-        (left, right) =>
-          right.recommendation.scoreBreakdown.total -
-            left.recommendation.scoreBreakdown.total ||
-          right.baseScore - left.baseScore ||
-          left.deterministicRank - right.deterministicRank ||
-          left.heroMeta.id - right.heroMeta.id
+    let winner: RecommendationCandidate | undefined;
+    for (const candidate of remaining) {
+      const advisorPoints = advisorAdjustment(
+        candidate,
+        advisorRankByHero,
+        pool.length
       );
-    const winner = ranked[0];
+      const diversityPoints = diversityPenalty(candidate, selected);
+      const ranked = withFinalScore(
+        candidate,
+        advisorPoints,
+        diversityPoints
+      );
+      if (!winner || compareFinalCandidates(ranked, winner) < 0) {
+        winner = ranked;
+      }
+    }
     if (!winner) {
       break;
     }

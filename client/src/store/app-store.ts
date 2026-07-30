@@ -938,13 +938,16 @@ const combineHistory = (
   deletedHistoryIds: string[],
 ) => {
   const deleted = new Set(deletedHistoryIds);
+  const seen = new Set<string>();
   const canonicalId = (item: AnalysisResult) => item.serverId ?? item.id;
-  return [...incoming, ...existing]
-    .filter((item) => !deleted.has(canonicalId(item)))
-    .filter(
-      (item, index, all) =>
-        all.findIndex((candidate) => canonicalId(candidate) === canonicalId(item)) === index,
-    )
+  const combined: AnalysisResult[] = [];
+  for (const item of [...incoming, ...existing]) {
+    const id = canonicalId(item);
+    if (deleted.has(id) || seen.has(id)) continue;
+    seen.add(id);
+    combined.push(item);
+  }
+  return combined
     .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
     .slice(0, HISTORY_LIMIT);
 };

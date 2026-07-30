@@ -79,6 +79,9 @@ export class DraftEngine {
   private captureTimer: NodeJS.Timeout | null = null;
   private processTimer: NodeJS.Timeout | null = null;
   private analyzingTimer: NodeJS.Timeout | null = null;
+  private transitionQueue: Promise<void> = Promise.resolve();
+  private captureGeneration = 0;
+  private pollingDotaWindow = false;
   private inDraft = false;
   private sessionCompleted = false;
   private busy = false;
@@ -104,26 +107,29 @@ export class DraftEngine {
   async restore(): Promise<void> {
     const preferences = await this.preferences.get();
     if (preferences.assistantEnabled && preferences.captureConsent.accepted) {
-      await this.enable();
+      await this.setEnabled(true);
     }
   }
 
   async setEnabled(enabled: boolean): Promise<EngineState> {
-    if (enabled) await this.enable();
-    else await this.disable();
-    return this.getState();
+    return this.enqueueTransition(async () => {
+      if (enabled) await this.enable();
+      else await this.disable();
+      return this.getState();
+    });
   }
 
   async retry(): Promise<EngineState> {
     if (!this.state.enabled) return this.setEnabled(true);
     if (this.sessionCompleted) return this.getState();
     if (this.inDraft) this.scheduleCapture(true);
+    else if (this.state.phase === 'error') return this.setEnabled(true);
     else await this.pollDotaWindow();
     return this.getState();
   }
 
   async dispose(): Promise<void> {
-    await this.disable(false);
+    await this.enqueueTransition(() => this.disable(false));
   }
 
   private async enable(): Promise<void> {
@@ -169,11 +175,11 @@ export class DraftEngine {
 
   private async disable(persist = true): Promise<void> {
     if (persist) await this.preferences.setAssistantEnabled(false);
+    this.invalidateCapture();
     this.clearTimers();
     await this.gsi.stop();
     this.inDraft = false;
     this.sessionCompleted = false;
-    this.busy = false;
     this.lastHash = null;
     this.requestHash = null;
     this.requestKey = null;
@@ -202,6 +208,7 @@ export class DraftEngine {
 
     const nextInDraft = isDraftState(gameState);
     if (nextInDraft && !this.inDraft) {
+      this.invalidateCapture();
       this.inDraft = true;
       this.sessionCompleted = false;
       this.lastHash = null;
@@ -212,10 +219,13 @@ export class DraftEngine {
       this.requestKey = null;
       this.requestImage = null;
     } else if (!nextInDraft && this.inDraft) {
+      this.invalidateCapture();
       this.inDraft = false;
       this.sessionCompleted = false;
       this.lastHash = null;
-      this.cancelCapture();
+      this.requestHash = null;
+      this.requestKey = null;
+      this.requestImage = null;
     }
 
     if (!nextInDraft) {
@@ -249,9 +259,11 @@ export class DraftEngine {
 
   private async capture(): Promise<void> {
     if (!this.inDraft || this.sessionCompleted || this.busy) return;
+    const generation = this.captureGeneration;
     this.busy = true;
     try {
       const image = await this.captureDotaWindow();
+      if (!this.isCurrentCapture(generation)) return;
       this.lastCaptureAt = Date.now();
       if (!image) {
         this.update({
@@ -290,7 +302,13 @@ export class DraftEngine {
         message: 'Распознаём выбранных героев',
       });
       this.analyzingTimer = setTimeout(() => {
-        if (!this.busy || this.state.phase !== 'recognizing') return;
+        if (
+          !this.isCurrentCapture(generation)
+          || !this.busy
+          || this.state.phase !== 'recognizing'
+        ) {
+          return;
+        }
         this.update({
           ...this.state,
           phase: 'analyzing',
@@ -301,6 +319,7 @@ export class DraftEngine {
         throw new DesktopError('CAPTURE_STATE_INVALID', 'Не удалось подготовить кадр для анализа');
       }
       const preferences = await this.preferences.get();
+      if (!this.isCurrentCapture(generation)) return;
       const response = await this.api.analyzeDesktop(
         this.requestImage,
         preferences.position,
@@ -309,6 +328,7 @@ export class DraftEngine {
         this.revision,
         this.requestKey,
       );
+      if (!this.isCurrentCapture(generation)) return;
       if (this.analyzingTimer) clearTimeout(this.analyzingTimer);
       this.analyzingTimer = null;
       if (response.status === 'waiting') {
@@ -333,6 +353,7 @@ export class DraftEngine {
         recognition: response.recognition,
       });
     } catch (error) {
+      if (!this.isCurrentCapture(generation)) return;
       if (this.analyzingTimer) clearTimeout(this.analyzingTimer);
       this.analyzingTimer = null;
       const isQuota = error instanceof DesktopError
@@ -347,9 +368,11 @@ export class DraftEngine {
             : 'Не удалось проанализировать драфт',
       });
     } finally {
-      this.busy = false;
-      if (this.inDraft && !this.sessionCompleted && this.state.phase !== 'quota') {
-        this.scheduleCapture();
+      if (generation === this.captureGeneration) {
+        this.busy = false;
+        if (this.inDraft && !this.sessionCompleted && this.state.phase !== 'quota') {
+          this.scheduleCapture();
+        }
       }
     }
   }
@@ -383,13 +406,16 @@ export class DraftEngine {
   }
 
   private async pollDotaWindow(): Promise<void> {
-    if (!this.state.enabled) return;
+    if (!this.state.enabled || this.pollingDotaWindow) return;
+    const generation = this.captureGeneration;
+    this.pollingDotaWindow = true;
     try {
       const sources = await desktopCapturer.getSources({
         types: ['window'],
         thumbnailSize: { width: 1, height: 1 },
         fetchWindowIcons: false,
       });
+      if (!this.state.enabled || generation !== this.captureGeneration) return;
       const dotaDetected = sources.some((candidate) => candidate.name.toLowerCase().includes('dota 2'));
       if (dotaDetected !== this.state.dotaDetected) {
         this.update({
@@ -402,6 +428,8 @@ export class DraftEngine {
       }
     } catch {
       return;
+    } finally {
+      this.pollingDotaWindow = false;
     }
   }
 
@@ -422,5 +450,31 @@ export class DraftEngine {
     if (this.analyzingTimer) clearTimeout(this.analyzingTimer);
     this.processTimer = null;
     this.analyzingTimer = null;
+  }
+
+  private invalidateCapture(): void {
+    this.captureGeneration += 1;
+    this.busy = false;
+    this.cancelCapture();
+    if (this.analyzingTimer) clearTimeout(this.analyzingTimer);
+    this.analyzingTimer = null;
+  }
+
+  private isCurrentCapture(generation: number): boolean {
+    return (
+      generation === this.captureGeneration
+      && this.state.enabled
+      && this.inDraft
+      && !this.sessionCompleted
+    );
+  }
+
+  private enqueueTransition<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.transitionQueue.then(operation, operation);
+    this.transitionQueue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   }
 }

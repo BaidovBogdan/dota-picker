@@ -6,11 +6,21 @@ import { z } from 'zod';
 import { fallbackHeroes, heroById } from '@/data/heroes';
 import { translate } from '@/i18n';
 import { bootstrapGuestSession } from '@/services/api/auth';
-import { ApiError, apiRequest } from '@/services/api/client';
+import {
+  ApiError,
+  apiRequest,
+  getAuthGeneration,
+  isAuthGenerationCurrent,
+} from '@/services/api/client';
 import { refreshNetworkState } from '@/services/network';
 import { analyzeOffline } from '@/services/offline-engine';
 import { resetToLocalGuest } from '@/services/session';
-import { flushAppPersistence, getSessionScope, useAppStore } from '@/store/app-store';
+import {
+  flushAppPersistence,
+  getSessionScope,
+  type PendingOfflineAnalysis,
+  useAppStore,
+} from '@/store/app-store';
 import type {
   AnalysisResult,
   Draft,
@@ -896,16 +906,111 @@ export async function getServerHistory() {
 let pendingSync: Promise<void> | null = null;
 let pendingSyncRequested = false;
 const IDEMPOTENCY_RETRY_WINDOW_MS = 23 * 60 * 60 * 1000;
+const NON_RETRYABLE_OFFLINE_REPLAY_CODES = new Set([
+  'HERO_NOT_FOUND',
+  'INVALID_DRAFT',
+  'VALIDATION_ERROR',
+  'IDEMPOTENCY_KEY_REUSED',
+]);
 
-const refreshAuthoritativeQuota = async (expectedUserId: string) => {
+type OfflineReplayOutcome = 'resolved' | 'discarded' | 'halt';
+
+const refreshAuthoritativeQuota = async (expectedUserId: string, authGeneration: number) => {
   const payload = await apiRequest<z.infer<typeof quotaResponseSchema>>('/quota', {
     schema: quotaResponseSchema,
   });
   const store = useAppStore.getState();
-  if (store.session?.userId !== expectedUserId) return;
+  if (
+    !isAuthGenerationCurrent(authGeneration) ||
+    store.session?.userId !== expectedUserId
+  ) {
+    return;
+  }
   applyServerQuota(payload.quota);
   if (store.session.plan !== payload.quota.plan) {
     store.setSession({ ...store.session, plan: payload.quota.plan });
+  }
+};
+
+const selectPendingOfflineAnalyses = (ownerScope: string) =>
+  useAppStore
+    .getState()
+    .pendingOfflineAnalyses.filter((item) => item.ownerScope === ownerScope);
+
+const isOfflineReplayContextCurrent = (
+  expectedUserId: string,
+  ownerScope: string,
+  authGeneration: number,
+) => {
+  const store = useAppStore.getState();
+  return (
+    isAuthGenerationCurrent(authGeneration) &&
+    store.session?.userId === expectedUserId &&
+    getSessionScope(store.session, store.guestId) === ownerScope
+  );
+};
+
+const replayPendingOfflineAnalysis = async (
+  pending: PendingOfflineAnalysis,
+  expectedUserId: string,
+  ownerScope: string,
+  authGeneration: number,
+): Promise<OfflineReplayOutcome> => {
+  const firstReplayAt = pending.firstReplayAt ? Date.parse(pending.firstReplayAt) : Number.NaN;
+  if (
+    Number.isFinite(firstReplayAt) &&
+    Date.now() - firstReplayAt >= IDEMPOTENCY_RETRY_WINDOW_MS
+  ) {
+    useAppStore.getState().rejectOfflineAnalysis(pending.localResultId);
+    return 'discarded';
+  }
+
+  if (!pending.firstReplayAt || !Number.isFinite(firstReplayAt)) {
+    const replayedAt = new Date().toISOString();
+    useAppStore.getState().setOfflineAnalysisReplay(pending.localResultId, replayedAt);
+    try {
+      await flushAppPersistence();
+    } catch {
+      if (!isOfflineReplayContextCurrent(expectedUserId, ownerScope, authGeneration)) {
+        return 'halt';
+      }
+      useAppStore.getState().setOfflineAnalysisReplay(pending.localResultId, null);
+      return 'halt';
+    }
+    if (
+      !isOfflineReplayContextCurrent(expectedUserId, ownerScope, authGeneration) ||
+      !onlineManager.isOnline()
+    ) {
+      return 'halt';
+    }
+  }
+
+  try {
+    const result = await analyzeDraft(pending.draft, pending.idempotencyKey, {
+      expectedUserId,
+      applyQuota: false,
+    });
+    if (result.source !== 'server') return 'halt';
+    if (!isOfflineReplayContextCurrent(expectedUserId, ownerScope, authGeneration)) return 'halt';
+    const latest = useAppStore.getState();
+    if (latest.serverAttempts && latest.serverAttemptsOwnerScope === ownerScope) {
+      latest.setServerAttempts(
+        {
+          ...latest.serverAttempts,
+          remaining: Math.max(0, latest.serverAttempts.remaining - 1),
+        },
+        ownerScope,
+      );
+    }
+    latest.resolveOfflineAnalysis(pending.localResultId, result);
+    return 'resolved';
+  } catch (error) {
+    if (!isOfflineReplayContextCurrent(expectedUserId, ownerScope, authGeneration)) return 'halt';
+    if (error instanceof ApiError && NON_RETRYABLE_OFFLINE_REPLAY_CODES.has(error.code)) {
+      useAppStore.getState().rejectOfflineAnalysis(pending.localResultId);
+      return 'discarded';
+    }
+    return 'halt';
   }
 };
 
@@ -915,85 +1020,51 @@ const syncPendingOfflineAnalyses = () => {
     return pendingSync;
   }
   const task = (async () => {
+    const authGeneration = getAuthGeneration();
     const initial = useAppStore.getState();
     const expectedUserId = initial.session?.userId;
     const ownerScope = getSessionScope(initial.session, initial.guestId);
     if (!expectedUserId || !ownerScope || !onlineManager.isOnline()) return;
-    const initialPending = initial.pendingOfflineAnalyses.filter(
-      (item) => item.ownerScope === ownerScope,
-    );
-    if (initialPending.length === 0) return;
+    let pendingBatch = selectPendingOfflineAnalyses(ownerScope);
+    if (pendingBatch.length === 0) return;
     let changedServerState = false;
 
-    while (onlineManager.isOnline()) {
-      const store = useAppStore.getState();
-      if (store.session?.userId !== expectedUserId) return;
-      const scopedPending = store.pendingOfflineAnalyses.filter(
-        (item) => item.ownerScope === ownerScope,
-      );
-      const pending = scopedPending[0];
-      if (!pending) {
-        if (changedServerState) {
-          await refreshAuthoritativeQuota(expectedUserId).catch(() => {});
-        }
-        return;
-      }
-      const firstReplayAt = pending.firstReplayAt ? Date.parse(pending.firstReplayAt) : Number.NaN;
-      if (
-        Number.isFinite(firstReplayAt) &&
-        Date.now() - firstReplayAt >= IDEMPOTENCY_RETRY_WINDOW_MS
-      ) {
-        store.rejectOfflineAnalysis(pending.localResultId);
-        continue;
-      }
-      if (!pending.firstReplayAt || !Number.isFinite(firstReplayAt)) {
-        const replayedAt = new Date().toISOString();
-        store.setOfflineAnalysisReplay(pending.localResultId, replayedAt);
-        try {
-          await flushAppPersistence();
-        } catch {
-          useAppStore.getState().setOfflineAnalysisReplay(pending.localResultId, null);
-          return;
-        }
-        const latest = useAppStore.getState();
-        if (latest.session?.userId !== expectedUserId || !onlineManager.isOnline()) {
-          return;
-        }
-      }
-      try {
-        const result = await analyzeDraft(pending.draft, pending.idempotencyKey, {
-          expectedUserId,
-          applyQuota: false,
-        });
-        if (result.source !== 'server') return;
-        const latest = useAppStore.getState();
-        if (latest.session?.userId !== expectedUserId) return;
-        if (latest.serverAttempts && latest.serverAttemptsOwnerScope === ownerScope) {
-          latest.setServerAttempts(
-            {
-              ...latest.serverAttempts,
-              remaining: Math.max(0, latest.serverAttempts.remaining - 1),
-            },
-            ownerScope,
-          );
-        }
-        latest.resolveOfflineAnalysis(pending.localResultId, result);
-        changedServerState = true;
-      } catch (error) {
+    while (pendingBatch.length > 0 && onlineManager.isOnline()) {
+      for (const pending of pendingBatch) {
         if (
-          error instanceof ApiError &&
-          [
-            'HERO_NOT_FOUND',
-            'INVALID_DRAFT',
-            'VALIDATION_ERROR',
-            'IDEMPOTENCY_KEY_REUSED',
-          ].includes(error.code)
+          !isOfflineReplayContextCurrent(expectedUserId, ownerScope, authGeneration) ||
+          !onlineManager.isOnline()
         ) {
-          useAppStore.getState().rejectOfflineAnalysis(pending.localResultId);
-          continue;
+          return;
         }
-        return;
+        const outcome = await replayPendingOfflineAnalysis(
+          pending,
+          expectedUserId,
+          ownerScope,
+          authGeneration,
+        );
+        if (outcome === 'halt') return;
+        if (outcome === 'resolved') changedServerState = true;
       }
+      if (!isOfflineReplayContextCurrent(expectedUserId, ownerScope, authGeneration)) return;
+      pendingBatch = selectPendingOfflineAnalyses(ownerScope);
+    }
+
+    if (
+      changedServerState &&
+      onlineManager.isOnline() &&
+      isOfflineReplayContextCurrent(expectedUserId, ownerScope, authGeneration)
+    ) {
+      await refreshAuthoritativeQuota(expectedUserId, authGeneration).catch(() => {});
+    }
+    if (
+      onlineManager.isOnline() &&
+      isOfflineReplayContextCurrent(expectedUserId, ownerScope, authGeneration) &&
+      useAppStore
+        .getState()
+        .pendingOfflineAnalyses.some((item) => item.ownerScope === ownerScope)
+    ) {
+      pendingSyncRequested = true;
     }
   })();
   pendingSync = task.finally(() => {
