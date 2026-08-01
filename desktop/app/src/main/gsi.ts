@@ -9,13 +9,8 @@ import { z } from 'zod';
 
 const payloadSchema = z.object({
   auth: z.object({ token: z.string().optional() }).optional(),
-  provider: z.object({ timestamp: z.number().optional() }).loose().optional(),
-  map: z.object({ game_state: z.string().optional() }).loose().optional(),
-  player: z.record(z.string(), z.unknown()).optional(),
-  hero: z.record(z.string(), z.unknown()).optional(),
-  minimap: z.record(z.string(), z.unknown()).optional(),
-  draft: z.record(z.string(), z.unknown()).optional(),
-}).loose();
+  map: z.object({ game_state: z.string().optional() }).optional(),
+});
 
 export type GsiPayload = z.infer<typeof payloadSchema>;
 
@@ -180,7 +175,7 @@ export class GsiReceiver {
         const dotaRoot = join(root, 'steamapps', 'common', 'dota 2 beta', 'game', 'dota');
         if (!await pathExists(dotaRoot)) continue;
         const configPath = join(dotaRoot, 'cfg', 'gamestate_integration', cfgName);
-        const config = `"Counterpick"\n{\n  "uri" "http://127.0.0.1:${this.activePort}/gsi/${this.token}"\n  "timeout" "5.0"\n  "buffer" "0.1"\n  "throttle" "0.5"\n  "heartbeat" "10.0"\n  "auth"\n  {\n    "token" "${this.token}"\n  }\n  "data"\n  {\n    "provider" "1"\n    "map" "1"\n    "player" "1"\n    "hero" "1"\n    "minimap" "1"\n    "draft" "1"\n  }\n}\n`;
+        const config = `"Counterpick"\n{\n  "uri" "http://127.0.0.1:${this.activePort}/gsi/${this.token}"\n  "timeout" "5.0"\n  "buffer" "0.1"\n  "throttle" "1.0"\n  "heartbeat" "10.0"\n  "auth"\n  {\n    "token" "${this.token}"\n  }\n  "data"\n  {\n    "map" "1"\n  }\n}\n`;
         await fs.mkdir(dirname(configPath), { recursive: true });
         await fs.writeFile(configPath, config, 'utf8');
         return { installed: true, configPath };

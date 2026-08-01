@@ -26,6 +26,7 @@ import {
   heroName,
   reasonName,
 } from '../format';
+import { useI18n } from '../i18n';
 import { PositionLabel, RankLabel } from '../components/dota-taxonomy';
 import {
   AsyncState,
@@ -35,29 +36,52 @@ import {
   Page,
   TextLink,
 } from '../components/ui';
-import type { RecommendationMetrics, ScoreBreakdown } from '../types';
+import type { Language, RecommendationMetrics, ScoreBreakdown } from '../types';
 
-const metricLabels: Record<keyof RecommendationMetrics, string> = {
-  roleFit: 'Соответствие роли',
-  counter: 'Сила контрпика',
-  meta: 'Актуальность в мете',
-  synergy: 'Синергия команды',
-  reliability: 'Надёжность данных',
-  coverage: 'Покрытие драфта',
-  worstMatchup: 'Самое сложное противостояние',
+const metricLabels: Record<Language, Record<keyof RecommendationMetrics, string>> = {
+  ru: {
+    roleFit: 'Соответствие роли',
+    counter: 'Сила контрпика',
+    meta: 'Актуальность в мете',
+    synergy: 'Синергия команды',
+    reliability: 'Надёжность данных',
+    coverage: 'Покрытие драфта',
+    worstMatchup: 'Самое сложное противостояние',
+  },
+  en: {
+    roleFit: 'Role fit',
+    counter: 'Counter strength',
+    meta: 'Meta relevance',
+    synergy: 'Team synergy',
+    reliability: 'Data reliability',
+    coverage: 'Draft coverage',
+    worstMatchup: 'Toughest matchup',
+  },
 };
 
 const primaryMetricKeys = ['counter', 'roleFit', 'synergy', 'meta'] as const;
 
-const breakdownLabels: Record<keyof ScoreBreakdown, string> = {
-  role: 'Соответствие роли',
-  matchup: 'Противостояния',
-  meta: 'Мета',
-  teamFit: 'Состав команды',
-  reliability: 'Надёжность данных',
-  advisor: 'ИИ-корректировка',
-  diversity: 'Разнообразие вариантов',
-  total: 'Итог',
+const breakdownLabels: Record<Language, Record<keyof ScoreBreakdown, string>> = {
+  ru: {
+    role: 'Соответствие роли',
+    matchup: 'Противостояния',
+    meta: 'Мета',
+    teamFit: 'Состав команды',
+    reliability: 'Надёжность данных',
+    advisor: 'ИИ-корректировка',
+    diversity: 'Разнообразие вариантов',
+    total: 'Итог',
+  },
+  en: {
+    role: 'Role fit',
+    matchup: 'Matchups',
+    meta: 'Meta',
+    teamFit: 'Team composition',
+    reliability: 'Data reliability',
+    advisor: 'AI adjustment',
+    diversity: 'Option diversity',
+    total: 'Total',
+  },
 };
 
 function Freshness({
@@ -65,19 +89,25 @@ function Freshness({
 }: {
   isStale: boolean | undefined;
 }) {
+  const { text } = useI18n();
   if (typeof isStale !== 'boolean') {
-    return <span className="evidence-freshness">Не записана</span>;
+    return (
+      <span className="evidence-freshness">
+        {text('Не записана', 'Not recorded')}
+      </span>
+    );
   }
 
   return (
     <span className={`evidence-freshness ${isStale ? 'is-stale' : 'is-current'}`}>
       <SealCheckIcon size={14} weight="fill" aria-hidden />
-      {isStale ? 'Устарела' : 'Актуальна'}
+      {isStale ? text('Устарела', 'Outdated') : text('Актуальна', 'Current')}
     </span>
   );
 }
 
 export function AnalysisPage() {
+  const { language, locale, text } = useI18n();
   const { id } = useParams();
   const query = useQuery({
     queryKey: ['analysis', id],
@@ -90,6 +120,21 @@ export function AnalysisPage() {
     staleTime: 60 * 60_000,
   });
   const [selectedHeroId, setSelectedHeroId] = useState<number | null>(null);
+  const integerFormatter = useMemo(() => new Intl.NumberFormat(locale), [locale]);
+  const percentagePointFormatter = useMemo(
+    () => new Intl.NumberFormat(locale, {
+      minimumFractionDigits: 1,
+      maximumFractionDigits: 1,
+    }),
+    [locale],
+  );
+  const scoreFormatter = useMemo(
+    () => new Intl.NumberFormat(locale, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }),
+    [locale],
+  );
 
   const selected = useMemo(() => {
     const recommendations = query.data?.result.recommendations ?? [];
@@ -108,7 +153,10 @@ export function AnalysisPage() {
   if (query.isPending) {
     return (
       <main className="page" id="main-content">
-        <AsyncState status="loading" title="Восстанавливаем расчёт" />
+        <AsyncState
+          status="loading"
+          title={text('Восстанавливаем расчёт', 'Restoring calculation')}
+        />
       </main>
     );
   }
@@ -118,8 +166,11 @@ export function AnalysisPage() {
       <main className="page" id="main-content">
         <AsyncState
           status="error"
-          title="Результат не найден"
-          description="Запись могла быть удалена или сервер временно недоступен."
+          title={text('Результат не найден', 'Result not found')}
+          description={text(
+            'Запись могла быть удалена или сервер временно недоступен.',
+            'The record may have been deleted, or the server may be temporarily unavailable.',
+          )}
           onRetry={() => void query.refetch()}
         />
       </main>
@@ -144,21 +195,21 @@ export function AnalysisPage() {
 
   return (
     <Page
-      eyebrow={`Автоматический расчёт · ${formatDateTime(analysis.createdAt)}`}
-      title="Результат драфта"
+      eyebrow={`${text('Автоматический расчёт', 'Automatic calculation')} · ${formatDateTime(analysis.createdAt, language)}`}
+      title={text('Результат драфта', 'Draft result')}
       description={
         <span className="page-description__taxonomy">
           <PositionLabel position={analysis.input.position} variant="compact" />
           <span aria-hidden>·</span>
           <RankLabel rank={analysis.input.rank} variant="compact" />
           <span aria-hidden>·</span>
-          <span>Патч {analysis.result.patch}</span>
+          <span>{text('Патч', 'Patch')} {analysis.result.patch}</span>
         </span>
       }
       actions={
         <Link className="button button--secondary" to="/history">
           <ArrowLeftIcon size={16} aria-hidden />
-          История
+          {text('История', 'History')}
         </Link>
       }
       className="analysis-page"
@@ -167,7 +218,9 @@ export function AnalysisPage() {
         <div className="result-command__art">
           <HeroArtwork hero={selected.hero} eager />
           <div className="result-command__art-shade" />
-          <span className="result-command__pick-label">Основной выбор</span>
+          <span className="result-command__pick-label">
+            {text('Основной выбор', 'Primary pick')}
+          </span>
         </div>
 
         <div className="result-command__content">
@@ -175,32 +228,42 @@ export function AnalysisPage() {
             <div>
               <Badge tone={selected.confidence === 'high' ? 'success' : 'warning'}>
                 <SealCheckIcon size={15} weight="duotone" aria-hidden />
-                Уверенность: {confidenceName(selected.confidence)}
+                {text('Уверенность', 'Confidence')}:{' '}
+                {confidenceName(selected.confidence, language)}
               </Badge>
-              <h2 id="result-command-title">{heroName(selected.hero)}</h2>
+              <h2 id="result-command-title">{heroName(selected.hero, language)}</h2>
             </div>
             <div
               className="result-command__score"
-              aria-label={`Итоговая оценка ${Math.round(selected.score)} из 100`}
+              aria-label={text(
+                `Итоговая оценка ${Math.round(selected.score)} из 100`,
+                `Final score ${Math.round(selected.score)} out of 100`,
+              )}
             >
               <strong>{Math.round(selected.score)}</strong>
-              <span>из 100</span>
+              <span>{text('из 100', 'out of 100')}</span>
             </div>
           </div>
 
           {selected.reasons.length ? (
-            <ul className="result-command__reasons" aria-label="Причины рекомендации">
+            <ul
+              className="result-command__reasons"
+              aria-label={text('Причины рекомендации', 'Recommendation reasons')}
+            >
               {selected.reasons.map((reason) => (
                 <li key={reason}>
                   <ShieldCheckIcon size={16} weight="duotone" aria-hidden />
-                  {reasonName(reason)}
+                  {reasonName(reason, language)}
                 </li>
               ))}
             </ul>
           ) : null}
 
           {selected.metrics ? (
-            <div className="result-command__metrics" aria-label="Ключевые метрики">
+            <div
+              className="result-command__metrics"
+              aria-label={text('Ключевые метрики', 'Key metrics')}
+            >
               {primaryMetricKeys.map((key) => {
                 const value = selected.metrics?.[key];
                 const normalizedValue =
@@ -217,8 +280,8 @@ export function AnalysisPage() {
                       {key === 'meta' ? <GaugeIcon size={17} weight="duotone" /> : null}
                     </span>
                     <span className="command-metric__copy">
-                      <span>{metricLabels[key]}</span>
-                      <strong>{formatPercent(value, 0)}</strong>
+                      <span>{metricLabels[language][key]}</span>
+                      <strong>{formatPercent(value, 0, language)}</strong>
                     </span>
                     <i aria-hidden>
                       <span style={{ transform: `scaleX(${normalizedValue})` }} />
@@ -230,15 +293,21 @@ export function AnalysisPage() {
           ) : (
             <AsyncState
               status="empty"
-              title="Метрики отсутствуют"
-              description="Этот старый результат был сохранён до обновления алгоритма."
+              title={text('Метрики отсутствуют', 'Metrics unavailable')}
+              description={text(
+                'Этот старый результат был сохранён до обновления алгоритма.',
+                'This older result was saved before the algorithm update.',
+              )}
             />
           )}
         </div>
 
-        <aside className="result-command__alternatives" aria-label="Варианты рекомендации">
+        <aside
+          className="result-command__alternatives"
+          aria-label={text('Варианты рекомендации', 'Recommendation options')}
+        >
           <div className="result-command__alternatives-heading">
-            <span>Варианты</span>
+            <span>{text('Варианты', 'Options')}</span>
             <small>{analysis.result.recommendations.length}</small>
           </div>
           <div className="result-command__alternative-list">
@@ -255,8 +324,10 @@ export function AnalysisPage() {
                 </span>
                 <HeroIcon hero={recommendation.hero} />
                 <span className="result-command__alternative-copy">
-                  <strong>{heroName(recommendation.hero)}</strong>
-                  <small>Оценка {Math.round(recommendation.score)}</small>
+                  <strong>{heroName(recommendation.hero, language)}</strong>
+                  <small>
+                    {text('Оценка', 'Score')} {Math.round(recommendation.score)}
+                  </small>
                 </span>
               </button>
             ))}
@@ -267,16 +338,18 @@ export function AnalysisPage() {
       <section className="evidence-section" data-reveal aria-labelledby="evidence-title">
         <div className="section-heading">
           <div>
-            <p className="eyebrow">Доказательная база</p>
-            <h2 id="evidence-title">На чём держится рекомендация</h2>
+            <p className="eyebrow">{text('Доказательная база', 'Evidence')}</p>
+            <h2 id="evidence-title">
+              {text('На чём держится рекомендация', 'What supports this recommendation')}
+            </h2>
           </div>
           {evidence ? (
             <Badge tone={hasStaleEvidence ? 'warning' : 'success'}>
               {hasStaleEvidence
-                ? 'Часть данных устарела'
+                ? text('Часть данных устарела', 'Some data is outdated')
                 : freshnessValues.length
-                  ? 'Свежесть подтверждена'
-                  : 'Свежесть не записана'}
+                  ? text('Свежесть подтверждена', 'Freshness confirmed')
+                  : text('Свежесть не записана', 'Freshness not recorded')}
             </Badge>
           ) : null}
         </div>
@@ -286,11 +359,11 @@ export function AnalysisPage() {
             <table>
               <thead>
                 <tr>
-                  <th scope="col">Фактор</th>
-                  <th scope="col">Показатель</th>
-                  <th scope="col">Выборка</th>
-                  <th scope="col">Источник</th>
-                  <th scope="col">Свежесть</th>
+                  <th scope="col">{text('Фактор', 'Factor')}</th>
+                  <th scope="col">{text('Показатель', 'Metric')}</th>
+                  <th scope="col">{text('Выборка', 'Sample')}</th>
+                  <th scope="col">{text('Источник', 'Source')}</th>
+                  <th scope="col">{text('Свежесть', 'Freshness')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -299,32 +372,45 @@ export function AnalysisPage() {
                     <span className="evidence-matrix__factor">
                       <SwordIcon size={19} weight="duotone" aria-hidden />
                       <span>
-                        <strong>Противостояния</strong>
+                        <strong>{text('Противостояния', 'Matchups')}</strong>
                         <small>
-                          Покрыто {evidence.matchups.opponentsCovered} из{' '}
-                          {evidence.matchups.opponentsTotal}
+                          {text(
+                            `Покрыто ${evidence.matchups.opponentsCovered} из ${evidence.matchups.opponentsTotal}`,
+                            `${evidence.matchups.opponentsCovered} of ${evidence.matchups.opponentsTotal} covered`,
+                          )}
                         </small>
                       </span>
                     </span>
                   </th>
                   <td>
                     <strong className="evidence-matrix__value">
-                      {formatPercent(evidence.matchups.weightedWinRate)}
+                      {formatPercent(evidence.matchups.weightedWinRate, 1, language)}
                     </strong>
                     <small>
-                      ожидаемо {formatPercent(evidence.matchups.expectedWinRate)}
+                      {text('ожидаемо', 'expected')}{' '}
+                      {formatPercent(evidence.matchups.expectedWinRate, 1, language)}
                     </small>
                   </td>
                   <td>
-                    <strong>{evidence.matchups.games.toLocaleString('ru-RU')} игр</strong>
-                    <small>минимум {evidence.matchups.minimumGames.toLocaleString('ru-RU')}</small>
+                    <strong>
+                      {integerFormatter.format(evidence.matchups.games)} {text('игр', 'games')}
+                    </strong>
+                    <small>
+                      {text('минимум', 'minimum')}{' '}
+                      {integerFormatter.format(evidence.matchups.minimumGames)}
+                    </small>
                   </td>
                   <td>
-                    <strong>{evidence.matchups.source || 'Не записан'}</strong>
+                    <strong>
+                      {evidence.matchups.source || text('Не записан', 'Not recorded')}
+                    </strong>
                     <small>
                       {evidence.matchups.rankScoped
-                        ? 'выбранный ранг'
-                        : 'скользящая статистика по всем рангам'}
+                        ? text('выбранный ранг', 'selected rank')
+                        : text(
+                            'скользящая статистика по всем рангам',
+                            'rolling statistics across all ranks',
+                          )}
                     </small>
                   </td>
                   <td>
@@ -337,42 +423,51 @@ export function AnalysisPage() {
                     <span className="evidence-matrix__factor">
                       <UsersThreeIcon size={19} weight="duotone" aria-hidden />
                       <span>
-                        <strong>Синергия состава</strong>
+                        <strong>{text('Синергия состава', 'Team synergy')}</strong>
                         <small>
-                          Союзники {evidence.synergy?.alliesCovered ?? 0} из{' '}
-                          {evidence.synergy?.alliesTotal ?? analysis.input.allyHeroIds.length}
+                          {text(
+                            `Союзники ${evidence.synergy?.alliesCovered ?? 0} из ${evidence.synergy?.alliesTotal ?? analysis.input.allyHeroIds.length}`,
+                            `Allies ${evidence.synergy?.alliesCovered ?? 0} of ${evidence.synergy?.alliesTotal ?? analysis.input.allyHeroIds.length}`,
+                          )}
                         </small>
                       </span>
                     </span>
                   </th>
                   <td>
                     <strong className="evidence-matrix__value">
-                      {formatPercent(evidence.synergy?.pairScore)}
+                      {formatPercent(evidence.synergy?.pairScore, 1, language)}
                     </strong>
                     <small>
-                      состав {formatPercent(evidence.synergy?.compositionScore)} · надёжность{' '}
-                      {formatPercent(evidence.synergy?.reliability)}
+                      {text('состав', 'composition')}{' '}
+                      {formatPercent(evidence.synergy?.compositionScore, 1, language)} ·{' '}
+                      {text('надёжность', 'reliability')}{' '}
+                      {formatPercent(evidence.synergy?.reliability, 1, language)}
                     </small>
                   </td>
                   <td>
                     <strong>
                       {evidence.synergy
-                        ? `${evidence.synergy.games.toLocaleString('ru-RU')} игр`
-                        : 'Нет данных'}
+                        ? `${integerFormatter.format(evidence.synergy.games)} ${text('игр', 'games')}`
+                        : text('Нет данных', 'No data')}
                     </strong>
                     <small>
                       {evidence.synergy
-                        ? `минимум ${evidence.synergy.minimumGames.toLocaleString('ru-RU')}`
-                        : 'синергия не записана'}
+                        ? `${text('минимум', 'minimum')} ${integerFormatter.format(evidence.synergy.minimumGames)}`
+                        : text('синергия не записана', 'synergy not recorded')}
                     </small>
                   </td>
                   <td>
-                    <strong>{evidence.synergy?.source || 'Не записан'}</strong>
+                    <strong>
+                      {evidence.synergy?.source || text('Не записан', 'Not recorded')}
+                    </strong>
                     <small>
                       {evidence.synergy
                         ? evidence.synergy.rankScoped
-                          ? 'выбранный ранг'
-                          : 'скользящая статистика по всем рангам'
+                          ? text('выбранный ранг', 'selected rank')
+                          : text(
+                              'скользящая статистика по всем рангам',
+                              'rolling statistics across all ranks',
+                            )
                         : '—'}
                     </small>
                   </td>
@@ -386,7 +481,7 @@ export function AnalysisPage() {
                     <span className="evidence-matrix__factor">
                       <GaugeIcon size={19} weight="duotone" aria-hidden />
                       <span>
-                        <strong>Мета позиции</strong>
+                        <strong>{text('Мета позиции', 'Position meta')}</strong>
                         <small>
                           <PositionLabel position={analysis.input.position} variant="compact" />
                         </small>
@@ -395,22 +490,26 @@ export function AnalysisPage() {
                   </th>
                   <td>
                     <strong className="evidence-matrix__value">
-                      {formatPercent(evidence.meta.winRate)}
+                      {formatPercent(evidence.meta.winRate, 1, language)}
                     </strong>
-                    <small>доля побед</small>
+                    <small>{text('доля побед', 'win rate')}</small>
                   </td>
                   <td>
-                    <strong>{evidence.meta.games.toLocaleString('ru-RU')} игр</strong>
-                    <small>{evidence.meta.wins.toLocaleString('ru-RU')} побед</small>
+                    <strong>
+                      {integerFormatter.format(evidence.meta.games)} {text('игр', 'games')}
+                    </strong>
+                    <small>
+                      {integerFormatter.format(evidence.meta.wins)} {text('побед', 'wins')}
+                    </small>
                   </td>
                   <td>
-                    <strong>{evidence.meta.source || 'Не записан'}</strong>
+                    <strong>{evidence.meta.source || text('Не записан', 'Not recorded')}</strong>
                     <small>
                       {evidence.meta.positionApproximate === null
-                        ? 'точность позиции не записана'
+                        ? text('точность позиции не записана', 'position accuracy not recorded')
                         : evidence.meta.positionApproximate
-                          ? 'позиция определена приближённо'
-                          : 'точная позиция'}
+                          ? text('позиция определена приближённо', 'position is approximate')
+                          : text('точная позиция', 'exact position')}
                     </small>
                   </td>
                   <td>
@@ -426,8 +525,13 @@ export function AnalysisPage() {
                   <span>
                     <SwordIcon size={18} weight="duotone" aria-hidden />
                     <span>
-                      <strong>Противостояния по героям</strong>
-                      <small>{evidence.matchups.byOpponent.length} соперников в расчёте</small>
+                      <strong>{text('Противостояния по героям', 'Matchups by hero')}</strong>
+                      <small>
+                        {text(
+                          `${evidence.matchups.byOpponent.length} соперников в расчёте`,
+                          `${evidence.matchups.byOpponent.length} opponents included`,
+                        )}
+                      </small>
                     </span>
                   </span>
                   <CaretDownIcon size={17} aria-hidden />
@@ -435,15 +539,15 @@ export function AnalysisPage() {
                 <div
                   className="evidence-opponents__table"
                   role="table"
-                  aria-label="Показатели по каждому сопернику"
+                  aria-label={text('Показатели по каждому сопернику', 'Metrics for each opponent')}
                 >
                   <div className="evidence-opponents__head" role="row">
-                    <span role="columnheader">Соперник</span>
-                    <span role="columnheader">Преимущество</span>
-                    <span role="columnheader">Доля побед</span>
-                    <span role="columnheader">Ожидаемо</span>
-                    <span role="columnheader">Надёжность</span>
-                    <span role="columnheader">Выборка</span>
+                    <span role="columnheader">{text('Соперник', 'Opponent')}</span>
+                    <span role="columnheader">{text('Преимущество', 'Advantage')}</span>
+                    <span role="columnheader">{text('Доля побед', 'Win rate')}</span>
+                    <span role="columnheader">{text('Ожидаемо', 'Expected')}</span>
+                    <span role="columnheader">{text('Надёжность', 'Reliability')}</span>
+                    <span role="columnheader">{text('Выборка', 'Sample')}</span>
                   </div>
                   {evidence.matchups.byOpponent.map((pair) => {
                     const opponent = heroesById.get(pair.heroId);
@@ -451,21 +555,24 @@ export function AnalysisPage() {
                       <div className="evidence-opponents__row" key={pair.heroId} role="row">
                         <span className="evidence-opponents__hero" role="cell">
                           <HeroIcon hero={opponent} />
-                          <strong>{heroName(opponent)}</strong>
+                          <strong>{heroName(opponent, language)}</strong>
                         </span>
                         <strong
                           className={pair.advantage >= 0 ? 'is-positive' : 'is-negative'}
                           role="cell"
                         >
                           {pair.advantage >= 0 ? '+' : ''}
-                          {(pair.advantage * 100).toFixed(1)} п.п.
+                          {percentagePointFormatter.format(pair.advantage * 100)}{' '}
+                          {text('п.п.', 'pp')}
                         </strong>
-                        <span role="cell">{formatPercent(pair.winRate)}</span>
-                        <span role="cell">{formatPercent(pair.expectedWinRate)}</span>
-                        <span role="cell">{formatPercent(pair.reliability)}</span>
+                        <span role="cell">{formatPercent(pair.winRate, 1, language)}</span>
                         <span role="cell">
-                          {pair.patchGames.toLocaleString('ru-RU')} игр ·{' '}
-                          {pair.patchWins.toLocaleString('ru-RU')} побед
+                          {formatPercent(pair.expectedWinRate, 1, language)}
+                        </span>
+                        <span role="cell">{formatPercent(pair.reliability, 1, language)}</span>
+                        <span role="cell">
+                          {integerFormatter.format(pair.patchGames)} {text('игр', 'games')} ·{' '}
+                          {integerFormatter.format(pair.patchWins)} {text('побед', 'wins')}
                         </span>
                       </div>
                     );
@@ -477,8 +584,14 @@ export function AnalysisPage() {
         ) : (
           <AsyncState
             status="empty"
-            title="Доказательная база не записывалась"
-            description="Это старый результат, созданный до сохранения численных доказательств. Итоговая оценка доступна, но подтверждать её пустыми метриками нельзя."
+            title={text(
+              'Доказательная база не записывалась',
+              'Evidence was not recorded',
+            )}
+            description={text(
+              'Это старый результат, созданный до сохранения численных доказательств. Итоговая оценка доступна, но подтверждать её пустыми метриками нельзя.',
+              'This result predates numerical evidence storage. Its final score is available, but empty metrics cannot be used to verify it.',
+            )}
           />
         )}
       </section>
@@ -490,8 +603,13 @@ export function AnalysisPage() {
               <StackIcon size={20} weight="duotone" aria-hidden />
             </span>
             <span>
-              <strong>Технический аудит расчёта</strong>
-              <small>Вклад факторов, версии алгоритма и происхождение результата</small>
+              <strong>{text('Технический аудит расчёта', 'Technical calculation audit')}</strong>
+              <small>
+                {text(
+                  'Вклад факторов, версии алгоритма и происхождение результата',
+                  'Factor contributions, algorithm versions, and result provenance',
+                )}
+              </small>
             </span>
             <CaretDownIcon className="analysis-audit__caret" size={18} aria-hidden />
           </summary>
@@ -501,8 +619,13 @@ export function AnalysisPage() {
               <div className="analysis-audit__heading">
                 <ChartBarIcon size={18} weight="duotone" aria-hidden />
                 <div>
-                  <h3 id="breakdown-title">Вклад факторов</h3>
-                  <p>Числа, использованные итоговой формулой</p>
+                  <h3 id="breakdown-title">{text('Вклад факторов', 'Factor contributions')}</h3>
+                  <p>
+                    {text(
+                      'Числа, использованные итоговой формулой',
+                      'Values used by the final formula',
+                    )}
+                  </p>
                 </div>
               </div>
 
@@ -513,22 +636,27 @@ export function AnalysisPage() {
                       className={key === 'total' ? 'breakdown-table__total' : ''}
                       key={key}
                     >
-                      <span>{breakdownLabels[key as keyof ScoreBreakdown] ?? key}</span>
-                      <strong>{Number(value).toFixed(2)}</strong>
+                      <span>
+                        {breakdownLabels[language][key as keyof ScoreBreakdown] ?? key}
+                      </span>
+                      <strong>{scoreFormatter.format(Number(value))}</strong>
                     </div>
                   ))}
                 </div>
               ) : (
-                <AsyncState status="empty" title="Разбивка оценки отсутствует" />
+                <AsyncState
+                  status="empty"
+                  title={text('Разбивка оценки отсутствует', 'Score breakdown unavailable')}
+                />
               )}
 
               {remainingMetrics.length ? (
                 <div className="analysis-audit__secondary-metrics">
-                  <h4>Дополнительные метрики</h4>
+                  <h4>{text('Дополнительные метрики', 'Additional metrics')}</h4>
                   {remainingMetrics.map(([key, value]) => (
                     <div key={key}>
-                      <span>{metricLabels[key]}</span>
-                      <strong>{formatPercent(value)}</strong>
+                      <span>{metricLabels[language][key]}</span>
+                      <strong>{formatPercent(value, 1, language)}</strong>
                     </div>
                   ))}
                 </div>
@@ -539,8 +667,10 @@ export function AnalysisPage() {
               <div className="analysis-audit__heading">
                 <DatabaseIcon size={18} weight="duotone" aria-hidden />
                 <div>
-                  <h3 id="provenance-title">Происхождение результата</h3>
-                  <p>Версии компонентов и участие ИИ</p>
+                  <h3 id="provenance-title">
+                    {text('Происхождение результата', 'Result provenance')}
+                  </h3>
+                  <p>{text('Версии компонентов и участие ИИ', 'Component versions and AI use')}</p>
                 </div>
               </div>
 
@@ -548,38 +678,45 @@ export function AnalysisPage() {
                 <div>
                   <dt>
                     <BrainIcon size={16} weight="duotone" aria-hidden />
-                    Алгоритм рекомендации
+                    {text('Алгоритм рекомендации', 'Recommendation engine')}
                   </dt>
-                  <dd>{provenance?.engineVersion ?? 'Не записана'}</dd>
+                  <dd>{provenance?.engineVersion ?? text('Не записана', 'Not recorded')}</dd>
                 </div>
                 <div>
                   <dt>
                     <TargetIcon size={16} weight="duotone" aria-hidden />
-                    Формула оценки
+                    {text('Формула оценки', 'Scoring formula')}
                   </dt>
-                  <dd>{provenance?.scoringVersion ?? 'Не записана'}</dd>
+                  <dd>{provenance?.scoringVersion ?? text('Не записана', 'Not recorded')}</dd>
                 </div>
                 <div>
                   <dt>
                     <SparkleIcon size={16} weight="duotone" aria-hidden />
-                    ИИ-корректировка
+                    {text('ИИ-корректировка', 'AI adjustment')}
                   </dt>
                   <dd>
                     {provenance?.aiAssisted
-                      ? provenance.model ?? 'Использовалась'
-                      : 'Не использовалась'}
+                      ? provenance.model ?? text('Использовалась', 'Used')
+                      : text('Не использовалась', 'Not used')}
                   </dd>
                 </div>
                 <div>
                   <dt>
                     <BookOpenTextIcon size={16} weight="duotone" aria-hidden />
-                    Версия запроса
+                    {text('Версия запроса', 'Prompt version')}
                   </dt>
-                  <dd>{provenance?.promptVersion ?? 'Не применялась'}</dd>
+                  <dd>{provenance?.promptVersion ?? text('Не применялась', 'Not applicable')}</dd>
                 </div>
               </dl>
               {provenance?.fallbackReason ? (
-                <p className="analysis-audit__fallback">{provenance.fallbackReason}</p>
+                <p className="analysis-audit__fallback">
+                  {language === 'en' && /[А-Яа-яЁё]/.test(provenance.fallbackReason)
+                    ? text(
+                        'При расчёте использован резервный сценарий.',
+                        'A fallback calculation was used.',
+                      )
+                    : provenance.fallbackReason}
+                </p>
               ) : null}
             </section>
           </div>
@@ -588,10 +725,17 @@ export function AnalysisPage() {
 
       <section className="result-footer" data-reveal>
         <div>
-          <p className="eyebrow">Насколько ответ помог?</p>
-          <h2>Оценка улучшает следующие рекомендации</h2>
+          <p className="eyebrow">{text('Насколько ответ помог?', 'How helpful was this result?')}</p>
+          <h2>
+            {text(
+              'Оценка улучшает следующие рекомендации',
+              'Your rating improves future recommendations',
+            )}
+          </h2>
         </div>
-        <TextLink to={`/reviews?analysis=${analysis.id}`}>Оставить отзыв</TextLink>
+        <TextLink to={`/reviews?analysis=${analysis.id}`}>
+          {text('Оставить отзыв', 'Leave feedback')}
+        </TextLink>
       </section>
     </Page>
   );

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { desktopCapturer, screen, type NativeImage } from 'electron';
-import type { EngineState } from '../shared/contracts.js';
+import { desktopCapturer, type NativeImage } from 'electron';
+import type { Analysis, EngineState, Preferences } from '../shared/contracts.js';
 import type { ApiClient } from './api-client.js';
 import { DesktopError } from './errors.js';
 import { GsiReceiver, type GsiPayload } from './gsi.js';
@@ -8,10 +8,16 @@ import type { PreferencesStore } from './preferences-store.js';
 
 const captureIntervalMs = 21_000;
 const captureDebounceMs = 1_500;
+const gsiFreshnessMs = 20_000;
+const lastSeenPublishIntervalMs = 10_000;
+const windowPollIntervalsMs = [10_000, 20_000, 30_000] as const;
+const hashWatchThumbnailSize = { width: 320, height: 180 };
+const uploadThumbnailSize = { width: 1600, height: 900 };
 const waitingMessages = {
   not_dota_draft: 'Не вижу экран выбора героев. Включите режим «Окно без рамки»',
   image_unclear: 'Кадр нечёткий. Откройте Dota 2 и используйте режим «Окно без рамки»',
   uncertain_picks: 'Не все герои распознаны уверенно. Ждём следующий кадр',
+  insufficient_enemy_picks: 'Ждём минимум два пика соперника',
   no_enemy_picks: 'Ждём первый пик соперника',
 } as const;
 
@@ -20,8 +26,18 @@ function isDraftState(gameState: string): boolean {
 }
 
 function imageHash(image: NativeImage): string {
-  const resized = image.resize({ width: 16, height: 9, quality: 'good' });
-  const pixels = resized.toBitmap();
+  const size = image.getSize();
+  const bandHeight = Math.max(1, Math.round(size.height * 0.22));
+  const sideWidth = Math.max(1, Math.round(size.width * 0.44));
+  const left = image.crop({ x: 0, y: 0, width: sideWidth, height: bandHeight })
+    .resize({ width: 24, height: 6, quality: 'good' });
+  const right = image.crop({
+    x: size.width - sideWidth,
+    y: 0,
+    width: sideWidth,
+    height: bandHeight,
+  }).resize({ width: 24, height: 6, quality: 'good' });
+  const pixels = Buffer.concat([left.toBitmap(), right.toBitmap()]);
   const luminance: number[] = [];
   for (let index = 0; index < pixels.length; index += 4) {
     luminance.push(
@@ -55,6 +71,25 @@ function hashDistance(left: string, right: string): number {
   return distance + Math.abs(left.length - right.length) * 4;
 }
 
+function analysisMatchesPreferences(analysis: Analysis | null, preferences: Preferences): boolean {
+  return Boolean(
+    analysis
+    && analysis.input.position === preferences.position
+    && (analysis.input.rank ?? null) === preferences.rank,
+  );
+}
+
+function isRetryableAnalysisError(error: unknown): boolean {
+  if (!(error instanceof DesktopError)) return false;
+  if (error.code === 'TIMEOUT' || error.code === 'NETWORK_ERROR') return true;
+  if (error.status === 429 && error.code === 'RATE_LIMITED') return false;
+  return error.status === 408
+    || error.status === 409
+    || error.status === 425
+    || error.status === 429
+    || (error.status !== null && error.status >= 500);
+}
+
 function fitForUpload(image: NativeImage): NativeImage {
   const size = image.getSize();
   const scale = Math.min(1, 1600 / size.width, 900 / size.height);
@@ -72,16 +107,23 @@ export class DraftEngine {
     phase: 'off',
     message: null,
     latestAnalysisId: null,
+    latestAnalysis: null,
     lastSeenAt: null,
     dotaDetected: false,
+    draftActive: false,
+    refreshPending: false,
     recognition: null,
   };
   private captureTimer: NodeJS.Timeout | null = null;
-  private processTimer: NodeJS.Timeout | null = null;
+  private windowPollTimer: NodeJS.Timeout | null = null;
   private analyzingTimer: NodeJS.Timeout | null = null;
   private transitionQueue: Promise<void> = Promise.resolve();
   private captureGeneration = 0;
-  private pollingDotaWindow = false;
+  private windowPollInFlight = false;
+  private windowPollingActive = false;
+  private windowPollIndex = 0;
+  private lastGsiAt = 0;
+  private lastSeenPublishedAt = 0;
   private inDraft = false;
   private sessionCompleted = false;
   private busy = false;
@@ -92,6 +134,10 @@ export class DraftEngine {
   private requestHash: string | null = null;
   private requestKey: string | null = null;
   private requestImage: Buffer | null = null;
+  private refreshRequested = false;
+  private retryRequested = false;
+  private forceRefresh = false;
+  private refreshFromCompleted = false;
 
   constructor(
     private readonly api: ApiClient,
@@ -105,10 +151,12 @@ export class DraftEngine {
   }
 
   async restore(): Promise<void> {
-    const preferences = await this.preferences.get();
-    if (preferences.assistantEnabled && preferences.captureConsent.accepted) {
-      await this.setEnabled(true);
-    }
+    await this.enqueueTransition(async () => {
+      const preferences = await this.preferences.get();
+      if (preferences.assistantEnabled && preferences.captureConsent.accepted) {
+        await this.enable();
+      }
+    });
   }
 
   async setEnabled(enabled: boolean): Promise<EngineState> {
@@ -119,13 +167,52 @@ export class DraftEngine {
     });
   }
 
+  async suspend(): Promise<EngineState> {
+    return this.enqueueTransition(async () => {
+      await this.disable(false);
+      return this.getState();
+    });
+  }
+
   async retry(): Promise<EngineState> {
     if (!this.state.enabled) return this.setEnabled(true);
     if (this.sessionCompleted) return this.getState();
-    if (this.inDraft) this.scheduleCapture(true);
+    if (this.state.phase === 'quota') return this.refresh(true);
+    if (this.inDraft) {
+      if (!this.requestKey || !this.requestImage) return this.refresh(true);
+      this.retryRequested = true;
+      this.update({
+        ...this.state,
+        phase: this.busy ? this.state.phase : 'watching_draft',
+        message: 'Повторяем анализ кадра',
+      });
+      if (!this.busy) {
+        this.cancelCapture();
+        this.scheduleCapture();
+      }
+    }
     else if (this.state.phase === 'error') return this.setEnabled(true);
     else await this.pollDotaWindow();
     return this.getState();
+  }
+
+  async refresh(force = false): Promise<EngineState> {
+    return this.enqueueTransition(async () => {
+      if (!this.state.enabled || !this.inDraft) return this.getState();
+      const forceNextCapture = force || this.state.phase === 'quota';
+      this.refreshFromCompleted ||= this.sessionCompleted;
+      this.sessionCompleted = false;
+      this.refreshRequested = true;
+      this.retryRequested = false;
+      this.forceRefresh ||= forceNextCapture;
+      this.update({
+        ...this.state,
+        phase: this.busy ? this.state.phase : 'watching_draft',
+        message: forceNextCapture ? 'Пересчитываем рекомендации' : 'Проверяем новые пики',
+      });
+      if (!this.busy) this.scheduleCapture();
+      return this.getState();
+    });
   }
 
   async dispose(): Promise<void> {
@@ -141,14 +228,19 @@ export class DraftEngine {
         'Сначала подтвердите локальный захват окна Dota 2 в настройках',
       );
     }
+    this.lastGsiAt = 0;
+    this.lastSeenPublishedAt = 0;
     await this.preferences.setAssistantEnabled(true);
     this.update({
       enabled: true,
       phase: 'starting',
       message: 'Подключаемся к Dota 2',
       latestAnalysisId: this.state.latestAnalysisId,
+      latestAnalysis: this.state.latestAnalysis,
       lastSeenAt: this.state.lastSeenAt,
       dotaDetected: false,
+      draftActive: false,
+      refreshPending: false,
       recognition: null,
     });
     try {
@@ -158,7 +250,7 @@ export class DraftEngine {
         ...this.state,
         phase: 'waiting_for_dota',
         message: installation.installed
-          ? 'Запустите Dota 2 — помощник включится на этапе выбора героев'
+          ? 'Запустите Dota 2 с параметром -gamestateintegration'
           : 'Dota 2 не найдена. Установите игру через Steam и перезапустите помощник',
       });
       await this.pollDotaWindow();
@@ -174,7 +266,6 @@ export class DraftEngine {
   }
 
   private async disable(persist = true): Promise<void> {
-    if (persist) await this.preferences.setAssistantEnabled(false);
     this.invalidateCapture();
     this.clearTimers();
     await this.gsi.stop();
@@ -184,73 +275,153 @@ export class DraftEngine {
     this.requestHash = null;
     this.requestKey = null;
     this.requestImage = null;
+    this.refreshRequested = false;
+    this.retryRequested = false;
+    this.forceRefresh = false;
+    this.refreshFromCompleted = false;
+    this.lastGsiAt = 0;
+    this.lastSeenPublishedAt = 0;
     this.update({
       enabled: false,
       phase: 'off',
       message: null,
-      latestAnalysisId: this.state.latestAnalysisId,
+      latestAnalysisId: null,
+      latestAnalysis: null,
       lastSeenAt: this.state.lastSeenAt,
       dotaDetected: false,
+      draftActive: false,
+      refreshPending: false,
       recognition: null,
     });
+    if (persist) await this.preferences.setAssistantEnabled(false);
   }
 
   private handleGsi(payload: GsiPayload): void {
     if (!this.state.enabled) return;
-    const now = new Date().toISOString();
+    const now = Date.now();
+    this.lastGsiAt = now;
+    const publishLastSeen = this.lastSeenPublishedAt === 0
+      || now - this.lastSeenPublishedAt >= lastSeenPublishIntervalMs;
+    if (publishLastSeen) this.lastSeenPublishedAt = now;
+    const publishLiveness = publishLastSeen || !this.state.dotaDetected;
+    const lastSeenAt = publishLastSeen ? new Date(now).toISOString() : this.state.lastSeenAt;
     const gameState = payload.map?.game_state;
-    this.update({
-      ...this.state,
-      dotaDetected: true,
-      lastSeenAt: now,
-    });
-    if (!gameState) return;
-
-    const nextInDraft = isDraftState(gameState);
-    if (nextInDraft && !this.inDraft) {
-      this.invalidateCapture();
-      this.inDraft = true;
-      this.sessionCompleted = false;
-      this.lastHash = null;
-      this.lastCaptureAt = 0;
-      this.revision = 0;
-      this.sessionId = randomUUID();
-      this.requestHash = null;
-      this.requestKey = null;
-      this.requestImage = null;
-    } else if (!nextInDraft && this.inDraft) {
-      this.invalidateCapture();
-      this.inDraft = false;
-      this.sessionCompleted = false;
-      this.lastHash = null;
-      this.requestHash = null;
-      this.requestKey = null;
-      this.requestImage = null;
-    }
-
-    if (!nextInDraft) {
-      if (this.state.phase !== 'ready') {
+    if (!gameState) {
+      if (publishLiveness) {
         this.update({
           ...this.state,
-          phase: 'waiting_for_dota',
-          message: 'Dota 2 запущена. Ждём этап выбора героев',
+          dotaDetected: true,
+          lastSeenAt,
         });
       }
       return;
     }
-    if (this.sessionCompleted) return;
-    this.update({
-      ...this.state,
-      phase: this.busy ? this.state.phase : 'watching_draft',
-      message: this.busy ? this.state.message : 'Следим за изменениями драфта',
-    });
+
+    const nextInDraft = isDraftState(gameState);
+    const startingDraft = nextInDraft && !this.inDraft;
+    const endingDraft = !nextInDraft && this.inDraft;
+    if (startingDraft) {
+      this.startDraftSession();
+    } else if (endingDraft) {
+      this.endDraftSession();
+    }
+
+    if (!nextInDraft) {
+      if (endingDraft || this.state.phase !== 'ready') {
+        const phase = endingDraft && this.state.phase === 'ready' ? 'ready' : 'waiting_for_dota';
+        const message = endingDraft && this.state.phase === 'ready'
+          ? 'Драфт завершён'
+          : 'Dota 2 запущена. Ждём этап выбора героев';
+        if (
+          publishLiveness
+          || endingDraft
+          || phase !== this.state.phase
+          || message !== this.state.message
+        ) {
+          this.update({
+            ...this.state,
+            phase,
+            message,
+            dotaDetected: true,
+            lastSeenAt,
+          });
+        }
+      } else if (publishLiveness) {
+        this.update({
+          ...this.state,
+          dotaDetected: true,
+          lastSeenAt,
+        });
+      }
+      return;
+    }
+    if (this.sessionCompleted) {
+      if (publishLiveness) {
+        this.update({
+          ...this.state,
+          dotaDetected: true,
+          lastSeenAt,
+        });
+      }
+      return;
+    }
+    const phase = this.busy ? this.state.phase : 'watching_draft';
+    const message = this.busy ? this.state.message : 'Следим за изменениями драфта';
+    if (
+      publishLiveness
+      || startingDraft
+      || phase !== this.state.phase
+      || message !== this.state.message
+    ) {
+      this.update({
+        ...this.state,
+        phase,
+        message,
+        latestAnalysisId: startingDraft ? null : this.state.latestAnalysisId,
+        latestAnalysis: startingDraft ? null : this.state.latestAnalysis,
+        recognition: startingDraft ? null : this.state.recognition,
+        dotaDetected: true,
+        lastSeenAt,
+      });
+    }
     this.scheduleCapture();
   }
 
-  private scheduleCapture(force = false): void {
-    if (!this.inDraft || this.sessionCompleted || this.busy || this.captureTimer) return;
+  private startDraftSession(): void {
+    this.invalidateCapture();
+    this.inDraft = true;
+    this.sessionCompleted = false;
+    this.lastHash = null;
+    this.lastCaptureAt = 0;
+    this.revision = 0;
+    this.sessionId = randomUUID();
+    this.requestHash = null;
+    this.requestKey = null;
+    this.requestImage = null;
+    this.refreshRequested = false;
+    this.retryRequested = false;
+    this.forceRefresh = false;
+    this.refreshFromCompleted = false;
+  }
+
+  private endDraftSession(): void {
+    this.invalidateCapture();
+    this.inDraft = false;
+    this.sessionCompleted = false;
+    this.lastHash = null;
+    this.requestHash = null;
+    this.requestKey = null;
+    this.requestImage = null;
+    this.refreshRequested = false;
+    this.retryRequested = false;
+    this.forceRefresh = false;
+    this.refreshFromCompleted = false;
+  }
+
+  private scheduleCapture(): void {
+    if (!this.inDraft || this.busy || this.captureTimer) return;
     const waitForRateLimit = Math.max(0, captureIntervalMs - (Date.now() - this.lastCaptureAt));
-    const delay = force ? 0 : Math.max(captureDebounceMs, waitForRateLimit);
+    const delay = Math.max(captureDebounceMs, waitForRateLimit);
     this.captureTimer = setTimeout(() => {
       this.captureTimer = null;
       void this.capture();
@@ -258,14 +429,14 @@ export class DraftEngine {
   }
 
   private async capture(): Promise<void> {
-    if (!this.inDraft || this.sessionCompleted || this.busy) return;
+    if (!this.inDraft || this.busy) return;
     const generation = this.captureGeneration;
     this.busy = true;
     try {
-      const image = await this.captureDotaWindow();
+      const hashImage = await this.captureDotaWindow(hashWatchThumbnailSize);
       if (!this.isCurrentCapture(generation)) return;
       this.lastCaptureAt = Date.now();
-      if (!image) {
+      if (!hashImage) {
         this.update({
           ...this.state,
           phase: 'waiting_for_dota',
@@ -274,32 +445,85 @@ export class DraftEngine {
         });
         return;
       }
-      const nextHash = imageHash(image);
-      const unchanged = Boolean(this.lastHash && hashDistance(this.lastHash, nextHash) < 7);
+      const nextHash = imageHash(hashImage);
+      const unchanged = Boolean(this.lastHash && hashDistance(this.lastHash, nextHash) < 14);
       const retryingFailedFrame = unchanged
-        && this.requestHash === nextHash
+        && this.requestHash !== null
+        && hashDistance(this.requestHash, nextHash) < 14
         && this.requestKey !== null
-        && this.state.phase === 'error';
-      if (unchanged && !retryingFailedFrame) {
-        this.update({
-          ...this.state,
-          phase: 'watching_draft',
-          message: 'Драфт не изменился',
-        });
+        && !this.refreshRequested
+        && !this.forceRefresh
+        && this.retryRequested;
+      const currentPreferences = await this.preferences.get();
+      if (!this.isCurrentCapture(generation)) return;
+      if (unchanged && !retryingFailedFrame && !this.forceRefresh) {
+        const restoreCompleted = (
+          this.sessionCompleted
+          || (this.refreshRequested && this.refreshFromCompleted)
+        ) && analysisMatchesPreferences(this.state.latestAnalysis, currentPreferences);
+        this.refreshRequested = false;
+        this.retryRequested = false;
+        this.refreshFromCompleted = false;
+        this.sessionCompleted = restoreCompleted;
+        const phase = restoreCompleted ? 'ready' : 'watching_draft';
+        const message = restoreCompleted ? 'Новых пиков пока нет' : 'Драфт не изменился';
+        if (
+          phase !== this.state.phase
+          || message !== this.state.message
+          || this.state.refreshPending
+        ) {
+          this.update({
+            ...this.state,
+            phase,
+            message,
+          });
+        }
         return;
+      }
+      let uploadImage: NativeImage | null = null;
+      if (!retryingFailedFrame) {
+        uploadImage = await this.captureDotaWindow(uploadThumbnailSize);
+        if (!this.isCurrentCapture(generation)) return;
+        if (!uploadImage) {
+          this.update({
+            ...this.state,
+            phase: 'waiting_for_dota',
+            message: 'Окно Dota 2 не найдено. Используйте оконный режим без рамки',
+            dotaDetected: false,
+          });
+          return;
+        }
+      }
+      if (this.refreshRequested || this.sessionCompleted) {
+        this.sessionId = randomUUID();
+        this.revision = 0;
+        this.requestHash = null;
+        this.requestKey = null;
+        this.requestImage = null;
+        this.refreshRequested = false;
+        this.retryRequested = false;
+        this.forceRefresh = false;
+        this.refreshFromCompleted = false;
+        this.sessionCompleted = false;
       }
       this.lastHash = nextHash;
       this.lastCaptureAt = Date.now();
       if (!retryingFailedFrame) {
+        if (!uploadImage) {
+          throw new DesktopError('CAPTURE_STATE_INVALID', 'Не удалось подготовить кадр для анализа');
+        }
         this.revision += 1;
         this.requestHash = nextHash;
         this.requestKey = randomUUID();
-        this.requestImage = image.toPNG();
+        this.requestImage = fitForUpload(uploadImage).toPNG();
+        this.retryRequested = false;
       }
       this.update({
         ...this.state,
         phase: 'recognizing',
         message: 'Распознаём выбранных героев',
+        latestAnalysisId: retryingFailedFrame ? this.state.latestAnalysisId : null,
+        latestAnalysis: retryingFailedFrame ? this.state.latestAnalysis : null,
       });
       this.analyzingTimer = setTimeout(() => {
         if (
@@ -318,12 +542,10 @@ export class DraftEngine {
       if (!this.requestKey || !this.requestImage) {
         throw new DesktopError('CAPTURE_STATE_INVALID', 'Не удалось подготовить кадр для анализа');
       }
-      const preferences = await this.preferences.get();
-      if (!this.isCurrentCapture(generation)) return;
       const response = await this.api.analyzeDesktop(
         this.requestImage,
-        preferences.position,
-        preferences.rank,
+        currentPreferences.position,
+        currentPreferences.rank,
         this.sessionId,
         this.revision,
         this.requestKey,
@@ -331,25 +553,46 @@ export class DraftEngine {
       if (!this.isCurrentCapture(generation)) return;
       if (this.analyzingTimer) clearTimeout(this.analyzingTimer);
       this.analyzingTimer = null;
+      if (response.revision !== this.revision) {
+        this.requestKey = null;
+        this.requestImage = null;
+        this.refreshRequested = true;
+        this.retryRequested = false;
+        this.forceRefresh = true;
+        this.refreshFromCompleted = false;
+        this.update({
+          ...this.state,
+          phase: 'watching_draft',
+          message: 'Пики изменились — обновляем рекомендации',
+        });
+        return;
+      }
       if (response.status === 'waiting') {
         this.requestKey = null;
         this.requestImage = null;
+        this.retryRequested = false;
         this.update({
           ...this.state,
           phase: 'watching_draft',
           message: waitingMessages[response.reason],
+          latestAnalysisId: null,
+          latestAnalysis: null,
           recognition: response.recognition,
         });
         return;
       }
-      this.sessionCompleted = true;
+      const refreshQueuedDuringAnalysis = this.refreshRequested;
+      this.sessionCompleted = !refreshQueuedDuringAnalysis;
+      if (refreshQueuedDuringAnalysis) this.refreshFromCompleted = true;
       this.requestKey = null;
       this.requestImage = null;
+      this.retryRequested = false;
       this.update({
         ...this.state,
-        phase: 'ready',
-        message: 'Контрпики готовы',
+        phase: refreshQueuedDuringAnalysis ? 'watching_draft' : 'ready',
+        message: refreshQueuedDuringAnalysis ? 'Проверяем новые пики' : 'Контрпики готовы',
         latestAnalysisId: response.analysis.id,
+        latestAnalysis: response.analysis,
         recognition: response.recognition,
       });
     } catch (error) {
@@ -358,36 +601,47 @@ export class DraftEngine {
       this.analyzingTimer = null;
       const isQuota = error instanceof DesktopError
         && (error.code === 'QUOTA_EXHAUSTED' || error.status === 402);
+      if (isQuota) {
+        this.refreshRequested = false;
+        this.forceRefresh = false;
+        this.refreshFromCompleted = false;
+        this.requestKey = null;
+        this.requestImage = null;
+      }
+      const refreshQueuedDuringAnalysis = !isQuota && this.refreshRequested;
+      const retryable = isRetryableAnalysisError(error);
+      if (!isQuota && !refreshQueuedDuringAnalysis && !retryable) {
+        this.requestKey = null;
+        this.requestImage = null;
+      }
+      this.retryRequested = !refreshQueuedDuringAnalysis
+        && this.requestKey !== null
+        && retryable;
       this.update({
         ...this.state,
-        phase: isQuota ? 'quota' : 'error',
+        phase: isQuota ? 'quota' : refreshQueuedDuringAnalysis ? 'watching_draft' : 'error',
         message: isQuota
           ? 'Лимит попыток исчерпан'
-          : error instanceof Error
-            ? error.message
-            : 'Не удалось проанализировать драфт',
+          : refreshQueuedDuringAnalysis
+            ? 'Перезапускаем анализ с новыми настройками'
+            : error instanceof Error
+              ? error.message
+              : 'Не удалось проанализировать драфт',
       });
     } finally {
       if (generation === this.captureGeneration) {
         this.busy = false;
-        if (this.inDraft && !this.sessionCompleted && this.state.phase !== 'quota') {
+        if (this.inDraft && this.state.phase !== 'quota') {
           this.scheduleCapture();
         }
       }
     }
   }
 
-  private async captureDotaWindow(): Promise<NativeImage | null> {
-    const dimensions = screen.getAllDisplays().reduce(
-      (largest, display) => ({
-        width: Math.max(largest.width, Math.round(display.size.width * display.scaleFactor)),
-        height: Math.max(largest.height, Math.round(display.size.height * display.scaleFactor)),
-      }),
-      { width: 1920, height: 1080 },
-    );
+  private async captureDotaWindow(thumbnailSize: { width: number; height: number }): Promise<NativeImage | null> {
     const sources = await desktopCapturer.getSources({
       types: ['window'],
-      thumbnailSize: dimensions,
+      thumbnailSize,
       fetchWindowIcons: false,
     });
     const source = sources.find((candidate) => {
@@ -395,46 +649,90 @@ export class DraftEngine {
       return name === 'dota 2' || name.includes('dota 2');
     });
     if (!source || source.thumbnail.isEmpty()) return null;
-    return fitForUpload(source.thumbnail);
+    return source.thumbnail;
   }
 
   private startWindowPolling(): void {
-    if (this.processTimer) return;
-    this.processTimer = setInterval(() => {
-      void this.pollDotaWindow();
-    }, 3_000);
+    if (this.windowPollingActive) return;
+    this.windowPollingActive = true;
+    this.windowPollIndex = 0;
   }
 
   private async pollDotaWindow(): Promise<void> {
-    if (!this.state.enabled || this.pollingDotaWindow) return;
+    if (!this.state.enabled || !this.windowPollingActive || this.windowPollInFlight) return;
+    if (this.windowPollTimer) {
+      clearTimeout(this.windowPollTimer);
+      this.windowPollTimer = null;
+    }
+    const now = Date.now();
+    if (this.inDraft) {
+      this.scheduleWindowPoll(windowPollIntervalsMs[windowPollIntervalsMs.length - 1]);
+      return;
+    }
+    const gsiAge = this.lastGsiAt > 0 ? now - this.lastGsiAt : Number.POSITIVE_INFINITY;
+    if (gsiAge < gsiFreshnessMs) {
+      this.scheduleWindowPoll(Math.max(windowPollIntervalsMs[0], gsiFreshnessMs - gsiAge));
+      return;
+    }
     const generation = this.captureGeneration;
-    this.pollingDotaWindow = true;
+    this.windowPollInFlight = true;
+    let nextDelay = windowPollIntervalsMs[this.windowPollIndex];
     try {
       const sources = await desktopCapturer.getSources({
         types: ['window'],
-        thumbnailSize: { width: 1, height: 1 },
+        thumbnailSize: { width: 0, height: 0 },
         fetchWindowIcons: false,
       });
       if (!this.state.enabled || generation !== this.captureGeneration) return;
       const dotaDetected = sources.some((candidate) => candidate.name.toLowerCase().includes('dota 2'));
+      if (dotaDetected) {
+        this.windowPollIndex = windowPollIntervalsMs.length - 1;
+        nextDelay = windowPollIntervalsMs[this.windowPollIndex];
+      } else {
+        if (this.state.dotaDetected) this.windowPollIndex = 0;
+        nextDelay = windowPollIntervalsMs[this.windowPollIndex];
+        this.windowPollIndex = Math.min(
+          this.windowPollIndex + 1,
+          windowPollIntervalsMs.length - 1,
+        );
+      }
       if (dotaDetected !== this.state.dotaDetected) {
         this.update({
           ...this.state,
           dotaDetected,
           message: dotaDetected && !this.inDraft
-            ? 'Dota 2 запущена. Ждём этап выбора героев'
+            ? this.state.lastSeenAt
+              ? 'Dota 2 запущена. Ждём этап выбора героев'
+              : 'Dota найдена. Проверьте параметр запуска -gamestateintegration'
             : this.state.message,
         });
       }
     } catch {
-      return;
+      nextDelay = windowPollIntervalsMs[this.windowPollIndex];
+      this.windowPollIndex = Math.min(
+        this.windowPollIndex + 1,
+        windowPollIntervalsMs.length - 1,
+      );
     } finally {
-      this.pollingDotaWindow = false;
+      this.windowPollInFlight = false;
+      this.scheduleWindowPoll(nextDelay);
     }
   }
 
+  private scheduleWindowPoll(delay: number): void {
+    if (!this.state.enabled || !this.windowPollingActive || this.windowPollTimer) return;
+    this.windowPollTimer = setTimeout(() => {
+      this.windowPollTimer = null;
+      void this.pollDotaWindow();
+    }, delay);
+  }
+
   private update(state: EngineState): void {
-    this.state = structuredClone(state);
+    this.state = structuredClone({
+      ...state,
+      draftActive: this.inDraft,
+      refreshPending: this.refreshRequested || this.retryRequested,
+    });
     this.emit(this.getState());
   }
 
@@ -446,9 +744,11 @@ export class DraftEngine {
 
   private clearTimers(): void {
     this.cancelCapture();
-    if (this.processTimer) clearInterval(this.processTimer);
+    this.windowPollingActive = false;
+    if (this.windowPollTimer) clearTimeout(this.windowPollTimer);
     if (this.analyzingTimer) clearTimeout(this.analyzingTimer);
-    this.processTimer = null;
+    this.windowPollTimer = null;
+    this.windowPollIndex = 0;
     this.analyzingTimer = null;
   }
 
@@ -465,7 +765,6 @@ export class DraftEngine {
       generation === this.captureGeneration
       && this.state.enabled
       && this.inDraft
-      && !this.sessionCompleted
     );
   }
 

@@ -12,7 +12,7 @@ class BridgeError extends Error {
   readonly details?: unknown;
 
   constructor(error: { code: string; message: string; status: number | null; details?: unknown }) {
-    super(error.message);
+    super(`[${error.code}] ${error.message}`);
     this.name = 'BridgeError';
     this.code = error.code;
     this.status = error.status;
@@ -67,6 +67,10 @@ const bridge: DesktopBridge = {
   preferences: {
     get: () => invoke(IPC.preferencesGet),
     update: (input) => invoke(IPC.preferencesUpdate, input),
+  },
+  shortcuts: {
+    getOverlay: () => invoke(IPC.shortcutOverlayGet),
+    setOverlay: (shortcut) => invoke(IPC.shortcutOverlaySet, shortcut),
   },
   window: {
     minimize: () => invoke(IPC.windowMinimize),

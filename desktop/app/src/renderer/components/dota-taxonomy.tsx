@@ -15,6 +15,7 @@ import rank6Icon from '../assets/ranks/rank-6.png';
 import rank7Icon from '../assets/ranks/rank-7.png';
 import rank8Icon from '../assets/ranks/rank-8.png';
 import { positionName, rankName } from '../format';
+import { useI18n } from '../i18n';
 import type { Position } from '../types';
 
 export const POSITION_VALUES = [1, 2, 3, 4, 5] as const satisfies readonly Position[];
@@ -71,11 +72,12 @@ export function PositionLabel({
   variant?: 'full' | 'compact' | 'icon';
   className?: string;
 }) {
+  const { language } = useI18n();
   return (
     <span className={`taxonomy-label taxonomy-label--${variant} ${className}`}>
       <PositionIcon position={position} />
       <span className="taxonomy-label__index">P{position}</span>
-      <span className="taxonomy-label__text">{positionName(position)}</span>
+      <span className="taxonomy-label__text">{positionName(position, language)}</span>
     </span>
   );
 }
@@ -110,10 +112,11 @@ export function RankLabel({
   variant?: 'full' | 'compact' | 'icon';
   className?: string;
 }) {
+  const { language } = useI18n();
   return (
     <span className={`taxonomy-label taxonomy-label--${variant} ${className}`}>
       <RankIcon rank={rank} />
-      <span className="taxonomy-label__text">{rankName(rank)}</span>
+      <span className="taxonomy-label__text">{rankName(rank, language)}</span>
     </span>
   );
 }

@@ -15,10 +15,13 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
     build: {
       rollupOptions: {
-        input: resolve('src/preload/index.ts'),
+        input: {
+          index: resolve('src/preload/index.ts'),
+          overlay: resolve('src/preload/overlay.ts'),
+        },
         output: {
           format: 'cjs',
-          entryFileNames: 'index.cjs',
+          entryFileNames: '[name].cjs',
         },
       },
     },
@@ -28,7 +31,10 @@ export default defineConfig({
     plugins: [react()],
     build: {
       rollupOptions: {
-        input: resolve('src/renderer/index.html'),
+        input: {
+          index: resolve('src/renderer/index.html'),
+          overlay: resolve('src/renderer/overlay.html'),
+        },
       },
     },
   },

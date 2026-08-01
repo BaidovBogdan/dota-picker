@@ -12,7 +12,8 @@ import { Link, useParams } from 'react-router';
 import { desktop } from '../bridge';
 import { FavoriteButton } from '../components/favorite-button';
 import { RankLabel } from '../components/dota-taxonomy';
-import { formatDateTime, formatPercent, heroName } from '../format';
+import { formatDateTime, formatPercent, heroName, roleName } from '../format';
+import { useI18n } from '../i18n';
 import { AsyncState, Badge, HeroArtwork, Page, Panel, Stat } from '../components/ui';
 import type { HeroDetail } from '../types';
 
@@ -42,6 +43,7 @@ const summarizeRanks = (items: HeroDetail['rankWinRates']) => {
 };
 
 export function HeroPage() {
+  const { language, locale, text } = useI18n();
   const params = useParams();
   const id = Number(params.id);
   const query = useQuery({
@@ -53,7 +55,7 @@ export function HeroPage() {
   if (query.isPending) {
     return (
       <main className="page" id="main-content">
-        <AsyncState status="loading" title="Загружаем статистику героя" />
+        <AsyncState status="loading" title={text('Загружаем статистику героя', 'Loading hero statistics')} />
       </main>
     );
   }
@@ -63,7 +65,7 @@ export function HeroPage() {
       <main className="page" id="main-content">
         <AsyncState
           status="error"
-          title="Герой не найден"
+          title={text('Герой не найден', 'Hero not found')}
           onRetry={() => void query.refetch()}
         />
       </main>
@@ -75,14 +77,14 @@ export function HeroPage() {
 
   return (
     <Page
-      eyebrow={`Патч ${detail.patch.name}`}
-      title={heroName(detail.hero)}
-      description={`Обновлено ${formatDateTime(detail.generatedAt)} · статистика и популярные сборки`}
+      eyebrow={`${text('Патч', 'Patch')} ${detail.patch.name}`}
+      title={heroName(detail.hero, language)}
+      description={`${text('Обновлено', 'Updated')} ${formatDateTime(detail.generatedAt, language)} · ${text('статистика и популярные сборки', 'statistics and popular builds')}`}
       actions={
         <>
           <Link className="button button--secondary" to="/meta">
             <ArrowLeftIcon size={16} aria-hidden />
-            Мета
+            {text('Мета', 'Meta')}
           </Link>
           <FavoriteButton
             heroId={id}
@@ -100,59 +102,59 @@ export function HeroPage() {
           <div className="hero-masthead__veil" />
           <div className="hero-masthead__status">
             <Badge tone={detail.isStale ? 'warning' : 'success'}>
-              {detail.isStale ? 'Кэш обновляется' : 'Данные актуальны'}
+              {detail.isStale ? text('Кэш обновляется', 'Refreshing cache') : text('Данные актуальны', 'Data is current')}
             </Badge>
           </div>
           <p className="hero-masthead__roles">
-            {detail.hero.roles?.join(' · ') || 'Роли уточняются'}
+            {detail.hero.roles?.map((role) => roleName(role, language)).join(' · ') || text('Роли уточняются', 'Roles pending')}
           </p>
         </div>
-        <aside className="hero-rank-panel" aria-label="Процент побед по группам рангов">
+        <aside className="hero-rank-panel" aria-label={text('Процент побед по группам рангов', 'Win rate by rank group')}>
           <div className="hero-rank-panel__head">
-            <strong>Процент побед</strong>
-            <span>Rolling 7 дней</span>
+            <strong>{text('Процент побед', 'Win rate')}</strong>
+            <span>{text('Rolling 7 дней', 'Rolling 7 days')}</span>
           </div>
           <div className="rank-rate-grid">
             {detail.rankWinRates.map((item) => (
               <div key={item.rank}>
                 <RankLabel rank={item.rank} variant="compact" />
-                <strong>{formatPercent(item.winRate)}</strong>
-                <small>{item.games.toLocaleString('ru-RU')} игр</small>
+                <strong>{formatPercent(item.winRate, 1, language)}</strong>
+                <small>{item.games.toLocaleString(locale)} {text('игр', 'games')}</small>
               </div>
             ))}
           </div>
         </aside>
       </section>
 
-      <Panel className="hero-stat-strip" data-reveal aria-label="Ключевые показатели героя">
+      <Panel className="hero-stat-strip" data-reveal aria-label={text('Ключевые показатели героя', 'Hero key metrics')}>
         <div className="hero-stat-strip__item">
           <TrendUpIcon size={21} weight="duotone" aria-hidden />
           <Stat
-            label="Лучшая группа"
+            label={text('Лучшая группа', 'Best rank group')}
             value={
               bestRank ? (
                 <RankLabel rank={bestRank} variant="compact" />
               ) : (
-                'Недостаточно данных'
+                text('Недостаточно данных', 'Not enough data')
               )
             }
-            helper="По rolling 7d"
+            helper={text('По rolling 7d', 'Based on rolling 7d')}
           />
         </div>
         <div className="hero-stat-strip__item">
           <SwordIcon size={21} weight="duotone" aria-hidden />
           <Stat
-            label="Матчей в выборке"
-            value={sampleGames.toLocaleString('ru-RU')}
-            helper="Сумма по группам рангов"
+            label={text('Матчей в выборке', 'Matches in sample')}
+            value={sampleGames.toLocaleString(locale)}
+            helper={text('Сумма по группам рангов', 'Total across rank groups')}
           />
         </div>
         <div className="hero-stat-strip__item">
           <PackageIcon size={21} weight="duotone" aria-hidden />
           <Stat
-            label="Сборок найдено"
+            label={text('Сборок найдено', 'Builds found')}
             value={detail.builds.length}
-            helper={`${detail.buildSampleSize.toLocaleString('ru-RU')} разобранных матчей`}
+            helper={`${detail.buildSampleSize.toLocaleString(locale)} ${text('разобранных матчей', 'analyzed matches')}`}
           />
         </div>
       </Panel>
@@ -160,15 +162,15 @@ export function HeroPage() {
       <section className="builds-section" data-reveal>
         <div className="section-heading">
           <div>
-            <p className="eyebrow">Популярные сборки</p>
-            <h2>Предметы и тайминги</h2>
+            <p className="eyebrow">{text('Популярные сборки', 'Popular builds')}</p>
+            <h2>{text('Предметы и тайминги', 'Items and timings')}</h2>
           </div>
           <Badge tone={detail.availability.builds === 'ready' ? 'success' : 'warning'}>
             {detail.availability.builds === 'ready'
-              ? 'Готово'
+              ? text('Готово', 'Ready')
               : detail.availability.builds === 'collecting'
-                ? 'Собираем'
-                : 'Недоступно'}
+                ? text('Собираем', 'Collecting')
+                : text('Недоступно', 'Unavailable')}
           </Badge>
         </div>
         {detail.builds.length ? (
@@ -176,8 +178,8 @@ export function HeroPage() {
             {detail.builds.map((build) => (
               <Panel className="build-card" key={build.id}>
                 <div className="build-card__head">
-                  <span>Порядок покупки</span>
-                  <strong>{formatPercent(build.winRate)} WR</strong>
+                  <span>{text('Порядок покупки', 'Purchase order')}</span>
+                  <strong>{formatPercent(build.winRate, 1, language)} {text('побед', 'WR')}</strong>
                 </div>
                 <div className="build-card__items">
                   {build.items.map((item) => (
@@ -198,9 +200,9 @@ export function HeroPage() {
                 <div className="build-card__footer">
                   <span>
                     <ShieldCheckIcon size={15} weight="duotone" aria-hidden />
-                    {build.games.toLocaleString('ru-RU')} матчей
+                    {build.games.toLocaleString(locale)} {text('матчей', 'matches')}
                   </span>
-                  <span>{build.wins.toLocaleString('ru-RU')} побед</span>
+                  <span>{build.wins.toLocaleString(locale)} {text('побед', 'wins')}</span>
                 </div>
               </Panel>
             ))}
@@ -208,8 +210,8 @@ export function HeroPage() {
         ) : (
           <AsyncState
             status="empty"
-            title="Сборки ещё не готовы"
-            description="Основная статистика доступна, предметы появятся после обработки матчей."
+            title={text('Сборки ещё не готовы', 'Builds are not ready yet')}
+            description={text('Основная статистика доступна, предметы появятся после обработки матчей.', 'Core statistics are available. Items will appear after match processing.')}
           />
         )}
       </section>

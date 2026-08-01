@@ -114,6 +114,10 @@ export const desktop = {
     update: (input: Parameters<NativeBridge['preferences']['update']>[0]) =>
       native().preferences.update(input),
   },
+  shortcuts: {
+    getOverlay: () => native().shortcuts.getOverlay(),
+    setOverlay: (shortcut: string) => native().shortcuts.setOverlay(shortcut),
+  },
   window: {
     minimize: () => native().window.minimize(),
     maximize: () => native().window.maximize(),

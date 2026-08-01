@@ -10,6 +10,8 @@ extraResources:
     to: brand/counterpick-icon.png
 asar: true
 win:
+  executableName: Counterpick
+  icon: ../../client/assets/brand/counterpick-icon.png
   target:
     - nsis
   artifactName: Counterpick-${version}-${arch}.${ext}

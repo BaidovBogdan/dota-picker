@@ -22,6 +22,7 @@ import { FavoriteButton } from '../components/favorite-button';
 import { MorphingFilterBar } from '../components/morphing-filter-bar';
 import { AsyncState, Badge, HeroIcon, Page } from '../components/ui';
 import { formatDateTime, formatPercent, heroName, rankName } from '../format';
+import { useI18n } from '../i18n';
 import type { Hero, Position, PositionStat } from '../types';
 
 type SortKey = 'winRate' | 'picks' | 'name';
@@ -32,37 +33,6 @@ type MetaRowData = {
   stat: PositionStat;
 };
 
-const RANK_OPTIONS: readonly AppSelectOption[] = [
-  {
-    value: 'all',
-    label: 'Все ранги',
-    icon: <RankIcon rank={null} size={18} />,
-  },
-  ...RANK_VALUES.map((rank) => ({
-    value: String(rank),
-    label: rankName(rank),
-    icon: <RankIcon rank={rank} size={20} />,
-  })),
-];
-
-const SORT_OPTIONS: readonly AppSelectOption[] = [
-  {
-    value: 'winRate',
-    label: 'По win rate',
-    icon: <ChartBarIcon size={16} weight="duotone" />,
-  },
-  {
-    value: 'picks',
-    label: 'По матчам',
-    icon: <SparkleIcon size={16} weight="duotone" />,
-  },
-  {
-    value: 'name',
-    label: 'По имени',
-    icon: <MagnifyingGlassIcon size={16} weight="duotone" />,
-  },
-];
-
 const MetaRow = memo(function MetaRow({
   row,
   index,
@@ -72,7 +42,9 @@ const MetaRow = memo(function MetaRow({
   index: number;
   position: Position;
 }) {
+  const { language, locale, text } = useI18n();
   const average = 0.5;
+  const delta = (row.stat.winRate - average) * 100;
 
   return (
     <div className="meta-row">
@@ -86,13 +58,13 @@ const MetaRow = memo(function MetaRow({
           </small>
         </span>
       </Link>
-      <strong>{row.stat.picks.toLocaleString('ru-RU')}</strong>
-      <span>{row.stat.wins.toLocaleString('ru-RU')}</span>
+      <strong>{row.stat.picks.toLocaleString(locale)}</strong>
+      <span>{row.stat.wins.toLocaleString(locale)}</span>
       <span className="meta-row__winrate">
-        <strong>{formatPercent(row.stat.winRate)}</strong>
+        <strong>{formatPercent(row.stat.winRate, 1, language)}</strong>
         <small className={row.stat.winRate >= average ? 'is-positive' : 'is-negative'}>
-          {row.stat.winRate >= average ? '+' : ''}
-          {((row.stat.winRate - average) * 100).toFixed(1)} п.п.
+          {delta >= 0 ? '+' : ''}
+          {delta.toLocaleString(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} {text('п.п.', 'pp')}
         </small>
       </span>
       <FavoriteButton heroId={row.hero.id} />
@@ -101,12 +73,26 @@ const MetaRow = memo(function MetaRow({
 });
 
 export function MetaPage() {
+  const { language, locale, text } = useI18n();
   const [position, setPosition] = useState<Position>(1);
   const [rank, setRank] = useState<number | null>(null);
   const [sort, setSort] = useState<SortKey>('winRate');
   const [descending, setDescending] = useState(true);
   const [search, setSearch] = useState('');
   const deferredSearch = useDeferredValue(search);
+  const rankOptions: readonly AppSelectOption[] = [
+    { value: 'all', label: text('Все ранги', 'All ranks'), icon: <RankIcon rank={null} size={18} /> },
+    ...RANK_VALUES.map((value) => ({
+      value: String(value),
+      label: rankName(value, language),
+      icon: <RankIcon rank={value} size={20} />,
+    })),
+  ];
+  const sortOptions: readonly AppSelectOption[] = [
+    { value: 'winRate', label: text('По win rate', 'By win rate'), icon: <ChartBarIcon size={16} weight="duotone" /> },
+    { value: 'picks', label: text('По матчам', 'By matches'), icon: <SparkleIcon size={16} weight="duotone" /> },
+    { value: 'name', label: text('По имени', 'By name'), icon: <MagnifyingGlassIcon size={16} weight="duotone" /> },
+  ];
 
   const query = useQuery({
     queryKey: ['meta', rank],
@@ -126,21 +112,21 @@ export function MetaPage() {
   const searchableHeroes = useMemo(
     () =>
       (query.data?.heroes ?? []).map((hero) => {
-        const name = heroName(hero);
+        const name = heroName(hero, language);
         return {
           hero,
           name,
-          searchName: name.toLocaleLowerCase('ru-RU'),
+          searchName: name.toLocaleLowerCase(locale),
         };
       }),
-    [query.data?.heroes],
+    [language, locale, query.data?.heroes],
   );
 
   const rows = useMemo(() => {
     const stats = statsByPosition.get(position);
     if (!stats) return [];
 
-    const normalized = deferredSearch.trim().toLocaleLowerCase('ru-RU');
+    const normalized = deferredSearch.trim().toLocaleLowerCase(locale);
     const next: MetaRowData[] = [];
 
     for (const candidate of searchableHeroes) {
@@ -152,29 +138,29 @@ export function MetaPage() {
     const direction = descending ? -1 : 1;
     next.sort((left, right) => {
       if (sort === 'name') {
-        return left.name.localeCompare(right.name, 'ru-RU') * direction;
+        return left.name.localeCompare(right.name, locale) * direction;
       }
       return (left.stat[sort] - right.stat[sort]) * direction;
     });
 
     return next;
-  }, [deferredSearch, descending, position, searchableHeroes, sort, statsByPosition]);
+  }, [deferredSearch, descending, locale, position, searchableHeroes, sort, statsByPosition]);
 
   return (
     <Page
-      title="Мета по позициям"
-      description="Статистика OpenDota по позициям и рангам. Matchup в рекомендациях считается отдельно по rolling all-ranks."
+      title={text('Мета по позициям', 'Meta by position')}
+      description={text('Статистика OpenDota по позициям и рангам. Matchup в рекомендациях считается отдельно по rolling all-ranks.', 'OpenDota statistics by position and rank. Recommendation matchups are calculated separately using rolling all-ranks data.')}
       actions={
         query.data ? (
           <Badge tone={query.data.isStale ? 'warning' : 'success'}>
-            {query.data.isStale ? 'Кэш обновляется' : 'Данные актуальны'}
+            {query.data.isStale ? text('Кэш обновляется', 'Refreshing cache') : text('Данные актуальны', 'Data is current')}
           </Badge>
         ) : null
       }
     >
-      <MorphingFilterBar className="meta-controls" label="Фильтры меты">
+      <MorphingFilterBar className="meta-controls" label={text('Фильтры меты', 'Meta filters')}>
         <div className="meta-controls__top">
-          <div className="meta-controls__positions" aria-label="Позиция">
+          <div className="meta-controls__positions" aria-label={text('Позиция', 'Position')}>
             {POSITION_VALUES.map((value) => (
               <button
                 type="button"
@@ -190,26 +176,26 @@ export function MetaPage() {
           <div className="meta-controls__filters">
             <label className="search-field">
               <MagnifyingGlassIcon size={17} aria-hidden />
-              <span className="sr-only">Найти героя</span>
+              <span className="sr-only">{text('Найти героя', 'Find a hero')}</span>
               <input
                 type="search"
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="Найти героя"
+                placeholder={text('Найти героя', 'Find a hero')}
               />
             </label>
             <AppSelect
               value={rank === null ? 'all' : String(rank)}
               onValueChange={(value) => setRank(value === 'all' ? null : Number(value))}
-              options={RANK_OPTIONS}
-              label="Ранг"
+              options={rankOptions}
+              label={text('Ранг', 'Rank')}
               className="meta-controls__rank-select"
             />
             <AppSelect
               value={sort}
               onValueChange={(value) => setSort(value as SortKey)}
-              options={SORT_OPTIONS}
-              label="Сортировка"
+              options={sortOptions}
+              label={text('Сортировка', 'Sort')}
               leadingIcon={<ChartBarIcon size={16} weight="duotone" />}
               className="meta-controls__sort-select"
             />
@@ -219,13 +205,13 @@ export function MetaPage() {
               onClick={() => setDescending((value) => !value)}
               aria-label={
                 descending
-                  ? 'Сортировать по возрастанию'
-                  : 'Сортировать по убыванию'
+                  ? text('Сортировать по возрастанию', 'Sort ascending')
+                  : text('Сортировать по убыванию', 'Sort descending')
               }
               title={
                 descending
-                  ? 'Сначала высокие значения'
-                  : 'Сначала низкие значения'
+                  ? text('Сначала высокие значения', 'Highest values first')
+                  : text('Сначала низкие значения', 'Lowest values first')
               }
             >
               {descending ? (
@@ -240,11 +226,11 @@ export function MetaPage() {
           <span>
             <strong>
               {query.data?.patch
-                ? `Патч ${query.data.patch}`
-                : 'Патч уточняется'}
+                ? `${text('Патч', 'Patch')} ${query.data.patch}`
+                : text('Патч уточняется', 'Patch pending')}
             </strong>
             {query.data?.fetchedAt
-              ? ` · обновлено ${formatDateTime(query.data.fetchedAt)}`
+              ? ` · ${text('обновлено', 'updated')} ${formatDateTime(query.data.fetchedAt, language)}`
               : ''}
           </span>
           <span>
@@ -252,23 +238,23 @@ export function MetaPage() {
             <span aria-hidden>·</span>
             <RankLabel rank={rank} variant="compact" />
             <span aria-hidden>·</span>
-            <span>{rows.length} героев</span>
+            <span>{rows.length} {text('героев', 'heroes')}</span>
           </span>
         </div>
       </MorphingFilterBar>
 
       {query.isPending ? (
-        <AsyncState status="loading" title="Собираем мету" />
+        <AsyncState status="loading" title={text('Собираем мету', 'Loading meta')} />
       ) : query.isError ? (
         <AsyncState status="error" onRetry={() => void query.refetch()} />
       ) : rows.length ? (
         <div className="meta-table" data-reveal aria-busy={query.isFetching}>
           <div className="meta-table__head">
             <span>#</span>
-            <span>Герой</span>
-            <span>Матчи</span>
-            <span>Победы</span>
-            <span>Win rate</span>
+            <span>{text('Герой', 'Hero')}</span>
+            <span>{text('Матчи', 'Matches')}</span>
+            <span>{text('Победы', 'Wins')}</span>
+            <span>{text('Процент побед', 'Win rate')}</span>
             <span />
           </div>
           {rows.map((row, index) => (
@@ -283,8 +269,8 @@ export function MetaPage() {
       ) : (
         <AsyncState
           status="empty"
-          title="Герои не найдены"
-          description="Измените поиск или выберите другую позицию."
+          title={text('Герои не найдены', 'No heroes found')}
+          description={text('Измените поиск или выберите другую позицию.', 'Change the search or choose another position.')}
         />
       )}
 
@@ -292,8 +278,8 @@ export function MetaPage() {
         <div className="collecting-note" data-reveal>
           <SparkleIcon size={18} weight="duotone" aria-hidden />
           <span>
-            <strong>Выборка ещё собирается</strong>
-            Некоторые позиции появятся после накопления минимального числа матчей.
+            <strong>{text('Выборка ещё собирается', 'The sample is still growing')}</strong>
+            {text('Некоторые позиции появятся после накопления минимального числа матчей.', 'Some positions will appear after the minimum match sample is reached.')}
           </span>
         </div>
       ) : null}

@@ -14,6 +14,8 @@ import {
   reviewsQuerySchema,
   verifiedCredentialsSchema,
   type IpcResult,
+  type OverlayShortcutStatus,
+  type Preferences,
 } from '../shared/contracts.js';
 import { IPC } from '../shared/ipc-channels.js';
 import type { ApiClient } from './api-client.js';
@@ -26,6 +28,9 @@ type Dependencies = {
   api: ApiClient;
   engine: DraftEngine;
   preferences: PreferencesStore;
+  onPreferencesChanged?: (previous: Preferences, current: Preferences) => void | Promise<void>;
+  getOverlayShortcut: () => OverlayShortcutStatus;
+  setOverlayShortcut: (shortcut: string) => Promise<OverlayShortcutStatus>;
 };
 
 function ensureTrustedSender(event: IpcMainInvokeEvent, window: BrowserWindow | null): void {
@@ -66,9 +71,7 @@ export function registerIpc(dependencies: Dependencies): void {
   const none = z.tuple([]);
 
   register(IPC.sessionBootstrap, none, dependencies.getWindow, async () => {
-    const state = await dependencies.api.bootstrap();
-    if (state.authenticated) await dependencies.engine.restore();
-    return state;
+    return dependencies.api.bootstrap();
   });
   register(IPC.sessionOtp, z.tuple([otpRequestSchema]), dependencies.getWindow, ([input]) =>
     dependencies.api.requestOtp(input));
@@ -81,13 +84,11 @@ export function registerIpc(dependencies: Dependencies): void {
   register(IPC.sessionChange, z.tuple([passwordChangeSchema]), dependencies.getWindow, ([input]) =>
     dependencies.api.changePassword(input));
   register(IPC.sessionLogout, none, dependencies.getWindow, async () => {
-    await dependencies.engine.setEnabled(false);
     await dependencies.api.logout();
   });
   register(IPC.sessionMe, none, dependencies.getWindow, () => dependencies.api.getMe());
   register(IPC.sessionQuota, none, dependencies.getWindow, () => dependencies.api.getQuota());
   register(IPC.sessionDelete, none, dependencies.getWindow, async () => {
-    await dependencies.engine.setEnabled(false);
     await dependencies.api.deleteAccount();
   });
 
@@ -117,21 +118,40 @@ export function registerIpc(dependencies: Dependencies): void {
   register(IPC.engineSet, z.tuple([z.boolean()]), dependencies.getWindow, async ([enabled]) => {
     if (enabled) {
       const preferences = await dependencies.preferences.get();
+      const english = preferences.language === 'en';
+      if (!dependencies.api.isAuthenticated()) {
+        throw new DesktopError(
+          'AUTH_REQUIRED',
+          english ? 'Sign in to Counterpick' : 'Войдите в Counterpick',
+        );
+      }
       if (!preferences.captureConsent.accepted) {
         const window = dependencies.getWindow();
-        if (!window) throw new DesktopError('WINDOW_UNAVAILABLE', 'Окно приложения недоступно');
+        if (!window) {
+          throw new DesktopError(
+            'WINDOW_UNAVAILABLE',
+            english ? 'The application window is unavailable' : 'Окно приложения недоступно',
+          );
+        }
         const result = await dialog.showMessageBox(window, {
           type: 'info',
-          title: 'Доступ к окну Dota 2',
-          message: 'Counterpick будет локально снимать только окно Dota 2 во время выбора героев.',
-          detail: 'Кадр отправляется на сервер анализа только при изменении драфта. Чтение памяти игры не используется.',
-          buttons: ['Разрешить', 'Отмена'],
+          title: english ? 'Dota 2 window access' : 'Доступ к окну Dota 2',
+          message: english
+            ? 'Counterpick will locally capture only the Dota 2 window during hero selection.'
+            : 'Counterpick будет локально снимать только окно Dota 2 во время выбора героев.',
+          detail: english
+            ? 'A frame is sent to the analysis server only when the draft changes. Game memory is never read.'
+            : 'Кадр отправляется на сервер анализа только при изменении драфта. Чтение памяти игры не используется.',
+          buttons: english ? ['Allow', 'Cancel'] : ['Разрешить', 'Отмена'],
           defaultId: 0,
           cancelId: 1,
           noLink: true,
         });
         if (result.response !== 0) {
-          throw new DesktopError('CAPTURE_CONSENT_REQUIRED', 'Захват окна не разрешён');
+          throw new DesktopError(
+            'CAPTURE_CONSENT_REQUIRED',
+            english ? 'Window capture was not allowed' : 'Захват окна не разрешён',
+          );
         }
         await dependencies.preferences.update({
           captureConsent: {
@@ -140,17 +160,50 @@ export function registerIpc(dependencies: Dependencies): void {
           },
         });
       }
+      if (!dependencies.api.isAuthenticated()) {
+        throw new DesktopError(
+          'AUTH_REQUIRED',
+          english ? 'Sign in to Counterpick' : 'Войдите в Counterpick',
+        );
+      }
     }
     return dependencies.engine.setEnabled(enabled);
   });
-  register(IPC.engineRetry, none, dependencies.getWindow, () => dependencies.engine.retry());
+  register(IPC.engineRetry, none, dependencies.getWindow, async () => {
+    if (!dependencies.api.isAuthenticated()) {
+      const preferences = await dependencies.preferences.get();
+      throw new DesktopError(
+        'AUTH_REQUIRED',
+        preferences.language === 'en' ? 'Sign in to Counterpick' : 'Войдите в Counterpick',
+      );
+    }
+    return dependencies.engine.retry();
+  });
 
   register(IPC.preferencesGet, none, dependencies.getWindow, () => dependencies.preferences.get());
   register(
     IPC.preferencesUpdate,
     z.tuple([preferencesPatchSchema]),
     dependencies.getWindow,
-    ([input]) => dependencies.preferences.update(input),
+    async ([input]) => {
+      const previous = await dependencies.preferences.get();
+      const preferences = await dependencies.preferences.update(input);
+      await dependencies.onPreferencesChanged?.(previous, preferences);
+      return preferences;
+    },
+  );
+
+  register(
+    IPC.shortcutOverlayGet,
+    none,
+    dependencies.getWindow,
+    dependencies.getOverlayShortcut,
+  );
+  register(
+    IPC.shortcutOverlaySet,
+    z.tuple([z.string()]),
+    dependencies.getWindow,
+    ([shortcut]) => dependencies.setOverlayShortcut(shortcut),
   );
 
   register(IPC.windowMinimize, none, dependencies.getWindow, () => {

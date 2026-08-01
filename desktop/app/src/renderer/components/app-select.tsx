@@ -5,6 +5,7 @@ import {
   CheckIcon,
 } from '@phosphor-icons/react';
 import type { ReactNode } from 'react';
+import { useI18n } from '../i18n';
 
 export type AppSelectOption = {
   value: string;
@@ -19,7 +20,7 @@ export function AppSelect({
   onValueChange,
   options,
   label,
-  placeholder = 'Выберите значение',
+  placeholder,
   leadingIcon,
   className = '',
   disabled = false,
@@ -33,7 +34,9 @@ export function AppSelect({
   className?: string;
   disabled?: boolean;
 }) {
+  const { text } = useI18n();
   const selected = options.find((option) => option.value === value);
+  const resolvedPlaceholder = placeholder ?? text('Выберите значение', 'Select a value');
 
   return (
     <Select.Root
@@ -48,7 +51,7 @@ export function AppSelect({
         <span className="app-select__leading" aria-hidden>
           {selected?.icon ?? leadingIcon}
         </span>
-        <Select.Value placeholder={placeholder}>
+        <Select.Value placeholder={resolvedPlaceholder}>
           {selected ? (
             <span className="app-select__selected">
               <span>{selected.label}</span>

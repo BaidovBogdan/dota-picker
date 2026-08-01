@@ -1,9 +1,11 @@
 import { promises as fs } from 'node:fs';
 import { dirname } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { app } from 'electron';
 import {
   preferencesPatchSchema,
   preferencesSchema,
+  overlayShortcutSchema,
   type Preferences,
   type PreferencesPatch,
 } from '../shared/contracts.js';
@@ -15,6 +17,7 @@ const defaults: Preferences = {
   rank: null,
   startWithWindows: false,
   minimizeToTray: true,
+  overlayShortcut: 'PageUp',
   wishlist: [],
   assistantEnabled: false,
   captureConsent: {
@@ -39,21 +42,36 @@ export class PreferencesStore {
 
   async update(patch: PreferencesPatch): Promise<Preferences> {
     const parsedPatch = preferencesPatchSchema.parse(patch);
+    return this.mutate((current) => ({
+      ...current,
+      ...parsedPatch,
+      captureConsent: parsedPatch.captureConsent
+        ? { ...current.captureConsent, ...parsedPatch.captureConsent }
+        : current.captureConsent,
+      wishlist: parsedPatch.wishlist
+        ? [...new Set(parsedPatch.wishlist)]
+        : current.wishlist,
+    }));
+  }
+
+  async setAssistantEnabled(enabled: boolean): Promise<Preferences> {
+    return this.update({ assistantEnabled: enabled });
+  }
+
+  async setOverlayShortcut(shortcut: string): Promise<Preferences> {
+    const overlayShortcut = overlayShortcutSchema.parse(shortcut);
+    return this.mutate((current) => ({ ...current, overlayShortcut }));
+  }
+
+  private mutate(nextValue: (current: Preferences) => unknown): Promise<Preferences> {
     const operation = this.mutationQueue.then(async () => {
       await this.ensureLoaded();
-      const next = preferencesSchema.parse({
-        ...this.value,
-        ...parsedPatch,
-        captureConsent: parsedPatch.captureConsent
-          ? { ...this.value.captureConsent, ...parsedPatch.captureConsent }
-          : this.value.captureConsent,
-        wishlist: parsedPatch.wishlist
-          ? [...new Set(parsedPatch.wishlist)]
-          : this.value.wishlist,
-      });
+      const next = preferencesSchema.parse(nextValue(this.value));
+      if (isDeepStrictEqual(next, this.value)) return structuredClone(this.value);
+      const loginPreferenceChanged = next.startWithWindows !== this.value.startWithWindows;
       await this.persist(next);
       this.value = next;
-      this.applyLoginPreference(next.startWithWindows);
+      if (loginPreferenceChanged) this.applyLoginPreference(next.startWithWindows);
       return structuredClone(next);
     });
     this.mutationQueue = operation.then(
@@ -61,10 +79,6 @@ export class PreferencesStore {
       () => undefined,
     );
     return operation;
-  }
-
-  async setAssistantEnabled(enabled: boolean): Promise<Preferences> {
-    return this.update({ assistantEnabled: enabled });
   }
 
   private async ensureLoaded(): Promise<void> {

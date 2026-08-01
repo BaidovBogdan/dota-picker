@@ -19,6 +19,132 @@ export const rankSchema = z.union([
   z.literal(8),
 ]);
 
+const acceleratorModifiers = new Map<string, string>([
+  ['command', 'Command'],
+  ['cmd', 'Command'],
+  ['control', 'Control'],
+  ['ctrl', 'Control'],
+  ['commandorcontrol', 'CommandOrControl'],
+  ['cmdorctrl', 'CommandOrControl'],
+  ['alt', 'Alt'],
+  ['option', 'Alt'],
+  ['altgr', 'AltGr'],
+  ['shift', 'Shift'],
+  ['super', 'Super'],
+  ['meta', 'Super'],
+]);
+
+const acceleratorKeys = new Map<string, string>([
+  ['plus', 'Plus'],
+  ['space', 'Space'],
+  ['tab', 'Tab'],
+  ['capslock', 'Capslock'],
+  ['numlock', 'Numlock'],
+  ['scrolllock', 'Scrolllock'],
+  ['backspace', 'Backspace'],
+  ['delete', 'Delete'],
+  ['insert', 'Insert'],
+  ['return', 'Return'],
+  ['enter', 'Return'],
+  ['up', 'Up'],
+  ['arrowup', 'Up'],
+  ['down', 'Down'],
+  ['arrowdown', 'Down'],
+  ['left', 'Left'],
+  ['arrowleft', 'Left'],
+  ['right', 'Right'],
+  ['arrowright', 'Right'],
+  ['home', 'Home'],
+  ['end', 'End'],
+  ['pageup', 'PageUp'],
+  ['pgup', 'PageUp'],
+  ['pagedown', 'PageDown'],
+  ['pgdown', 'PageDown'],
+  ['pgdn', 'PageDown'],
+  ['escape', 'Escape'],
+  ['esc', 'Escape'],
+  ['volumeup', 'VolumeUp'],
+  ['volumedown', 'VolumeDown'],
+  ['volumemute', 'VolumeMute'],
+  ['medianexttrack', 'MediaNextTrack'],
+  ['mediaprevioustrack', 'MediaPreviousTrack'],
+  ['mediastop', 'MediaStop'],
+  ['mediaplaypause', 'MediaPlayPause'],
+  ['printscreen', 'PrintScreen'],
+]);
+
+const acceleratorModifierOrder = [
+  'CommandOrControl',
+  'Command',
+  'Control',
+  'Alt',
+  'AltGr',
+  'Shift',
+  'Super',
+];
+
+const acceleratorPunctuation = new Set([
+  ')',
+  '!',
+  '@',
+  '#',
+  '$',
+  '%',
+  '^',
+  '&',
+  '*',
+  '(',
+  ':',
+  ';',
+  '=',
+  '<',
+  ',',
+  '_',
+  '-',
+  '>',
+  '.',
+  '?',
+  '/',
+  '~',
+  '`',
+  '{',
+  ']',
+  '[',
+  '|',
+  '\\',
+  '}',
+  '"',
+]);
+
+export function normalizeOverlayShortcut(value: string): string | null {
+  const parts = value.trim().split('+').map((part) => part.trim()).filter(Boolean);
+  if (parts.length === 0 || parts.length > 5) return null;
+  const keyInput = parts.at(-1);
+  if (!keyInput) return null;
+  const modifiers = parts.slice(0, -1).map((part) => acceleratorModifiers.get(part.toLowerCase()));
+  if (modifiers.some((modifier) => !modifier)) return null;
+  const uniqueModifiers = new Set(modifiers as string[]);
+  if (uniqueModifiers.size !== modifiers.length) return null;
+  const upperKey = keyInput.toUpperCase();
+  const functionKeyMatch = /^F([1-9]|1\d|2[0-4])$/.exec(upperKey);
+  const numpadKeyMatch = /^(num[0-9]|numdec|numadd|numsub|nummult|numdiv)$/i.exec(keyInput);
+  const key = /^[A-Z0-9]$/.test(upperKey)
+    ? upperKey
+    : functionKeyMatch?.[0]
+      ?? numpadKeyMatch?.[0].toLowerCase()
+      ?? (acceleratorPunctuation.has(keyInput) ? keyInput : acceleratorKeys.get(keyInput.toLowerCase()));
+  if (!key || acceleratorModifiers.has(keyInput.toLowerCase())) return null;
+  const orderedModifiers = acceleratorModifierOrder.filter((modifier) => uniqueModifiers.has(modifier));
+  return [...orderedModifiers, key].join('+');
+}
+
+export const overlayShortcutSchema = z.string()
+  .trim()
+  .min(1)
+  .max(64)
+  .refine((value) => normalizeOverlayShortcut(value) !== null, 'Unsupported Electron accelerator')
+  .transform((value) => normalizeOverlayShortcut(value) as string);
+
 export const preferencesSchema = z.object({
   theme: z.enum(['system', 'light', 'dark']),
   language: z.enum(['ru', 'en']),
@@ -26,6 +152,7 @@ export const preferencesSchema = z.object({
   rank: rankSchema.nullable(),
   startWithWindows: z.boolean(),
   minimizeToTray: z.boolean(),
+  overlayShortcut: overlayShortcutSchema.catch('PageUp').default('PageUp'),
   wishlist: z.array(z.number().int().positive()).max(200),
   assistantEnabled: z.boolean(),
   captureConsent: z.object({
@@ -34,7 +161,7 @@ export const preferencesSchema = z.object({
   }),
 });
 
-export const preferencesPatchSchema = preferencesSchema.partial();
+export const preferencesPatchSchema = preferencesSchema.omit({ overlayShortcut: true }).partial();
 
 export const otpRequestSchema = z.discriminatedUnion('purpose', [
   z.object({
@@ -202,8 +329,11 @@ export type EngineState = {
   phase: EnginePhase;
   message: string | null;
   latestAnalysisId: string | null;
+  latestAnalysis: Analysis | null;
   lastSeenAt: string | null;
   dotaDetected: boolean;
+  draftActive: boolean;
+  refreshPending: boolean;
   recognition?: {
     quality: 'clear' | 'partial' | 'not_dota' | 'too_blurry';
     recognized: Array<{
@@ -216,6 +346,47 @@ export type EngineState = {
       needsReview: boolean;
     }>;
   } | null;
+};
+
+export type OverlayPick = {
+  side: 'ally' | 'enemy';
+  slot: number;
+  heroId: number | null;
+  heroName: string;
+  localizedName: string | null;
+  imageUrl: string | null;
+  confidence: number;
+};
+
+export type OverlayRecommendation = {
+  heroId: number;
+  heroName: string;
+  imageUrl: string | null;
+  score: number;
+  confidence: 'low' | 'medium' | 'high';
+};
+
+export type OverlayState = {
+  language: Preferences['language'];
+  available: boolean;
+  enabled: boolean;
+  phase: EnginePhase;
+  message: string;
+  dotaDetected: boolean;
+  draftActive: boolean;
+  position: Position;
+  picks: OverlayPick[];
+  recommendations: OverlayRecommendation[];
+  latestAnalysisId: string | null;
+  analysisPosition: Position | null;
+  shortcut: string;
+  shortcutAvailable: boolean;
+  refreshing: boolean;
+};
+
+export type OverlayShortcutStatus = {
+  shortcut: string;
+  available: boolean;
 };
 
 export type AppInfo = {
@@ -265,6 +436,10 @@ export type DesktopBridge = {
     get: () => Promise<Preferences>;
     update: (input: PreferencesPatch) => Promise<Preferences>;
   };
+  shortcuts: {
+    getOverlay: () => Promise<OverlayShortcutStatus>;
+    setOverlay: (shortcut: string) => Promise<OverlayShortcutStatus>;
+  };
   window: {
     minimize: () => Promise<void>;
     maximize: () => Promise<void>;
@@ -276,6 +451,14 @@ export type DesktopBridge = {
     openExternal: (url: string) => Promise<void>;
     getInfo: () => Promise<AppInfo>;
   };
+};
+
+export type OverlayBridge = {
+  getState: () => Promise<OverlayState>;
+  refresh: () => Promise<OverlayState>;
+  setPosition: (position: Position) => Promise<OverlayState>;
+  hide: () => Promise<void>;
+  onState: (listener: (state: OverlayState) => void) => () => void;
 };
 
 export type IpcSuccess<T> = { ok: true; value: T };

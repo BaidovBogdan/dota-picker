@@ -13,6 +13,7 @@ import { AppShell } from './components/app-shell';
 import { BrandMark } from './components/brand-mark';
 import { AsyncState } from './components/ui';
 import { WindowControls } from './components/window-controls';
+import { useI18n } from './i18n';
 import { useAppStore } from './store';
 
 const AccountPage = lazy(() =>
@@ -55,11 +56,20 @@ function Bootstrap() {
   const setAccount = useAppStore((state) => state.setAccount);
   const setPreferences = useAppStore((state) => state.setPreferences);
   const setEngine = useAppStore((state) => state.setEngine);
+  const preferences = useAppStore((state) => state.preferences);
   const selectedTheme = useAppStore((state) => state.preferences?.theme ?? 'system');
+  const { language, text } = useI18n();
 
+  const preferencesQuery = useQuery({
+    queryKey: ['preferences'],
+    queryFn: desktop.preferences.get,
+    retry: 1,
+    staleTime: Infinity,
+  });
   const sessionQuery = useQuery({
     queryKey: ['session'],
     queryFn: desktop.session.bootstrap,
+    enabled: preferences !== null,
     retry: 1,
     staleTime: Infinity,
   });
@@ -68,17 +78,11 @@ function Bootstrap() {
     if (sessionQuery.data) setAccount(sessionQuery.data.account);
   }, [sessionQuery.data, setAccount]);
 
-  useEffect(() => {
-    let active = true;
-    void desktop.preferences.get().then((nextPreferences) => {
-      if (!active) return;
-      setPreferences(nextPreferences);
-      useAppStore.getState().setWishlist(nextPreferences.wishlist);
-    }).catch(() => undefined);
-    return () => {
-      active = false;
-    };
-  }, [setPreferences]);
+  useLayoutEffect(() => {
+    if (!preferencesQuery.data) return;
+    setPreferences(preferencesQuery.data);
+    useAppStore.getState().setWishlist(preferencesQuery.data.wishlist);
+  }, [preferencesQuery.data, setPreferences]);
 
   useEffect(() => {
     if (!sessionQuery.data?.authenticated) return;
@@ -88,6 +92,7 @@ function Bootstrap() {
 
   useLayoutEffect(() => {
     const root = document.documentElement;
+    root.lang = language;
     const media = globalThis.matchMedia?.('(prefers-color-scheme: dark)');
     const applyTheme = () => {
       root.dataset.theme =
@@ -97,12 +102,32 @@ function Bootstrap() {
     if (selectedTheme !== 'system' || !media) return;
     media.addEventListener('change', applyTheme);
     return () => media.removeEventListener('change', applyTheme);
-  }, [selectedTheme]);
+  }, [language, selectedTheme]);
+
+  if (preferencesQuery.isError) {
+    return (
+      <BootstrapScreen>
+        <AsyncState
+          status="error"
+          title={text('Не удалось загрузить настройки', 'Could not load settings')}
+          onRetry={() => void preferencesQuery.refetch()}
+        />
+      </BootstrapScreen>
+    );
+  }
+
+  if (!preferences) {
+    return (
+      <BootstrapScreen>
+        <AsyncState status="loading" title="COUNTERPICK" />
+      </BootstrapScreen>
+    );
+  }
 
   if (sessionQuery.isPending) {
     return (
       <BootstrapScreen>
-        <AsyncState status="loading" title="Запускаем Counterpick" />
+        <AsyncState status="loading" title={text('Запускаем Counterpick', 'Starting Counterpick')} />
       </BootstrapScreen>
     );
   }
@@ -112,8 +137,11 @@ function Bootstrap() {
       <BootstrapScreen>
         <AsyncState
           status="error"
-          title="Не удалось запустить приложение"
-          description="Backend на Render недоступен или нет подключения к сети."
+          title={text('Не удалось запустить приложение', 'Could not start the application')}
+          description={text(
+            'Backend на Render недоступен или нет подключения к сети.',
+            'The backend is unavailable or there is no network connection.',
+          )}
           onRetry={() => void sessionQuery.refetch()}
         />
       </BootstrapScreen>
@@ -165,12 +193,13 @@ function Router() {
 }
 
 export function App() {
+  const { text } = useI18n();
   return (
     <HashRouter>
       <Suspense
         fallback={
           <BootstrapScreen>
-            <AsyncState status="loading" title="Открываем экран" />
+            <AsyncState status="loading" title={text('Открываем экран', 'Opening screen')} />
           </BootstrapScreen>
         }
       >

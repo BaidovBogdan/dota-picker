@@ -21,6 +21,7 @@ import { desktop } from '../bridge';
 import { AnimatedText } from '../components/animated-text';
 import { PositionLabel, RankLabel } from '../components/dota-taxonomy';
 import { phaseCopy, formatRelative, heroName } from '../format';
+import { useI18n } from '../i18n';
 import { StatusScrub } from '../components/motion';
 import { AsyncState, Button, HeroIcon, Panel, TextLink } from '../components/ui';
 import { useAppStore } from '../store';
@@ -35,6 +36,7 @@ export function DashboardPage() {
   const consentRef = useRef<HTMLElement>(null);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const { language, locale, text } = useI18n();
 
   const quotaQuery = useQuery({
     queryKey: ['quota'],
@@ -84,7 +86,11 @@ export function DashboardPage() {
     lastSeenAt: null,
     dotaDetected: false,
   };
-  const status = phaseCopy(currentEngine.phase);
+  const status = phaseCopy(currentEngine.phase, language);
+  const engineMessage = currentEngine.message
+    && (language !== 'en' || !/[А-Яа-яЁё]/.test(currentEngine.message))
+    ? currentEngine.message
+    : status.description;
   const quotaExhausted = limit > 0 && remaining <= 0;
   const isEngineTransitioning = toggleMutation.isPending || currentEngine.phase === 'starting';
   const engineIconState = isEngineTransitioning
@@ -134,14 +140,19 @@ export function DashboardPage() {
         <div className="dashboard-heading__title">
           <span className="dashboard-heading__date">
             <Sword size={17} weight="duotone" aria-hidden />
-            {new Intl.DateTimeFormat('ru-RU', {
+            {new Intl.DateTimeFormat(locale, {
               weekday: 'long',
               day: 'numeric',
               month: 'long',
             }).format(new Date())}
           </span>
-          <h1>Автоконтрпик</h1>
-          <p>Следит за стадией выбора героев и показывает расчёт, когда данных достаточно.</p>
+          <h1>{text('Автоконтрпик', 'Auto Counterpick')}</h1>
+          <p>
+            {text(
+              'Следит за стадией выбора героев и показывает расчёт, когда данных достаточно.',
+              'Tracks hero selection and shows recommendations as soon as there is enough data.',
+            )}
+          </p>
         </div>
       </header>
 
@@ -151,7 +162,7 @@ export function DashboardPage() {
           <div className="controller-card__header">
             <div className="controller-card__identity">
               <CrosshairSimple size={19} weight="duotone" aria-hidden />
-              <span>Ассистент драфта</span>
+              <span>{text('Ассистент драфта', 'Draft assistant')}</span>
             </div>
             <div className={`controller-card__status controller-card__status--${currentEngine.phase}`}>
               <span className="status-dot" />
@@ -159,7 +170,7 @@ export function DashboardPage() {
             </div>
             <span className="controller-card__local">
               <ShieldCheck size={17} weight="duotone" aria-hidden />
-              Только окно Dota 2
+              {text('Только окно Dota 2', 'Dota 2 window only')}
             </span>
           </div>
           <div className="controller-card__content">
@@ -168,8 +179,8 @@ export function DashboardPage() {
                 <AnimatedText
                   text={
                     currentEngine.enabled
-                      ? 'Ассистент готов к следующему драфту'
-                      : 'Включите ассистента до выбора героев'
+                      ? text('Ассистент готов к следующему драфту', 'The assistant is ready for the next draft')
+                      : text('Включите ассистента до выбора героев', 'Turn on the assistant before hero selection')
                   }
                   reserveLines={2}
                   live="polite"
@@ -177,17 +188,28 @@ export function DashboardPage() {
               </h2>
               <p>
                 <AnimatedText
-                  text={currentEngine.message || status.description}
+                  text={engineMessage}
                   reserveLines={2}
                   live="polite"
                 />
               </p>
               {currentEngine.recognition?.recognized.length ? (
-                <div className="recognized-picks" aria-label="Распознанные герои">
+                <div
+                  className="recognized-picks"
+                  aria-label={text('Распознанные герои', 'Recognized heroes')}
+                >
                   {currentEngine.recognition.recognized.slice(0, 5).map((pick) => (
                     <span key={`${pick.side}-${pick.slot}`}>
-                      <small>{pick.side === 'enemy' ? 'Противник' : 'Союзник'}</small>
-                      <strong>{pick.localizedName || pick.heroName || 'Неизвестный герой'}</strong>
+                      <small>
+                        {pick.side === 'enemy'
+                          ? text('Противник', 'Enemy')
+                          : text('Союзник', 'Ally')}
+                      </small>
+                      <strong>
+                        {language === 'en'
+                          ? pick.heroName || pick.localizedName || 'Unknown hero'
+                          : pick.localizedName || pick.heroName || 'Неизвестный герой'}
+                      </strong>
                       <em>{Math.round(pick.confidence * 100)}%</em>
                     </span>
                   ))}
@@ -204,7 +226,9 @@ export function DashboardPage() {
                 checked={currentEngine.enabled}
                 disabled={toggleMutation.isPending || !engine || !preferences}
                 onCheckedChange={onToggle}
-                aria-label={currentEngine.enabled ? 'Выключить ассистента' : 'Включить ассистента'}
+                aria-label={currentEngine.enabled
+                  ? text('Выключить ассистента', 'Turn off assistant')
+                  : text('Включить ассистента', 'Turn on assistant')}
               >
                 <Switch.Thumb className="engine-switch__thumb">
                   <span className="engine-switch__icon" data-icon-state={engineIconState}>
@@ -233,15 +257,17 @@ export function DashboardPage() {
                 </Switch.Thumb>
                 <AnimatedText
                   className="engine-switch__copy"
-                  text={currentEngine.enabled ? 'ВКЛЮЧЁН' : 'ВКЛЮЧИТЬ'}
+                  text={currentEngine.enabled
+                    ? text('ВКЛЮЧЁН', 'ON')
+                    : text('ВКЛЮЧИТЬ', 'TURN ON')}
                 />
               </Switch.Root>
               <small>
                 <AnimatedText
                   text={
                     currentEngine.enabled
-                      ? 'Нажмите, чтобы остановить'
-                      : 'Одно нажатие — и можно свернуть окно'
+                      ? text('Нажмите, чтобы остановить', 'Click to stop')
+                      : text('Одно нажатие — и можно свернуть окно', 'One click, then you can minimize the window')
                   }
                   reserveLines={1}
                 />
@@ -251,7 +277,10 @@ export function DashboardPage() {
           <div className="controller-card__footer">
             {toggleMutation.isError ? (
               <span role="alert">
-                Не удалось изменить состояние. Проверьте соединение и повторите.
+                {text(
+                  'Не удалось изменить состояние. Проверьте соединение и повторите.',
+                  'Could not change the state. Check your connection and try again.',
+                )}
               </span>
             ) : currentEngine.phase === 'error' ? (
               <Button
@@ -259,20 +288,23 @@ export function DashboardPage() {
                 loading={retryMutation.isPending}
                 onClick={() => retryMutation.mutate()}
               >
-                Повторить подключение
+                {text('Повторить подключение', 'Reconnect')}
               </Button>
             ) : currentEngine.latestAnalysisId ? (
               <Link
                 className="controller-result-link"
                 to={`/result/${currentEngine.latestAnalysisId}`}
               >
-                Открыть свежий результат
+                {text('Открыть свежий результат', 'Open latest result')}
                 <ArrowSquareOut size={17} weight="duotone" aria-hidden />
               </Link>
             ) : (
               <span>
                 <CheckCircle size={17} weight="duotone" aria-hidden />
-                Можно свернуть приложение — ассистент останется в трее
+                {text(
+                  'Можно свернуть приложение — ассистент останется в трее',
+                  'You can minimize the app — the assistant will stay in the tray',
+                )}
               </span>
             )}
           </div>
@@ -280,7 +312,7 @@ export function DashboardPage() {
 
         <Panel className="system-card" data-reveal>
           <div className="hud-heading">
-            <span>Сигнал игры</span>
+            <span>{text('Сигнал игры', 'Game signal')}</span>
             <Broadcast size={21} weight="duotone" aria-hidden />
           </div>
           <div
@@ -290,7 +322,9 @@ export function DashboardPage() {
             <div>
               <strong>
                 <AnimatedText
-                  text={currentEngine.dotaDetected ? 'Dota 2 обнаружена' : 'Ожидаем Dota 2'}
+                  text={currentEngine.dotaDetected
+                    ? text('Dota 2 обнаружена', 'Dota 2 detected')
+                    : text('Ожидаем Dota 2', 'Waiting for Dota 2')}
                   reserveLines={1}
                   live="polite"
                 />
@@ -299,8 +333,11 @@ export function DashboardPage() {
                 <AnimatedText
                   text={
                     currentEngine.dotaDetected
-                      ? 'Окно игры доступно для анализа'
-                      : 'Запустите игру — повторно включать ассистента не нужно'
+                      ? text('Окно игры доступно для анализа', 'The game window is ready for analysis')
+                      : text(
+                          'Запустите игру — повторно включать ассистента не нужно',
+                          'Launch the game — you do not need to enable the assistant again',
+                        )
                   }
                   reserveLines={2}
                 />
@@ -309,32 +346,32 @@ export function DashboardPage() {
           </div>
           <dl className="system-card__telemetry">
             <div>
-              <dt>Последний сигнал</dt>
-              <dd>{formatRelative(currentEngine.lastSeenAt)}</dd>
+              <dt>{text('Последний сигнал', 'Last signal')}</dt>
+              <dd>{formatRelative(currentEngine.lastSeenAt, language)}</dd>
             </div>
             <div>
-              <dt>Захват</dt>
-              <dd>Только окно игры</dd>
+              <dt>{text('Захват', 'Capture')}</dt>
+              <dd>{text('Только окно игры', 'Game window only')}</dd>
             </div>
           </dl>
         </Panel>
 
         <Panel className="quota-card" data-reveal>
           <div className="hud-heading">
-            <span>Лимит анализа</span>
+            <span>{text('Лимит анализа', 'Analysis limit')}</span>
             <Lightning size={20} weight="duotone" aria-hidden />
           </div>
           <div className="quota-card__number">
             <strong>{remaining}</strong>
             <span>
-              из {limit}
-              <small>осталось</small>
+              {text(`из ${limit}`, `of ${limit}`)}
+              <small>{text('осталось', 'remaining')}</small>
             </span>
           </div>
           <div
             className="quota-progress"
             role="progressbar"
-            aria-label="Оставшиеся попытки"
+            aria-label={text('Оставшиеся попытки', 'Remaining attempts')}
             aria-valuenow={remaining}
             aria-valuemin={0}
             aria-valuemax={limit}
@@ -342,16 +379,20 @@ export function DashboardPage() {
             <span style={{ transform: `scaleX(${quotaRatio})` }} />
           </div>
           <div className="quota-card__footer">
-            <small>Обновление {formatRelative(quota?.nextRefillAt)}</small>
+            <small>
+              {text('Обновление', 'Refresh')} {formatRelative(quota?.nextRefillAt, language)}
+            </small>
             {quotaExhausted ? (
-              <TextLink to="/profile?section=plan">Посмотреть план</TextLink>
+              <TextLink to="/profile?section=plan">
+                {text('Посмотреть план', 'View plan')}
+              </TextLink>
             ) : null}
           </div>
         </Panel>
 
         <Panel className="latest-card" data-reveal>
           <div className="hud-heading">
-            <span>Последний контрпик</span>
+            <span>{text('Последний контрпик', 'Latest counterpick')}</span>
             <Clock size={20} weight="duotone" aria-hidden />
           </div>
           {historyQuery.isPending ? (
@@ -360,12 +401,12 @@ export function DashboardPage() {
             <Link to={`/result/${latest.id}`} className="latest-card__result">
               <HeroIcon hero={primaryHero} eager />
               <div>
-                <strong>{heroName(primaryHero)}</strong>
-                <small>{formatRelative(latest.createdAt)}</small>
+                <strong>{heroName(primaryHero, language)}</strong>
+                <small>{formatRelative(latest.createdAt, language)}</small>
                 <span>
-                  Score {Math.round(latest.result.recommendations[0]?.score ?? 0)}
+                  {text('Оценка', 'Score')} {Math.round(latest.result.recommendations[0]?.score ?? 0)}
                   <i />
-                  Патч {latest.result.patch}
+                  {text('Патч', 'Patch')} {latest.result.patch}
                 </span>
               </div>
               <ArrowSquareOut size={19} weight="duotone" aria-hidden />
@@ -373,23 +414,30 @@ export function DashboardPage() {
           ) : (
             <div className="latest-card__empty">
               <CrosshairSimple size={30} weight="duotone" aria-hidden />
-              <p>Первый проверяемый результат появится после распознанного драфта</p>
+              <p>
+                {text(
+                  'Первый проверяемый результат появится после распознанного драфта',
+                  'Your first verifiable result will appear after a draft is recognized',
+                )}
+              </p>
             </div>
           )}
         </Panel>
 
         <Panel className="method-card" data-reveal>
           <div className="hud-heading">
-            <span>Основа расчёта</span>
+            <span>{text('Основа расчёта', 'Calculation basis')}</span>
             <Target size={20} weight="duotone" aria-hidden />
           </div>
-          <strong>Rolling all-ranks</strong>
+          <strong>{text('Скользящая выборка всех рангов', 'Rolling all-ranks')}</strong>
           <p>
-            Matchup берётся по накопленной статистике всех рангов. В результате остаются
-            отдельные score для matchup, синергии и меты вместе с источником данных.
+            {text(
+              'Противостояния берутся из накопленной статистики всех рангов. Результат сохраняет отдельные оценки противостояний, синергии и меты вместе с источником данных.',
+              'Matchups use accumulated statistics across all ranks. The result keeps separate matchup, synergy, and meta scores together with the data source.',
+            )}
           </p>
           <Link to="/history" className="method-card__link">
-            Проверить прошлые расчёты
+            {text('Проверить прошлые расчёты', 'Review previous calculations')}
             <ArrowSquareOut size={17} weight="duotone" aria-hidden />
           </Link>
         </Panel>
@@ -398,15 +446,23 @@ export function DashboardPage() {
       <section className="dashboard-section" data-reveal>
         <div className="dashboard-section__heading">
           <div>
-            <h2>Последние контрпики</h2>
-            <p>Каждый ответ хранит итоговый score, компоненты расчёта и источник.</p>
+            <h2>{text('Последние контрпики', 'Latest counterpicks')}</h2>
+            <p>
+              {text(
+                'Каждый ответ хранит итоговую оценку, компоненты расчёта и источник.',
+                'Each recommendation keeps its final score, calculation components, and source.',
+              )}
+            </p>
           </div>
-          <TextLink to="/history">Вся история</TextLink>
+          <TextLink to="/history">{text('Вся история', 'Full history')}</TextLink>
         </div>
         {historyQuery.isPending ? (
           <AsyncState status="loading" />
         ) : historyQuery.data?.items.length ? (
-          <div className="feedback-carousel" aria-label="Недавние рекомендации">
+          <div
+            className="feedback-carousel"
+            aria-label={text('Недавние рекомендации', 'Recent recommendations')}
+          >
             {historyQuery.data.items.map((analysis) => {
               const recommendation = analysis.result.recommendations[0];
               if (!recommendation) return null;
@@ -418,12 +474,12 @@ export function DashboardPage() {
                 >
                   <HeroIcon hero={recommendation.hero} />
                   <div className="recommendation-card__body">
-                    <small>{formatRelative(analysis.createdAt)}</small>
-                    <strong>{heroName(recommendation.hero)}</strong>
+                    <small>{formatRelative(analysis.createdAt, language)}</small>
+                    <strong>{heroName(recommendation.hero, language)}</strong>
                     <span>
-                      Score {Math.round(recommendation.score)}
+                      {text('Оценка', 'Score')} {Math.round(recommendation.score)}
                       <i />
-                      Патч {analysis.result.patch}
+                      {text('Патч', 'Patch')} {analysis.result.patch}
                     </span>
                   </div>
                   <ArrowSquareOut size={18} weight="duotone" aria-hidden />
@@ -434,8 +490,11 @@ export function DashboardPage() {
         ) : (
           <AsyncState
             status="empty"
-            title="Решений пока нет"
-            description="Включите ассистента — он сохранит первый результат автоматически."
+            title={text('Решений пока нет', 'No results yet')}
+            description={text(
+              'Включите ассистента — он сохранит первый результат автоматически.',
+              'Turn on the assistant and it will save the first result automatically.',
+            )}
           />
         )}
       </section>
@@ -456,29 +515,44 @@ export function DashboardPage() {
             <span className="consent-dialog__icon">
               <Monitor size={25} weight="duotone" aria-hidden />
             </span>
-            <p className="consent-dialog__lead">Перед первым запуском</p>
-            <h2 id="capture-consent-title">Разрешить захват окна Dota 2?</h2>
+            <p className="consent-dialog__lead">
+              {text('Перед первым запуском', 'Before the first launch')}
+            </p>
+            <h2 id="capture-consent-title">
+              {text('Разрешить захват окна Dota 2?', 'Allow Dota 2 window capture?')}
+            </h2>
             <p>
-              Counterpick делает снимок только в момент драфта, отправляет его на
-              распознавание и не сохраняет исходное изображение в истории.
+              {text(
+                'Counterpick делает снимок только в момент драфта, отправляет его на распознавание и не сохраняет исходное изображение в истории.',
+                'Counterpick captures an image only during the draft, sends it for recognition, and does not save the source image to history.',
+              )}
             </p>
             <ul>
               <li>
                 <CheckCircle size={17} weight="duotone" aria-hidden />
-                Другие окна не анализируются
+                {text('Другие окна не анализируются', 'Other windows are not analyzed')}
               </li>
               <li>
                 <CheckCircle size={17} weight="duotone" aria-hidden />
-                Захват можно выключить одним переключателем
+                {text(
+                  'Захват можно выключить одним переключателем',
+                  'Capture can be disabled with one toggle',
+                )}
               </li>
               <li>
                 <CheckCircle size={17} weight="duotone" aria-hidden />
-                В историю попадает только результат расчёта
+                {text(
+                  'В историю попадает только результат расчёта',
+                  'Only the calculated result is saved to history',
+                )}
               </li>
             </ul>
             {consentMutation.isError ? (
               <p className="form-error" role="alert">
-                Не удалось сохранить разрешение. Попробуйте ещё раз.
+                {text(
+                  'Не удалось сохранить разрешение. Попробуйте ещё раз.',
+                  'Could not save your permission. Try again.',
+                )}
               </p>
             ) : null}
             <div className="consent-dialog__actions">
@@ -487,13 +561,13 @@ export function DashboardPage() {
                 disabled={consentMutation.isPending}
                 onClick={() => setConsentOpen(false)}
               >
-                Не сейчас
+                {text('Не сейчас', 'Not now')}
               </Button>
               <Button
                 loading={consentMutation.isPending}
                 onClick={() => consentMutation.mutate()}
               >
-                Разрешить и включить
+                {text('Разрешить и включить', 'Allow and enable')}
               </Button>
             </div>
           </section>
@@ -504,12 +578,16 @@ export function DashboardPage() {
 }
 
 function PageFallback({ onRetry }: { onRetry: () => void }) {
+  const { text } = useI18n();
   return (
     <main className="page" id="main-content">
       <AsyncState
         status="error"
-        title="Дашборд временно недоступен"
-        description="Не удалось получить лимит и историю с Render."
+        title={text('Дашборд временно недоступен', 'Dashboard is temporarily unavailable')}
+        description={text(
+          'Не удалось получить лимит и историю с Render.',
+          'Could not load your limit and history from Render.',
+        )}
         onRetry={onRetry}
       />
     </main>

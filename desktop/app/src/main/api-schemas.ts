@@ -104,6 +104,7 @@ export const desktopAnalysisResponseSchema = z.discriminatedUnion('status', [
       'not_dota_draft',
       'image_unclear',
       'uncertain_picks',
+      'insufficient_enemy_picks',
       'no_enemy_picks',
     ]),
     revision: desktopFrameSchema.shape.revision,

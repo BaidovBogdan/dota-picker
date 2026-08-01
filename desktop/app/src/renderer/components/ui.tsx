@@ -16,6 +16,7 @@ import type {
 import { Link } from 'react-router';
 
 import { heroName } from '../format';
+import { useI18n } from '../i18n';
 import type { Hero } from '../types';
 import { PageReveal } from './motion';
 
@@ -114,6 +115,7 @@ function HeroMedia({
   source: 'icon' | 'artwork';
   variant: string;
 }) {
+  const { language } = useI18n();
   const src =
     source === 'icon'
       ? hero?.iconUrl || hero?.imageUrl
@@ -125,7 +127,7 @@ function HeroMedia({
 
   return (
     <div className={`hero-media ${variant} ${className}`}>
-      <span aria-hidden>{heroName(hero).slice(0, 1).toUpperCase()}</span>
+      <span aria-hidden>{heroName(hero, language).slice(0, 1).toUpperCase()}</span>
       {src ? (
         <img
           src={src}
@@ -171,21 +173,22 @@ export function AsyncState({
   description?: string;
   onRetry?: () => void;
 }) {
+  const { text } = useI18n();
   const content = {
     loading: {
       icon: <CircleNotchIcon className="spin" size={24} weight="bold" />,
-      title: title ?? 'Загружаем данные',
-      description: description ?? 'Это займёт всего несколько секунд.',
+      title: title ?? text('Загружаем данные', 'Loading data'),
+      description: description ?? text('Это займёт всего несколько секунд.', 'This will only take a few seconds.'),
     },
     error: {
       icon: <WarningCircleIcon size={24} weight="duotone" />,
-      title: title ?? 'Не удалось загрузить данные',
-      description: description ?? 'Проверьте подключение и попробуйте ещё раз.',
+      title: title ?? text('Не удалось загрузить данные', 'Could not load data'),
+      description: description ?? text('Проверьте подключение и попробуйте ещё раз.', 'Check your connection and try again.'),
     },
     empty: {
       icon: <CheckIcon size={24} weight="bold" />,
-      title: title ?? 'Здесь пока пусто',
-      description: description ?? 'Новые данные появятся после первой попытки.',
+      title: title ?? text('Здесь пока пусто', 'Nothing here yet'),
+      description: description ?? text('Новые данные появятся после первой попытки.', 'New data will appear after your first attempt.'),
     },
   }[status];
 
@@ -199,7 +202,7 @@ export function AsyncState({
       {onRetry ? (
         <Button variant="secondary" onClick={onRetry}>
           <ArrowClockwiseIcon size={16} aria-hidden />
-          Повторить
+          {text('Повторить', 'Try again')}
         </Button>
       ) : null}
     </div>

@@ -2,6 +2,7 @@ import { HeartIcon } from '@phosphor-icons/react';
 import { memo, type MouseEvent } from 'react';
 
 import { useFavorite } from '../hooks/use-wishlist';
+import { useI18n } from '../i18n';
 
 export const FavoriteButton = memo(function FavoriteButton({
   heroId,
@@ -17,12 +18,15 @@ export const FavoriteButton = memo(function FavoriteButton({
   onClick?: (event: MouseEvent<HTMLButtonElement>) => void;
 }) {
   const { favorite, toggle, pending } = useFavorite(heroId);
+  const { text } = useI18n();
 
   return (
     <button
       type="button"
       className={favorite ? `${className} is-active` : className}
-      aria-label={favorite ? 'Убрать из избранного' : 'Добавить в избранное'}
+      aria-label={favorite
+        ? text('Убрать из избранного', 'Remove from favorites')
+        : text('Добавить в избранное', 'Add to favorites')}
       aria-pressed={favorite}
       disabled={pending}
       onClick={(event) => {
@@ -35,7 +39,9 @@ export const FavoriteButton = memo(function FavoriteButton({
         weight={favorite ? 'fill' : 'regular'}
         aria-hidden
       />
-      {showLabel ? <span>{favorite ? 'В избранном' : 'В избранное'}</span> : null}
+      {showLabel ? (
+        <span>{favorite ? text('В избранном', 'In favorites') : text('В избранное', 'Add to favorites')}</span>
+      ) : null}
     </button>
   );
 });

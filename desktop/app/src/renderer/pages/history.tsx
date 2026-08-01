@@ -24,58 +24,14 @@ import {
 } from '../components/dota-taxonomy';
 import { MorphingFilterBar } from '../components/morphing-filter-bar';
 import { AsyncState, Badge, Button, HeroIcon, Page } from '../components/ui';
-import { formatDateTime, heroName } from '../format';
+import { formatDateTime, heroName, positionName } from '../format';
+import { useI18n } from '../i18n';
 import type { Analysis, AnalysisSource, Position } from '../types';
 
 type SourceFilter = 'all' | AnalysisSource;
 
-const SOURCE_OPTIONS: readonly AppSelectOption[] = [
-  {
-    value: 'all',
-    label: 'Все источники',
-    icon: <ListBulletsIcon size={16} weight="duotone" />,
-  },
-  {
-    value: 'desktop',
-    label: 'Автоассистент',
-    icon: <DesktopIcon size={16} weight="duotone" />,
-  },
-  {
-    value: 'manual',
-    label: 'Ручной, mobile',
-    icon: <CursorClickIcon size={16} weight="duotone" />,
-  },
-  {
-    value: 'photo',
-    label: 'Фото, mobile',
-    icon: <CameraIcon size={16} weight="duotone" />,
-  },
-];
-
-const POSITION_OPTIONS: readonly AppSelectOption[] = [
-  {
-    value: 'all',
-    label: 'Все позиции',
-    icon: <TargetIcon size={16} weight="duotone" />,
-  },
-  ...POSITION_VALUES.map((value) => ({
-    value: String(value),
-    label: `P${value}`,
-    description:
-      value === 1
-        ? 'Керри'
-        : value === 2
-          ? 'Мид'
-          : value === 3
-            ? 'Оффлейн'
-            : value === 4
-              ? 'Поддержка'
-              : 'Полная поддержка',
-    icon: <PositionIcon position={value} size={16} />,
-  })),
-];
-
 const HistoryItem = memo(function HistoryItem({ analysis }: { analysis: Analysis }) {
+  const { language, text } = useI18n();
   const primary = analysis.result.recommendations[0];
   if (!primary) return null;
 
@@ -86,63 +42,63 @@ const HistoryItem = memo(function HistoryItem({ analysis }: { analysis: Analysis
       <summary>
         <span className="history-item__date">
           <CalendarDotsIcon size={16} weight="duotone" aria-hidden />
-          {formatDateTime(analysis.createdAt)}
+          {formatDateTime(analysis.createdAt, language)}
         </span>
         <HeroIcon hero={primary.hero} />
         <span className="history-item__hero">
-          <strong>{heroName(primary.hero)}</strong>
+          <strong>{heroName(primary.hero, language)}</strong>
           <small className="history-item__taxonomy">
             <PositionLabel position={analysis.input.position} variant="compact" />
             <span aria-hidden>·</span>
             <RankLabel rank={analysis.input.rank ?? null} variant="compact" />
             <span aria-hidden>·</span>
-            <span>Патч {analysis.result.patch}</span>
+            <span>{text('Патч', 'Patch')} {analysis.result.patch}</span>
           </small>
         </span>
         <span className="history-item__score">
-          <small>Score</small>
+          <small>{text('Оценка', 'Score')}</small>
           <strong>{Math.round(primary.score)}</strong>
         </span>
         <Badge tone={primary.confidence === 'high' ? 'success' : 'warning'}>
           {primary.confidence === 'high'
-            ? 'Высокая уверенность'
+            ? text('Высокая уверенность', 'High confidence')
             : primary.confidence === 'medium'
-              ? 'Средняя уверенность'
-              : 'Низкая уверенность'}
+              ? text('Средняя уверенность', 'Medium confidence')
+              : text('Низкая уверенность', 'Low confidence')}
         </Badge>
         <CaretDownIcon className="history-item__chevron" size={18} aria-hidden />
       </summary>
       <div className="history-item__details">
         <div>
-          <span className="history-item__label">Альтернативы</span>
+          <span className="history-item__label">{text('Альтернативы', 'Alternatives')}</span>
           <div className="alternative-heroes">
             {alternatives.length ? (
               alternatives.map((item) => (
                 <span key={item.hero.id}>
                   <HeroIcon hero={item.hero} />
                   <span>
-                    <strong>{heroName(item.hero)}</strong>
-                    <small>{Math.round(item.score)} score</small>
+                    <strong>{heroName(item.hero, language)}</strong>
+                    <small>{Math.round(item.score)} {text('баллов', 'score')}</small>
                   </span>
                 </span>
               ))
             ) : (
-              <small>Сервер не вернул дополнительные варианты</small>
+              <small>{text('Сервер не вернул дополнительные варианты', 'The server returned no additional options')}</small>
             )}
           </div>
         </div>
         <div className="history-item__facts">
           <span>
             <TargetIcon size={16} weight="duotone" aria-hidden />
-            {analysis.input.enemyHeroIds.length} соперников
+            {analysis.input.enemyHeroIds.length} {text('соперников', 'enemies')}
           </span>
           <span>
             <TrophyIcon size={16} weight="duotone" aria-hidden />
-            {primary.evidence?.matchups.games ?? 0} игр в matchup
+            {primary.evidence?.matchups.games ?? 0} {text('игр в matchup', 'matchup games')}
           </span>
         </div>
         <Link className="button button--primary" to={`/result/${analysis.id}`}>
-          Открыть доказательства
+          {text('Открыть доказательства', 'Open evidence')}
         </Link>
       </div>
     </details>
@@ -150,10 +106,26 @@ const HistoryItem = memo(function HistoryItem({ analysis }: { analysis: Analysis
 });
 
 export function HistoryPage() {
+  const { language, locale, text } = useI18n();
   const [search, setSearch] = useState('');
   const [source, setSource] = useState<SourceFilter>('all');
   const [position, setPosition] = useState<'all' | Position>('all');
   const deferredSearch = useDeferredValue(search);
+  const sourceOptions: readonly AppSelectOption[] = [
+    { value: 'all', label: text('Все источники', 'All sources'), icon: <ListBulletsIcon size={16} weight="duotone" /> },
+    { value: 'desktop', label: text('Автоассистент', 'Auto assistant'), icon: <DesktopIcon size={16} weight="duotone" /> },
+    { value: 'manual', label: text('Ручной, mobile', 'Manual, mobile'), icon: <CursorClickIcon size={16} weight="duotone" /> },
+    { value: 'photo', label: text('Фото, mobile', 'Photo, mobile'), icon: <CameraIcon size={16} weight="duotone" /> },
+  ];
+  const positionOptions: readonly AppSelectOption[] = [
+    { value: 'all', label: text('Все позиции', 'All positions'), icon: <TargetIcon size={16} weight="duotone" /> },
+    ...POSITION_VALUES.map((value) => ({
+      value: String(value),
+      label: `P${value}`,
+      description: positionName(value, language),
+      icon: <PositionIcon position={value} size={16} />,
+    })),
+  ];
 
   const query = useInfiniteQuery({
     queryKey: ['history'],
@@ -168,31 +140,31 @@ export function HistoryPage() {
   );
 
   const items = useMemo(() => {
-    const normalizedSearch = deferredSearch.trim().toLocaleLowerCase('ru-RU');
+    const normalizedSearch = deferredSearch.trim().toLocaleLowerCase(locale);
     return allItems.filter((analysis) => {
       if (source !== 'all' && analysis.source !== source) return false;
       if (position !== 'all' && analysis.input.position !== position) return false;
       if (!normalizedSearch) return true;
       return analysis.result.recommendations.some((item) =>
-        heroName(item.hero).toLocaleLowerCase('ru-RU').includes(normalizedSearch),
+        heroName(item.hero, language).toLocaleLowerCase(locale).includes(normalizedSearch),
       );
     });
-  }, [allItems, deferredSearch, position, source]);
+  }, [allItems, deferredSearch, language, locale, position, source]);
 
   return (
     <Page
-      title="История контрпиков"
-      description="Каждый результат хранит входной драфт, численные метрики и происхождение данных."
+      title={text('История контрпиков', 'Counterpick history')}
+      description={text('Каждый результат хранит входной драфт, численные метрики и происхождение данных.', 'Every result keeps the input draft, numerical metrics, and data provenance.')}
     >
-      <MorphingFilterBar className="history-toolbar" label="Фильтры истории контрпиков">
+      <MorphingFilterBar className="history-toolbar" label={text('Фильтры истории контрпиков', 'Counterpick history filters')}>
         <div className="history-toolbar__controls">
           <label className="search-field">
             <MagnifyingGlassIcon size={17} aria-hidden />
-            <span className="sr-only">Поиск по герою</span>
+            <span className="sr-only">{text('Поиск по герою', 'Search by hero')}</span>
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Найти героя в рекомендациях"
+              placeholder={text('Найти героя в рекомендациях', 'Find a recommended hero')}
               type="search"
             />
           </label>
@@ -200,8 +172,8 @@ export function HistoryPage() {
             className="history-filter-select history-filter-select--source"
             value={source}
             onValueChange={(value) => setSource(value as SourceFilter)}
-            options={SOURCE_OPTIONS}
-            label="Источник"
+            options={sourceOptions}
+            label={text('Источник', 'Source')}
             leadingIcon={<FunnelIcon size={16} weight="duotone" />}
           />
           <AppSelect
@@ -210,14 +182,14 @@ export function HistoryPage() {
             onValueChange={(value) =>
               setPosition(value === 'all' ? 'all' : (Number(value) as Position))
             }
-            options={POSITION_OPTIONS}
-            label="Позиция"
+            options={positionOptions}
+            label={text('Позиция', 'Position')}
             leadingIcon={<TargetIcon size={16} weight="duotone" />}
           />
         </div>
         <div className="history-toolbar__summary" aria-live="polite">
           <strong>{items.length}</strong>
-          <span>результатов · сначала новые</span>
+          <span>{text('результатов · сначала новые', 'results · newest first')}</span>
         </div>
       </MorphingFilterBar>
 
@@ -234,11 +206,11 @@ export function HistoryPage() {
       ) : (
         <AsyncState
           status="empty"
-          title={search ? 'Ничего не найдено' : 'История пока пуста'}
+          title={search ? text('Ничего не найдено', 'Nothing found') : text('История пока пуста', 'History is empty')}
           description={
             search
-              ? 'Измените запрос или сбросьте фильтры.'
-              : 'Включите ассистента на главной — первый результат появится здесь.'
+              ? text('Измените запрос или сбросьте фильтры.', 'Change the query or reset the filters.')
+              : text('Включите ассистента на главной — первый результат появится здесь.', 'Turn on the assistant on the home page and your first result will appear here.')
           }
         />
       )}
@@ -250,7 +222,7 @@ export function HistoryPage() {
             loading={query.isFetchingNextPage}
             onClick={() => void query.fetchNextPage()}
           >
-            Показать ещё
+            {text('Показать ещё', 'Show more')}
           </Button>
         </div>
       ) : null}

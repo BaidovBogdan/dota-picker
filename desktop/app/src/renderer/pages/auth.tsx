@@ -7,6 +7,7 @@ import {
   EyeSlashIcon,
   KeyIcon,
   ShieldCheckIcon,
+  TranslateIcon,
 } from '@phosphor-icons/react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -14,17 +15,17 @@ import { Controller, useForm } from 'react-hook-form';
 import { useNavigate } from 'react-router';
 import { z } from 'zod';
 
-import authRivalsLoopMp4 from '../assets/auth-rivals-loop.mp4';
-import authRivalsLoopWebm from '../assets/auth-rivals-loop.webm';
-import authRivalsPoster from '../assets/auth-rivals-poster.webp';
+import authHeroesLoop from '../assets/auth-heroes-loop.mp4';
+import authHeroesPoster from '../assets/auth-heroes-poster.jpg';
 import { desktop } from '../bridge';
 import { BrandMark } from '../components/brand-mark';
 import { ImageReveal, PageReveal } from '../components/motion';
 import { OtpCodeField } from '../components/otp-code-field';
 import { Button, InputField } from '../components/ui';
 import { WindowControls } from '../components/window-controls';
+import { useI18n } from '../i18n';
 import { useAppStore } from '../store';
-import type { OtpChallenge } from '../types';
+import type { Language, OtpChallenge } from '../types';
 
 type AuthMode = 'login' | 'register' | 'reset';
 
@@ -39,51 +40,77 @@ type PendingAuth = {
   credentials: Credentials;
 };
 
-const labels: Record<AuthMode, { title: string; description: string; action: string }> = {
+type Translate = (russian: string, english: string) => string;
+
+const getLabels = (
+  text: Translate,
+): Record<AuthMode, { title: string; description: string; action: string }> => ({
   login: {
-    title: 'Вход в Counterpick',
-    description: 'История и лимит попыток останутся на одном аккаунте.',
-    action: 'Получить код',
+    title: text('Вход в Counterpick', 'Sign in to Counterpick'),
+    description: text(
+      'История и лимит попыток останутся на одном аккаунте.',
+      'Your history and attempt limit stay with one account.',
+    ),
+    action: text('Получить код', 'Get code'),
   },
   register: {
-    title: 'Новый аккаунт',
-    description: 'Подтвердите почту и сразу включайте ассистента.',
-    action: 'Подтвердить почту',
+    title: text('Новый аккаунт', 'Create an account'),
+    description: text(
+      'Подтвердите почту и сразу включайте ассистента.',
+      'Verify your email and start using the assistant right away.',
+    ),
+    action: text('Подтвердить почту', 'Verify email'),
   },
   reset: {
-    title: 'Восстановление доступа',
-    description: 'Задайте новый пароль и подтвердите его кодом из письма.',
-    action: 'Получить код',
+    title: text('Восстановление доступа', 'Restore access'),
+    description: text(
+      'Задайте новый пароль и подтвердите его кодом из письма.',
+      'Set a new password and confirm it with the code from your email.',
+    ),
+    action: text('Получить код', 'Get code'),
   },
-};
+});
 
-const getSchema = (mode: AuthMode) =>
+const getSchema = (mode: AuthMode, text: Translate) =>
   z
     .object({
-      email: z.string().trim().email('Введите корректный email'),
-      password: z.string().min(10, 'Минимум 10 символов').max(128, 'Не более 128 символов'),
+      email: z.string().trim().email(text('Введите корректный email', 'Enter a valid email')),
+      password: z
+        .string()
+        .min(10, text('Минимум 10 символов', 'Use at least 10 characters'))
+        .max(128, text('Не более 128 символов', 'Use no more than 128 characters')),
       confirmPassword: z.string().optional(),
     })
     .superRefine((value, context) => {
       if (mode !== 'login' && value.confirmPassword !== value.password) {
         context.addIssue({
           code: z.ZodIssueCode.custom,
-          message: 'Пароли не совпадают',
+          message: text('Пароли не совпадают', 'Passwords do not match'),
           path: ['confirmPassword'],
         });
       }
     });
 
-const otpSchema = z.object({
-  code: z
-    .string()
-    .trim()
-    .regex(/^\d{4}$/, 'Введите четырёхзначный код из письма'),
-});
+const getOtpSchema = (text: Translate) =>
+  z.object({
+    code: z
+      .string()
+      .trim()
+      .regex(
+        /^\d{4}$/,
+        text('Введите четырёхзначный код из письма', 'Enter the four-digit code from your email'),
+      ),
+  });
 
-function getErrorMessage(error: unknown) {
-  if (error instanceof Error && error.message) return error.message;
-  return 'Не удалось выполнить запрос. Попробуйте ещё раз.';
+function getErrorMessage(error: unknown, language: Language, text: Translate) {
+  const fallback = text(
+    'Не удалось выполнить запрос. Попробуйте ещё раз.',
+    'Could not complete the request. Please try again.',
+  );
+  if (!(error instanceof Error) || !error.message) return fallback;
+  const message = error.message.replace(/^\[[A-Z0-9_]+]\s*/, '');
+  if (language === 'en' && /[А-ЯЁа-яё]/u.test(message)) return fallback;
+  return message;
 }
 
 function useReducedMotion() {
@@ -107,12 +134,17 @@ export function AuthPage() {
   const [pending, setPending] = useState<PendingAuth | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [videoFailed, setVideoFailed] = useState(false);
+  const [videoReady, setVideoReady] = useState(false);
+  const [videoAtSeam, setVideoAtSeam] = useState(true);
   const reducedMotion = useReducedMotion();
   const videoRef = useRef<HTMLVideoElement>(null);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { language, text } = useI18n();
   const setAccount = useAppStore((state) => state.setAccount);
-  const schema = useMemo(() => getSchema(mode), [mode]);
+  const setPreferences = useAppStore((state) => state.setPreferences);
+  const schema = useMemo(() => getSchema(mode, text), [language, mode]);
+  const otpSchema = useMemo(() => getOtpSchema(text), [language]);
 
   const credentialsForm = useForm<Credentials>({
     resolver: zodResolver(schema),
@@ -142,7 +174,7 @@ export function AuthPage() {
 
   const verifyMutation = useMutation({
     mutationFn: async ({ code }: { code: string }) => {
-      if (!pending) throw new Error('Сначала запросите код');
+      if (!pending) throw new Error(text('Сначала запросите код', 'Request a code first'));
       const input = {
         email: pending.credentials.email.trim().toLowerCase(),
         password: pending.credentials.password,
@@ -163,6 +195,18 @@ export function AuthPage() {
       queryClient.setQueryData(['session'], { authenticated: true, account });
       navigate('/', { replace: true });
     },
+  });
+  const languageMutation = useMutation({
+    mutationFn: (nextLanguage: Language) => desktop.preferences.update({ language: nextLanguage }),
+    onMutate: (nextLanguage) => {
+      const previous = useAppStore.getState().preferences;
+      if (previous) setPreferences({ ...previous, language: nextLanguage });
+      return { previous };
+    },
+    onError: (_error, _nextLanguage, context) => {
+      if (context?.previous) setPreferences(context.previous);
+    },
+    onSuccess: setPreferences,
   });
 
   const selectMode = (nextMode: AuthMode) => {
@@ -189,7 +233,7 @@ export function AuthPage() {
     requestMutation.mutate(pending.credentials);
   };
 
-  const copy = labels[mode];
+  const copy = getLabels(text)[mode];
   const busy = requestMutation.isPending || verifyMutation.isPending;
 
   useEffect(() => {
@@ -215,38 +259,71 @@ export function AuthPage() {
           <BrandMark />
           <span>COUNTERPICK</span>
         </div>
-        <WindowControls />
+        <div className="auth-titlebar__actions">
+          <button
+            className="auth-language-toggle"
+            type="button"
+            aria-label={text('Переключить на английский', 'Switch to Russian')}
+            title={text('English', 'Русский')}
+            disabled={languageMutation.isPending}
+            onClick={() => languageMutation.mutate(language === 'ru' ? 'en' : 'ru')}
+          >
+            <TranslateIcon size={15} weight="duotone" aria-hidden />
+            <span>{language === 'ru' ? 'EN' : 'RU'}</span>
+          </button>
+          <WindowControls />
+        </div>
       </header>
       <ImageReveal className="auth-backdrop">
-        <img className="auth-backdrop__poster" src={authRivalsPoster} alt="" aria-hidden />
+        <img className="auth-backdrop__poster" src={authHeroesPoster} alt="" aria-hidden />
         {!reducedMotion && !videoFailed ? (
-          <video
-            ref={videoRef}
-            className="auth-backdrop__video"
-            autoPlay
-            muted
-            loop
-            playsInline
-            preload="auto"
-            poster={authRivalsPoster}
-            disablePictureInPicture
-            aria-hidden
-            tabIndex={-1}
-            onError={() => setVideoFailed(true)}
-          >
-            <source src={authRivalsLoopWebm} type="video/webm" />
-            <source src={authRivalsLoopMp4} type="video/mp4" />
-          </video>
+          <>
+            <video
+              ref={videoRef}
+              className={`auth-backdrop__video${videoReady ? ' is-ready' : ''}`}
+              autoPlay
+              muted
+              loop
+              playsInline
+              preload="auto"
+              poster={authHeroesPoster}
+              disablePictureInPicture
+              aria-hidden
+              tabIndex={-1}
+              onCanPlay={() => setVideoReady(true)}
+              onTimeUpdate={(event) => {
+                const video = event.currentTarget;
+                setVideoAtSeam(
+                  video.currentTime < 0.75 || video.duration - video.currentTime < 0.75,
+                );
+              }}
+              onError={() => {
+                setVideoReady(false);
+                setVideoFailed(true);
+              }}
+            >
+              <source src={authHeroesLoop} type="video/mp4" />
+            </video>
+            <div
+              className={`auth-backdrop__loop-mask${videoAtSeam ? ' is-visible' : ''}`}
+              aria-hidden
+            />
+          </>
         ) : null}
         <div className="auth-backdrop__veil" />
       </ImageReveal>
       <main className="auth-stage">
         <section className="auth-intro">
           <h1>
-            Читайте драфт.
-            <span>Отвечайте до последнего пика.</span>
+            {text('Читайте драфт.', 'Read the draft.')}
+            <span>{text('Отвечайте до последнего пика.', 'Answer every pick.')}</span>
           </h1>
-          <p>Замечает пики, считает контрпик и сохраняет доказательства.</p>
+          <p>
+            {text(
+              'Замечает пики, считает контрпик и сохраняет доказательства.',
+              'Detects picks, calculates counters, and keeps the evidence.',
+            )}
+          </p>
         </section>
         <PageReveal>
           <section className="auth-console" data-reveal>
@@ -262,21 +339,21 @@ export function AuthPage() {
                   <div
                     className="auth-mode-switch"
                     data-mode={mode}
-                    aria-label="Выберите действие"
+                    aria-label={text('Выберите действие', 'Choose an action')}
                   >
                     <button
                       type="button"
                       className={mode === 'login' ? 'is-active' : ''}
                       onClick={() => selectMode('login')}
                     >
-                      Войти
+                      {text('Войти', 'Sign in')}
                     </button>
                     <button
                       type="button"
                       className={mode === 'register' ? 'is-active' : ''}
                       onClick={() => selectMode('register')}
                     >
-                      Регистрация
+                      {text('Регистрация', 'Register')}
                     </button>
                   </div>
                 ) : null}
@@ -302,7 +379,7 @@ export function AuthPage() {
                     </span>
                   </InputField>
                   <InputField
-                    label={mode === 'reset' ? 'Новый пароль' : 'Пароль'}
+                    label={mode === 'reset' ? text('Новый пароль', 'New password') : text('Пароль', 'Password')}
                     error={credentialsForm.formState.errors.password?.message}
                   >
                     <span className="input-shell">
@@ -310,13 +387,17 @@ export function AuthPage() {
                       <input
                         type={showPassword ? 'text' : 'password'}
                         autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-                        placeholder="Не менее 10 символов"
+                        placeholder={text('Не менее 10 символов', 'At least 10 characters')}
                         {...credentialsForm.register('password')}
                       />
                       <button
                         type="button"
                         className="input-shell__action"
-                        aria-label={showPassword ? 'Скрыть пароль' : 'Показать пароль'}
+                        aria-label={
+                          showPassword
+                            ? text('Скрыть пароль', 'Hide password')
+                            : text('Показать пароль', 'Show password')
+                        }
                         onClick={() => setShowPassword((value) => !value)}
                       >
                         {showPassword ? (
@@ -329,7 +410,7 @@ export function AuthPage() {
                   </InputField>
                   {mode !== 'login' ? (
                     <InputField
-                      label="Повторите пароль"
+                      label={text('Повторите пароль', 'Confirm password')}
                       error={credentialsForm.formState.errors.confirmPassword?.message}
                     >
                       <span className="input-shell">
@@ -337,7 +418,7 @@ export function AuthPage() {
                         <input
                           type={showPassword ? 'text' : 'password'}
                           autoComplete="new-password"
-                          placeholder="Тот же пароль"
+                          placeholder={text('Тот же пароль', 'Enter the same password')}
                           {...credentialsForm.register('confirmPassword')}
                         />
                       </span>
@@ -345,7 +426,7 @@ export function AuthPage() {
                   ) : null}
                   {requestMutation.isError ? (
                     <p className="form-error" role="alert">
-                      {getErrorMessage(requestMutation.error)}
+                      {getErrorMessage(requestMutation.error, language, text)}
                     </p>
                   ) : null}
                   <Button type="submit" loading={requestMutation.isPending}>
@@ -356,12 +437,12 @@ export function AuthPage() {
                 <div className="auth-console__footer">
                   {mode === 'login' ? (
                     <button type="button" onClick={() => selectMode('reset')}>
-                      Забыли пароль?
+                      {text('Забыли пароль?', 'Forgot your password?')}
                     </button>
                   ) : (
                     <button type="button" onClick={() => selectMode('login')}>
                       <ArrowLeftIcon size={16} weight="bold" aria-hidden />
-                      Вернуться ко входу
+                      {text('Вернуться ко входу', 'Back to sign in')}
                     </button>
                   )}
                 </div>
@@ -379,7 +460,7 @@ export function AuthPage() {
                   disabled={busy}
                 >
                   <ArrowLeftIcon size={17} weight="bold" aria-hidden />
-                  Назад
+                  {text('Назад', 'Back')}
                 </button>
                 <EnvelopeSimpleIcon
                   className="otp-form__icon"
@@ -387,9 +468,10 @@ export function AuthPage() {
                   weight="duotone"
                   aria-hidden
                 />
-                <h2>Введите код из письма</h2>
+                <h2>{text('Введите код из письма', 'Enter the code from your email')}</h2>
                 <p>
-                  Отправили его на <strong>{pending.credentials.email}</strong>.
+                  {text('Отправили его на', 'We sent it to')}{' '}
+                  <strong>{pending.credentials.email}</strong>.
                 </p>
                 <Controller
                   control={otpForm.control}
@@ -398,12 +480,15 @@ export function AuthPage() {
                     <OtpCodeField
                       name={field.name}
                       value={field.value}
-                      label="Одноразовый код"
-                      hint="В тестовой среде используйте 1234"
+                      label={text('Одноразовый код', 'One-time code')}
+                      hint={text(
+                        'В тестовой среде используйте 1234',
+                        'Use 1234 in the test environment',
+                      )}
                       error={
                         fieldState.error?.message ??
                         (verifyMutation.isError
-                          ? getErrorMessage(verifyMutation.error)
+                          ? getErrorMessage(verifyMutation.error, language, text)
                           : undefined)
                       }
                       autoFocus
@@ -425,7 +510,7 @@ export function AuthPage() {
                   disabled={busy}
                   onClick={resendOtp}
                 >
-                  Отправить новый код
+                  {text('Отправить новый код', 'Send a new code')}
                 </button>
               </form>
             )}

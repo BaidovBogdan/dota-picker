@@ -5,33 +5,36 @@ import { Link } from 'react-router';
 
 import { desktop } from '../bridge';
 import { FavoriteButton } from '../components/favorite-button';
-import { formatPercent, heroName } from '../format';
+import { formatPercent, heroName, roleName } from '../format';
+import { useI18n } from '../i18n';
 import { AsyncState, HeroArtwork, Page } from '../components/ui';
 import { useAppStore } from '../store';
 import type { Hero } from '../types';
 
 const WishlistCard = memo(function WishlistCard({ hero }: { hero: Hero }) {
+  const { language, text } = useI18n();
+  const name = heroName(hero, language);
   return (
     <article className="wishlist-card">
       <Link
         className="wishlist-card__link"
         to={`/hero/${hero.id}`}
-        aria-label={`Открыть статистику ${heroName(hero)}`}
+        aria-label={text(`Открыть статистику ${name}`, `Open ${name} statistics`)}
       >
         <div className="wishlist-card__media">
           <HeroArtwork hero={hero} />
         </div>
         <div className="wishlist-card__body">
-          <span>{hero.roles?.slice(0, 2).join(' · ') || 'Роли уточняются'}</span>
-          <strong>{heroName(hero)}</strong>
+          <span>{hero.roles?.slice(0, 2).map((role) => roleName(role, language)).join(' · ') || text('Роли уточняются', 'Roles pending')}</span>
+          <strong>{name}</strong>
           <div className="wishlist-card__meta">
             <small>
               {typeof hero.winRate === 'number'
-                ? `${formatPercent(hero.winRate)} побед`
-                : 'Статистика героя'}
+                ? text(`${formatPercent(hero.winRate, 1, language)} побед`, `${formatPercent(hero.winRate, 1, language)} win rate`)
+                : text('Статистика героя', 'Hero statistics')}
             </small>
             <span>
-              Открыть
+              {text('Открыть', 'Open')}
               <ArrowUpRightIcon size={14} aria-hidden />
             </span>
           </div>
@@ -47,6 +50,7 @@ const WishlistCard = memo(function WishlistCard({ hero }: { hero: Hero }) {
 });
 
 export function WishlistPage() {
+  const { language, locale, text } = useI18n();
   const [search, setSearch] = useState('');
   const deferredSearch = useDeferredValue(search);
   const wishlist = useAppStore((state) => state.wishlist);
@@ -57,20 +61,20 @@ export function WishlistPage() {
   });
 
   const heroes = useMemo(() => {
-    const normalized = deferredSearch.trim().toLocaleLowerCase('ru-RU');
+    const normalized = deferredSearch.trim().toLocaleLowerCase(locale);
     const set = new Set(wishlist);
     return (
       query.data
         ?.filter((hero) => set.has(hero.id))
-        .filter((hero) => !normalized || heroName(hero).toLocaleLowerCase('ru-RU').includes(normalized)) ??
+        .filter((hero) => !normalized || heroName(hero, language).toLocaleLowerCase(locale).includes(normalized)) ??
       []
     );
-  }, [deferredSearch, query.data, wishlist]);
+  }, [deferredSearch, language, locale, query.data, wishlist]);
 
   return (
     <Page
-      title="Герои в вашем пуле"
-      description="Сохранённая мета и сборки без повторного поиска."
+      title={text('Герои в вашем пуле', 'Heroes in your pool')}
+      description={text('Сохранённая мета и сборки без повторного поиска.', 'Saved meta insights and builds without searching again.')}
       actions={
         wishlist.length ? (
           <span className="page-counter">
@@ -83,12 +87,12 @@ export function WishlistPage() {
       {wishlist.length ? (
         <label className="search-field wishlist-search" data-reveal>
           <MagnifyingGlassIcon size={17} aria-hidden />
-          <span className="sr-only">Найти в избранном</span>
+          <span className="sr-only">{text('Найти в избранном', 'Search favorites')}</span>
           <input
             type="search"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Найти в избранном"
+            placeholder={text('Найти в избранном', 'Search favorites')}
           />
         </label>
       ) : null}
@@ -106,11 +110,11 @@ export function WishlistPage() {
       ) : (
         <AsyncState
           status="empty"
-          title={search ? 'Ничего не найдено' : 'Избранных героев пока нет'}
+          title={search ? text('Ничего не найдено', 'Nothing found') : text('Избранных героев пока нет', 'No favorite heroes yet')}
           description={
             search
-              ? 'Попробуйте другой запрос.'
-              : 'Добавляйте героев со страницы меты или из их подробной статистики.'
+              ? text('Попробуйте другой запрос.', 'Try another search.')
+              : text('Добавляйте героев со страницы меты или из их подробной статистики.', 'Add heroes from the meta page or their detailed statistics.')
           }
         />
       )}

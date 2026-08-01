@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { useI18n } from '../i18n';
 
 const OTP_LENGTH = 4;
 
@@ -38,6 +39,7 @@ export function OtpCodeField({
   pending = false,
   disabled = false,
 }: OtpCodeFieldProps) {
+  const { text } = useI18n();
   const generatedId = useId();
   const inputId = `otp-${generatedId}`;
   const hintId = hint ? `${inputId}-hint` : undefined;
@@ -155,7 +157,7 @@ export function OtpCodeField({
       ) : null}
       {pending ? (
         <span className="sr-only" id={statusId} role="status">
-          Проверяем код
+          {text('Проверяем код', 'Verifying code')}
         </span>
       ) : null}
     </div>

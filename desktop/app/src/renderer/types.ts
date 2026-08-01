@@ -78,12 +78,18 @@ export type Preferences = {
   rank: number | null;
   startWithWindows: boolean;
   minimizeToTray: boolean;
+  overlayShortcut: string;
   wishlist: number[];
   assistantEnabled: boolean;
   captureConsent: {
     accepted: boolean;
     acceptedAt: string | null;
   };
+};
+
+export type OverlayShortcutStatus = {
+  shortcut: string;
+  available: boolean;
 };
 
 export type HeroAttribute = 'str' | 'agi' | 'int' | 'all';
@@ -396,6 +402,10 @@ export type NativeBridge = {
   preferences: {
     get: () => Promise<Preferences>;
     update: (input: Partial<Preferences>) => Promise<Preferences>;
+  };
+  shortcuts: {
+    getOverlay: () => Promise<OverlayShortcutStatus>;
+    setOverlay: (shortcut: string) => Promise<OverlayShortcutStatus>;
   };
   window: {
     minimize: () => Promise<void> | void;
