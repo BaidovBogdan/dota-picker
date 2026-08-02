@@ -206,7 +206,6 @@ function createOverlayWindow(): BrowserWindow {
     transparent: true,
     backgroundColor: '#00000000',
     alwaysOnTop: true,
-    focusable: process.platform !== 'win32',
     skipTaskbar: true,
     resizable: false,
     minimizable: false,
@@ -248,6 +247,14 @@ function createOverlayWindow(): BrowserWindow {
   });
   window.on('hide', () => {
     overlayDesiredVisible = false;
+  });
+  window.on('focus', () => {
+    raiseOverlayWindow(window);
+  });
+  window.on('blur', () => {
+    setImmediate(() => {
+      if (overlayDesiredVisible && overlayWindow === window) raiseOverlayWindow(window);
+    });
   });
 
   return window;

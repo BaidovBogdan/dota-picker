@@ -1482,8 +1482,7 @@ h2 {
 }
 
 .update-dialog h2:focus {
-  outline: 1px solid color-mix(in srgb, var(--teal) 64%, transparent);
-  outline-offset: 6px;
+  outline: none;
 }
 
 .update-dialog__description {
