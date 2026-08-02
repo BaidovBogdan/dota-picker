@@ -584,6 +584,9 @@ async function bootstrap(): Promise<void> {
     updates,
     onPreferencesChanged: async (previous, current) => {
       if (previous.position !== current.position || previous.rank !== current.rank) {
+        if (previous.position !== current.position) {
+          engine?.useManualPositionForCurrentDraft();
+        }
         await engine?.refresh(true);
       }
       if (engine) trayController?.refresh(engine.getState());
@@ -645,10 +648,11 @@ async function bootstrap(): Promise<void> {
             : 'Включите помощник в Counterpick',
         );
       }
+      engine?.useManualPositionForCurrentDraft();
       if (current.position !== position) {
         await preferences.update({ position });
-        await engine?.refresh(true);
       }
+      await engine?.refresh(true);
       const state = await getOverlayState();
       publishOverlayState(state);
       return state;

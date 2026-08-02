@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { desktopCapturer, type NativeImage } from 'electron';
-import type { Analysis, EngineState, Preferences } from '../shared/contracts.js';
+import type { Analysis, EngineState, Position, Preferences } from '../shared/contracts.js';
 import type { ApiClient } from './api-client.js';
 import { DesktopError } from './errors.js';
 import { GsiReceiver, type GsiPayload } from './gsi.js';
 import type { PreferencesStore } from './preferences-store.js';
 
-const captureIntervalMs = 21_000;
+const captureIntervalMs = 5_000;
 const captureDebounceMs = 1_500;
 const gsiFreshnessMs = 20_000;
 const lastSeenPublishIntervalMs = 10_000;
@@ -71,10 +71,14 @@ function hashDistance(left: string, right: string): number {
   return distance + Math.abs(left.length - right.length) * 4;
 }
 
-function analysisMatchesPreferences(analysis: Analysis | null, preferences: Preferences): boolean {
+function analysisMatchesPreferences(
+  analysis: Analysis | null,
+  preferences: Preferences,
+  detectedPosition: Position | null,
+): boolean {
   return Boolean(
     analysis
-    && analysis.input.position === preferences.position
+    && analysis.input.position === (detectedPosition ?? preferences.position)
     && (analysis.input.rank ?? null) === preferences.rank,
   );
 }
@@ -138,6 +142,7 @@ export class DraftEngine {
   private retryRequested = false;
   private forceRefresh = false;
   private refreshFromCompleted = false;
+  private autoDetectPosition = true;
 
   constructor(
     private readonly api: ApiClient,
@@ -215,6 +220,19 @@ export class DraftEngine {
     });
   }
 
+  useManualPositionForCurrentDraft(): void {
+    if (!this.inDraft || !this.autoDetectPosition) return;
+    this.autoDetectPosition = false;
+    if (!this.state.recognition?.detectedPosition) return;
+    this.update({
+      ...this.state,
+      recognition: {
+        ...this.state.recognition,
+        detectedPosition: null,
+      },
+    });
+  }
+
   async dispose(): Promise<void> {
     await this.enqueueTransition(() => this.disable(false));
   }
@@ -279,6 +297,7 @@ export class DraftEngine {
     this.retryRequested = false;
     this.forceRefresh = false;
     this.refreshFromCompleted = false;
+    this.autoDetectPosition = true;
     this.lastGsiAt = 0;
     this.lastSeenPublishedAt = 0;
     this.update({
@@ -402,6 +421,7 @@ export class DraftEngine {
     this.retryRequested = false;
     this.forceRefresh = false;
     this.refreshFromCompleted = false;
+    this.autoDetectPosition = true;
   }
 
   private endDraftSession(): void {
@@ -456,11 +476,20 @@ export class DraftEngine {
         && this.retryRequested;
       const currentPreferences = await this.preferences.get();
       if (!this.isCurrentCapture(generation)) return;
+      const previousDetectedPosition = this.autoDetectPosition
+        ? this.state.recognition?.detectedPosition ?? null
+        : null;
+      const requestPosition = previousDetectedPosition ?? currentPreferences.position;
+      const shouldDetectPosition = this.autoDetectPosition && previousDetectedPosition === null;
       if (unchanged && !retryingFailedFrame && !this.forceRefresh) {
         const restoreCompleted = (
           this.sessionCompleted
           || (this.refreshRequested && this.refreshFromCompleted)
-        ) && analysisMatchesPreferences(this.state.latestAnalysis, currentPreferences);
+        ) && analysisMatchesPreferences(
+          this.state.latestAnalysis,
+          currentPreferences,
+          this.state.recognition?.detectedPosition ?? null,
+        );
         this.refreshRequested = false;
         this.retryRequested = false;
         this.refreshFromCompleted = false;
@@ -544,11 +573,12 @@ export class DraftEngine {
       }
       const response = await this.api.analyzeDesktop(
         this.requestImage,
-        currentPreferences.position,
+        requestPosition,
         currentPreferences.rank,
         this.sessionId,
         this.revision,
         this.requestKey,
+        shouldDetectPosition,
       );
       if (!this.isCurrentCapture(generation)) return;
       if (this.analyzingTimer) clearTimeout(this.analyzingTimer);
@@ -567,6 +597,12 @@ export class DraftEngine {
         });
         return;
       }
+      const recognition = this.autoDetectPosition
+        ? {
+            ...response.recognition,
+            detectedPosition: response.recognition.detectedPosition ?? previousDetectedPosition,
+          }
+        : { ...response.recognition, detectedPosition: null };
       if (response.status === 'waiting') {
         this.requestKey = null;
         this.requestImage = null;
@@ -577,7 +613,7 @@ export class DraftEngine {
           message: waitingMessages[response.reason],
           latestAnalysisId: null,
           latestAnalysis: null,
-          recognition: response.recognition,
+          recognition,
         });
         return;
       }
@@ -593,7 +629,7 @@ export class DraftEngine {
         message: refreshQueuedDuringAnalysis ? 'Проверяем новые пики' : 'Контрпики готовы',
         latestAnalysisId: response.analysis.id,
         latestAnalysis: response.analysis,
-        recognition: response.recognition,
+        recognition,
       });
     } catch (error) {
       if (!this.isCurrentCapture(generation)) return;

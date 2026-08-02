@@ -336,6 +336,7 @@ export type EngineState = {
   refreshPending: boolean;
   recognition?: {
     quality: 'clear' | 'partial' | 'not_dota' | 'too_blurry';
+    detectedPosition: Position | null;
     recognized: Array<{
       side: 'ally' | 'enemy' | 'unknown';
       slot: number;
@@ -375,6 +376,7 @@ export type OverlayState = {
   dotaDetected: boolean;
   draftActive: boolean;
   position: Position;
+  positionSource: 'detected' | 'manual';
   picks: OverlayPick[];
   recommendations: OverlayRecommendation[];
   latestAnalysisId: string | null;

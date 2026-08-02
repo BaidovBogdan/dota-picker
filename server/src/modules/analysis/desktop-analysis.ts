@@ -12,6 +12,16 @@ export type DesktopDraftDecision =
   | { status: 'waiting'; reason: DesktopWaitingReason }
   | { status: 'ready'; draft: DraftInput };
 
+export function resolveDesktopPosition(
+  recognition: PhotoRecognitionResult,
+  requestedPosition: 1 | 2 | 3 | 4 | 5,
+  autoPosition: boolean,
+): 1 | 2 | 3 | 4 | 5 {
+  return autoPosition
+    ? recognition.detectedPosition ?? requestedPosition
+    : requestedPosition;
+}
+
 export function createDesktopDraft(
   recognition: PhotoRecognitionResult,
   position: 1 | 2 | 3 | 4 | 5,

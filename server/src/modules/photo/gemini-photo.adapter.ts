@@ -9,15 +9,25 @@ import { z } from 'zod';
 import type { AppConfig } from '../../config/env.js';
 import { AppError, ExternalServiceError } from '../../lib/errors.js';
 import type { HeroMeta } from '../heroes/heroes.types.js';
-import { prepareDraftVisionInput } from './draft-pick-bar.js';
-import type { PhotoRecognizer } from './photo-recognizer.js';
-import { recognitionOutputSchema } from './photo.schemas.js';
+import {
+  prepareDraftVisionInput,
+  type DraftVisionInput,
+} from './draft-pick-bar.js';
+import type { PhotoRecognitionOptions, PhotoRecognizer } from './photo-recognizer.js';
+import {
+  positionDetectionOutputSchema,
+  recognitionOutputSchema,
+} from './photo.schemas.js';
 
 const allowedMimeTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const MAX_VISION_REQUEST_MS = 15_000;
+const POSITION_DETECTION_TIMEOUT_MS = 4_000;
 const AUTO_ACCEPT_CONFIDENCE = 0.98;
+const AUTO_DETECT_POSITION_CONFIDENCE = 0.95;
 const recognitionJsonSchema = z.toJSONSchema(recognitionOutputSchema);
 Reflect.deleteProperty(recognitionJsonSchema, '$schema');
+const positionDetectionJsonSchema = z.toJSONSchema(positionDetectionOutputSchema);
+Reflect.deleteProperty(positionDetectionJsonSchema, '$schema');
 const strongDraftUiEvidence = new Set([
   'opposing_team_slots',
   'pick_ban_phase',
@@ -26,6 +36,14 @@ const sideOrder = {
   ally: 0,
   enemy: 1,
   unknown: 2,
+} as const;
+const positionByRoleLabel = {
+  safe_lane: 1,
+  mid_lane: 2,
+  off_lane: 3,
+  soft_support: 4,
+  support: 4,
+  hard_support: 5,
 } as const;
 
 type GeminiClient = {
@@ -81,7 +99,94 @@ export class GeminiPhotoAdapter implements PhotoRecognizer {
     };
   }
 
-  public async recognize(image: Buffer, mimeType: string, heroes: HeroMeta[]) {
+  private async detectPosition(visionInput: DraftVisionInput) {
+    if (!this.client) return null;
+    const topCandidate = visionInput.candidates
+      .filter((entry) => (
+        entry.reliability === 'high'
+        && !entry.enhanced
+        && entry.strategy !== 'salient_band'
+      ))
+      .sort((left, right) => left.sourceTopRatio - right.sourceTopRatio)[0];
+    if (!topCandidate) return null;
+
+    const prompt = [
+      'Analyze this top player-card band from the official Dota 2 hero-pick or draft interface.',
+      'First separate the visible cards by their visual boundaries, then inventory role-labeled cards without deciding which one belongs to the current user.',
+      'List every visible player card that has one fully readable exact role label.',
+      'For each listed card return its left or right teamGroup, zero-based visual slot within that group, whether a non-empty player name is directly visible, the normalized exact roleLabel, and confidence.',
+      'Allowed exact labels are Safe Lane=safe_lane, Mid Lane=mid_lane, Off Lane=off_lane, Soft Support=soft_support, Support=support, and Hard Support=hard_support.',
+      'For each card, inspect only the player-name line directly above its role label and inside the same card boundaries.',
+      'playerNameVisible is true only when non-empty player-name text is actually printed on that exact line; it is false when that line is clearly present but blank.',
+      'Never borrow a player name from an adjacent card, rank label, role label, or another text row.',
+      'Do not use visual color, glow, border, brightness, or selection styling as evidence for any returned field.',
+      'Do not identify the current user, choose a position, infer from heroes or card order, or omit other exact role-labeled cards.',
+      'Use confidence at least 0.95 only when all returned fields and the complete exact role text are directly visible; otherwise omit that card.',
+      'Return an empty cards array when no role-labeled cards satisfy these rules.',
+    ].join(' ');
+    const response = await this.client.generateContent({
+      model: this.config.visionModel,
+      contents: [{
+        role: 'user',
+        parts: [
+          { text: prompt },
+          {
+            inlineData: {
+              data: topCandidate.image.toString('base64'),
+              mimeType: topCandidate.mimeType,
+            },
+            mediaResolution: {
+              level: PartMediaResolutionLevel.MEDIA_RESOLUTION_HIGH,
+            },
+          },
+        ],
+      }],
+      config: {
+        responseMimeType: 'application/json',
+        responseJsonSchema: positionDetectionJsonSchema,
+        maxOutputTokens: 512,
+        seed: 23,
+        abortSignal: AbortSignal.timeout(POSITION_DETECTION_TIMEOUT_MS),
+        thinkingConfig: {
+          thinkingLevel: ThinkingLevel.MINIMAL,
+        },
+      },
+    });
+    if (!response.text) return null;
+
+    let output: unknown;
+    try {
+      output = JSON.parse(response.text);
+    } catch {
+      return null;
+    }
+    const parsed = positionDetectionOutputSchema.safeParse(output);
+    if (!parsed.success) return null;
+    const cards = parsed.data.cards.filter(
+      (entry) => entry.confidence >= AUTO_DETECT_POSITION_CONFIDENCE,
+    );
+    const cardKey = (entry: (typeof cards)[number]) => `${entry.teamGroup}:${entry.slot}`;
+    if (new Set(cards.map(cardKey)).size !== cards.length) return null;
+
+    const completeGroups = (['left', 'right'] as const).flatMap((teamGroup) => {
+      const group = cards.filter((card) => card.teamGroup === teamGroup);
+      if (group.length !== 5) return [];
+      const slots = new Set(group.map((card) => card.slot));
+      const positions = new Set(group.map((card) => positionByRoleLabel[card.roleLabel]));
+      return slots.size === 5 && positions.size === 5 ? group : [];
+    });
+    const unnamedCandidates = completeGroups.filter((card) => !card.playerNameVisible);
+    if (unnamedCandidates.length !== 1) return null;
+    const selectedCard = unnamedCandidates[0];
+    return selectedCard ? positionByRoleLabel[selectedCard.roleLabel] : null;
+  }
+
+  public async recognize(
+    image: Buffer,
+    mimeType: string,
+    heroes: HeroMeta[],
+    options?: PhotoRecognitionOptions,
+  ) {
     if (!allowedMimeTypes.has(mimeType)) {
       throw new AppError(415, 'IMAGE_RECOGNITION_FAILED', 'Unsupported image type');
     }
@@ -144,7 +249,7 @@ export class GeminiPhotoAdapter implements PhotoRecognizer {
     ]);
 
     try {
-      const response = await this.client.generateContent({
+      const recognitionRequest = this.client.generateContent({
         model: this.config.visionModel,
         contents: [{
           role: 'user',
@@ -163,6 +268,13 @@ export class GeminiPhotoAdapter implements PhotoRecognizer {
           },
         },
       });
+      const positionRequest = options?.detectPosition
+        ? this.detectPosition(visionInput).catch(() => null)
+        : Promise.resolve(null);
+      const [response, positionDetection] = await Promise.all([
+        recognitionRequest,
+        positionRequest,
+      ]);
 
       if (!response.text) {
         throw new AppError(422, 'IMAGE_RECOGNITION_FAILED', 'The image could not be recognized');
@@ -179,7 +291,6 @@ export class GeminiPhotoAdapter implements PhotoRecognizer {
       if (!parsed.success) {
         throw new AppError(422, 'IMAGE_RECOGNITION_FAILED', 'The recognition response was invalid');
       }
-
       const selectedCandidate = visionInput.candidates.find(
         (candidate) => candidate.id === parsed.data.selectedCandidate,
       );
@@ -193,6 +304,11 @@ export class GeminiPhotoAdapter implements PhotoRecognizer {
         : isConfirmedDraft && parsed.data.quality !== 'not_dota'
           ? parsed.data.quality
           : 'not_dota';
+      const detectedPosition = isConfirmedDraft
+        && baseQuality !== 'not_dota'
+        && baseQuality !== 'too_blurry'
+        ? positionDetection
+        : null;
       const indexed = heroes.flatMap((hero) => [
         { key: normalizeName(hero.localizedName), hero },
         { key: normalizeName(hero.name), hero },
@@ -303,6 +419,7 @@ export class GeminiPhotoAdapter implements PhotoRecognizer {
         : baseQuality;
       return {
         quality,
+        detectedPosition,
         recognized: normalizedRecognized,
         model: response.modelVersion ?? this.config.visionModel,
       };

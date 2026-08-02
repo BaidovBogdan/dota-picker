@@ -36,6 +36,7 @@ const quota = {
 };
 const trustedRecognition = {
   quality: 'clear' as const,
+  detectedPosition: null,
   model: 'test-model',
   recognized: [
     {
@@ -195,23 +196,30 @@ function createIdempotencyFake(options: IdempotencyFakeOptions = {}) {
 
 type TestAppOptions = IdempotencyFakeOptions & {
   firstFrameWaiting?: boolean;
+  detectedPosition?: 1 | 2 | 3 | 4 | 5 | null;
+  recoveredAnalysisPosition?: 1 | 2 | 3 | 4 | 5;
+  varyAccountPerRequest?: boolean;
 };
 
 async function createTestApp(options: TestAppOptions = {}) {
   const idempotency = createIdempotencyFake(options);
+  const recognitionResult = {
+    ...trustedRecognition,
+    detectedPosition: options.detectedPosition ?? null,
+  };
   const recognize = vi
     .fn<PhotoRecognizer['recognize']>();
   if (options.firstFrameWaiting ?? true) {
     recognize.mockResolvedValueOnce({
-      ...trustedRecognition,
+      ...recognitionResult,
       quality: 'partial',
-      recognized: trustedRecognition.recognized.map((entry) => ({
+      recognized: recognitionResult.recognized.map((entry) => ({
         ...entry,
         needsReview: true,
       })),
     });
   }
-  recognize.mockResolvedValue(trustedRecognition);
+  recognize.mockResolvedValue(recognitionResult);
   let reserveCount = 0;
   const analysisId = '00000000-0000-4000-8000-000000000003';
   const analyze = vi.fn<AnalysisService['analyze']>(async (
@@ -221,12 +229,15 @@ async function createTestApp(options: TestAppOptions = {}) {
   ) => {
     if (execution.resourceId === null) reserveCount += 1;
     idempotency.linkResource(execution.idempotencyRecordId, analysisId);
+    const analysisDraft = execution.resourceId && options.recoveredAnalysisPosition
+      ? { ...draft, position: options.recoveredAnalysisPosition }
+      : draft;
     return {
       analysis: {
         id: analysisId,
         status: 'completed',
         source: 'photo',
-        input: draftSchema.parse(draft),
+        input: draftSchema.parse(analysisDraft),
         result: {
           patch: '7.41',
           metaFetchedAt: '2026-07-29T00:00:00.000Z',
@@ -242,13 +253,16 @@ async function createTestApp(options: TestAppOptions = {}) {
     };
   });
   const quotaGet = vi.fn(async () => quota);
+  let accountSequence = 0;
   const app = Fastify({ logger: false }).withTypeProvider<ZodTypeProvider>();
   openApps.push(app);
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
   app.decorate('authenticate', async (request) => {
     request.user = {
-      sub: accountId,
+      sub: options.varyAccountPerRequest
+        ? `account-${accountSequence += 1}`
+        : accountId,
       kind: 'user',
       type: 'access',
       ver: 0,
@@ -363,6 +377,7 @@ describe('desktop analysis route', () => {
         frameHash: pngHash,
         mimeType: 'image/png',
         position: 2,
+        autoPosition: false,
         rank: null,
         revision: 0,
       },
@@ -375,9 +390,175 @@ describe('desktop analysis route', () => {
       {
         sessionId,
         position: 2,
+        autoPosition: false,
         rank: null,
       },
     );
+  });
+
+  it('uses a detected position in auto mode and fingerprints the mode', async () => {
+    const { app, idempotency, recognize, analyze } = await createTestApp({
+      firstFrameWaiting: false,
+      detectedPosition: 4,
+    });
+    const image = multipartImage();
+    const response = await app.inject({
+      method: 'POST',
+      url: `/v1/analyses/desktop?sessionId=${sessionId}&position=2&autoPosition=true&revision=7`,
+      headers: {
+        'content-type': image.contentType,
+        'idempotency-key': 'auto-position-frame',
+      },
+      payload: image.payload,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      status: 'completed',
+      recognition: { detectedPosition: 4 },
+      analysis: { input: { position: 4 } },
+    });
+    expect(analyze).toHaveBeenCalledWith(
+      accountId,
+      expect.objectContaining({ position: 4 }),
+      expect.any(Object),
+    );
+    expect(recognize).toHaveBeenCalledWith(
+      pngImage,
+      'image/png',
+      [],
+      { detectPosition: true },
+    );
+    expect(idempotency.claim).toHaveBeenNthCalledWith(
+      1,
+      accountId,
+      'analyses.desktop.frame',
+      'auto-position-frame',
+      {
+        sessionId,
+        frameHash: pngHash,
+        mimeType: 'image/png',
+        position: 2,
+        autoPosition: true,
+        rank: null,
+        revision: 7,
+      },
+    );
+    expect(idempotency.claim).toHaveBeenNthCalledWith(
+      2,
+      accountId,
+      'analyses.desktop.session',
+      sessionId,
+      {
+        sessionId,
+        position: 2,
+        autoPosition: true,
+        rank: null,
+      },
+    );
+  });
+
+  it.each([
+    ['omitted manual mode', 4, '', 2],
+    ['explicit manual mode', 4, '&autoPosition=false', 2],
+    ['auto-mode fallback', null, '&autoPosition=true', 2],
+  ] as const)('uses the requested position for %s', async (_label, detectedPosition, query, expected) => {
+    const { app, recognize, analyze } = await createTestApp({
+      firstFrameWaiting: false,
+      detectedPosition,
+    });
+    const image = multipartImage();
+    const response = await app.inject({
+      method: 'POST',
+      url: `/v1/analyses/desktop?sessionId=${sessionId}&position=2${query}&revision=0`,
+      headers: {
+        'content-type': image.contentType,
+        'idempotency-key': `position-fallback-${query || 'default'}`,
+      },
+      payload: image.payload,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      status: 'completed',
+      analysis: { input: { position: expected } },
+    });
+    expect(analyze).toHaveBeenCalledWith(
+      accountId,
+      expect.objectContaining({ position: expected }),
+      expect.any(Object),
+    );
+    expect(recognize).toHaveBeenCalledWith(
+      pngImage,
+      'image/png',
+      [],
+      query === '&autoPosition=true' ? { detectPosition: true } : undefined,
+    );
+  });
+
+  it.each(['1', 'TRUE'])('strictly rejects autoPosition=%s', async (autoPosition) => {
+    const { app, idempotency } = await createTestApp({ firstFrameWaiting: false });
+    const image = multipartImage();
+    const response = await app.inject({
+      method: 'POST',
+      url: `/v1/analyses/desktop?sessionId=${sessionId}&position=2&autoPosition=${autoPosition}&revision=0`,
+      headers: {
+        'content-type': image.contentType,
+        'idempotency-key': `invalid-auto-position-${autoPosition}`,
+      },
+      payload: image.payload,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(idempotency.claim).not.toHaveBeenCalled();
+  });
+
+  it('allows twelve desktop frames per user each minute', async () => {
+    const { app } = await createTestApp();
+    const statuses: number[] = [];
+
+    for (let revision = 0; revision < 13; revision += 1) {
+      const image = multipartImage();
+      const response = await app.inject({
+        method: 'POST',
+        url: `/v1/analyses/desktop?sessionId=${sessionId}&position=2&revision=${revision}`,
+        headers: {
+          'content-type': image.contentType,
+          'idempotency-key': `user-rate-frame-${revision}`,
+        },
+        payload: image.payload,
+      });
+      statuses.push(response.statusCode);
+    }
+
+    expect(statuses.slice(0, 12)).toEqual(Array.from({ length: 12 }, () => 200));
+    expect(statuses[12]).toBe(429);
+  });
+
+  it('allows forty-eight desktop frames per IP each minute across users', async () => {
+    const { app } = await createTestApp({
+      firstFrameWaiting: false,
+      varyAccountPerRequest: true,
+    });
+    const statuses: number[] = [];
+
+    for (let index = 0; index < 49; index += 1) {
+      const image = multipartImage();
+      const uniqueSessionId = `00000000-0000-4000-8000-${index.toString().padStart(12, '0')}`;
+      const response = await app.inject({
+        method: 'POST',
+        url: `/v1/analyses/desktop?sessionId=${uniqueSessionId}&position=2&revision=0`,
+        headers: {
+          'content-type': image.contentType,
+          'idempotency-key': `ip-rate-frame-${index}`,
+        },
+        payload: image.payload,
+      });
+      statuses.push(response.statusCode);
+    }
+
+    expect(statuses.slice(0, 48)).toEqual(Array.from({ length: 48 }, () => 200));
+    expect(statuses[48]).toBe(429);
   });
 
   it('keeps a committed session recoverable when idempotency completion fails', async () => {
@@ -420,6 +601,39 @@ describe('desktop analysis route', () => {
     expect(analyze.mock.calls.at(1)?.[2].resourceId)
       .toBe('00000000-0000-4000-8000-000000000003');
     expect(idempotency.abort.mock.calls.map(([id]) => id)).toEqual(['claim-1']);
+  });
+
+  it('keeps recovered auto-position recognition aligned with the committed analysis', async () => {
+    const { app, recognize } = await createTestApp({
+      firstFrameWaiting: false,
+      failSessionCompletionOnce: true,
+      recoveredAnalysisPosition: 4,
+    });
+    recognize
+      .mockResolvedValueOnce({ ...trustedRecognition, detectedPosition: 4 })
+      .mockResolvedValue({ ...trustedRecognition, detectedPosition: 5 });
+    const request = async (revision: number) => {
+      const image = multipartImage();
+      return app.inject({
+        method: 'POST',
+        url: `/v1/analyses/desktop?sessionId=${sessionId}&position=2&autoPosition=true&revision=${revision}`,
+        headers: {
+          'content-type': image.contentType,
+          'idempotency-key': `position-recovery-frame-${revision}`,
+        },
+        payload: image.payload,
+      });
+    };
+
+    expect((await request(0)).statusCode).toBe(500);
+    const recovered = await request(1);
+
+    expect(recovered.statusCode).toBe(200);
+    expect(recovered.json()).toMatchObject({
+      status: 'completed',
+      recognition: { detectedPosition: 4 },
+      analysis: { input: { position: 4 } },
+    });
   });
 
   it('bounds waiting-frame recognition by the account quota limit', async () => {

@@ -105,6 +105,7 @@ export function DashboardPage() {
     : currentEngine.dotaDetected
       ? 'detected'
       : 'waiting';
+  const activePosition = currentEngine.recognition?.detectedPosition ?? preferences?.position ?? 1;
   const gameSignalTitle = gameSignalUnavailable
     ? text('Сигнал недоступен', 'Signal unavailable')
     : gameSignalMode === 'off'
@@ -266,7 +267,7 @@ export function DashboardPage() {
                 </div>
               ) : null}
               <div className="controller-card__preferences">
-                <PositionLabel position={preferences?.position ?? 1} />
+                <PositionLabel position={activePosition} />
                 <RankLabel rank={preferences?.rank} />
               </div>
             </div>

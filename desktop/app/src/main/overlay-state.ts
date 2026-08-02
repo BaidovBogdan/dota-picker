@@ -35,13 +35,14 @@ function statusMessage(
 function recommendations(
   state: EngineState,
   preferences: Preferences,
+  position: Preferences['position'],
   available: boolean,
 ): OverlayRecommendation[] {
   if (!available) return [];
   const analysis = state.latestAnalysis;
   if (
     !analysis
-    || analysis.input.position !== preferences.position
+    || analysis.input.position !== position
     || (analysis.input.rank ?? null) !== preferences.rank
   ) {
     return [];
@@ -63,6 +64,7 @@ export function createOverlayState(
   authenticated: boolean,
 ): OverlayState {
   const available = authenticated && preferences.assistantEnabled && state.enabled;
+  const position = state.recognition?.detectedPosition ?? preferences.position;
   return {
     language: preferences.language,
     available,
@@ -71,7 +73,8 @@ export function createOverlayState(
     message: statusMessage(state, preferences, authenticated),
     dotaDetected: state.dotaDetected,
     draftActive: state.draftActive,
-    position: preferences.position,
+    position,
+    positionSource: state.recognition?.detectedPosition ? 'detected' : 'manual',
     picks: (available ? state.recognition?.recognized ?? [] : [])
       .filter((pick) => (
         (pick.side === 'ally' || pick.side === 'enemy')
@@ -88,7 +91,7 @@ export function createOverlayState(
         confidence: pick.confidence,
       }))
       .sort((left, right) => left.side.localeCompare(right.side) || left.slot - right.slot),
-    recommendations: recommendations(state, preferences, available),
+    recommendations: recommendations(state, preferences, position, available),
     latestAnalysisId: available ? state.latestAnalysisId : null,
     analysisPosition: available ? state.latestAnalysis?.input.position ?? null : null,
     shortcut: shortcut.shortcut,

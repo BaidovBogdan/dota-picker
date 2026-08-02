@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { createDesktopDraft } from '../src/modules/analysis/desktop-analysis.js';
+import {
+  createDesktopDraft,
+  resolveDesktopPosition,
+} from '../src/modules/analysis/desktop-analysis.js';
 import type { PhotoRecognitionResult } from '../src/modules/photo/photo-recognizer.js';
 
 const trustedEnemy: PhotoRecognitionResult['recognized'][number] = {
@@ -17,6 +20,7 @@ function recognition(
 ): PhotoRecognitionResult {
   return {
     quality: 'clear',
+    detectedPosition: null,
     model: 'test-model',
     recognized: [{ ...trustedEnemy }],
     ...overrides,
@@ -24,6 +28,14 @@ function recognition(
 }
 
 describe('desktop draft decision', () => {
+  it('uses detected, fallback, and manual positions according to autoPosition', () => {
+    const detected = recognition({ detectedPosition: 4 });
+
+    expect(resolveDesktopPosition(detected, 2, true)).toBe(4);
+    expect(resolveDesktopPosition(recognition(), 2, true)).toBe(2);
+    expect(resolveDesktopPosition(detected, 2, false)).toBe(2);
+  });
+
   it('creates a backward-compatible photo draft from trusted picks', () => {
     const result = createDesktopDraft(
       recognition({

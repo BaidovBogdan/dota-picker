@@ -79,6 +79,7 @@ export const historyResponseSchema = z.object({
 
 export const recognitionSchema = z.object({
   quality: z.enum(['clear', 'partial', 'not_dota', 'too_blurry']),
+  detectedPosition: positionSchema.nullable().optional().default(null),
   recognized: z.array(z.object({
     side: z.enum(['ally', 'enemy', 'unknown']),
     slot: z.number().int().min(0).max(4),

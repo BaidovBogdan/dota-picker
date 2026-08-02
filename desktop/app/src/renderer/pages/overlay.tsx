@@ -19,11 +19,12 @@ const emptyState: OverlayState = {
   language: 'en',
   available: false,
   enabled: false,
-  phase: 'off',
+  phase: 'starting',
   message: 'Connecting the overlay',
   dotaDetected: false,
   draftActive: false,
   position: 3,
+  positionSource: 'manual',
   picks: [],
   recommendations: [],
   latestAnalysisId: null,
@@ -212,9 +213,11 @@ function RecommendationCard({
   );
 }
 
-function phaseLabel(state: OverlayState): string {
+function phaseLabel(state: OverlayState, refreshing: boolean): string {
   const language = state.language;
+  if (state.phase === 'starting') return text(language, 'СВЯЗЬ', 'CONNECT');
   if (!state.available || !state.enabled) return text(language, 'ВЫКЛ', 'OFF');
+  if (refreshing) return text(language, 'ОБНОВЛ.', 'SYNC');
   if (state.phase === 'recognizing') return text(language, 'СКАН', 'SCAN');
   if (state.phase === 'analyzing') return text(language, 'РАСЧЁТ', 'CALC');
   if (state.phase === 'ready') return text(language, 'ГОТОВО', 'READY');
@@ -223,6 +226,32 @@ function phaseLabel(state: OverlayState): string {
   }
   if (state.draftActive) return text(language, 'ЭФИР', 'LIVE');
   return text(language, 'ЖДЁМ', 'WAIT');
+}
+
+function statusHeading(
+  state: OverlayState,
+  refreshing: boolean,
+  failed: boolean,
+): string {
+  const language = state.language;
+  if (failed) return text(language, 'Ошибка действия', 'Action failed');
+  if (state.phase === 'starting') return text(language, 'Подключаемся', 'Connecting');
+  if (!state.available || !state.enabled) return text(language, 'Оверлей недоступен', 'Overlay unavailable');
+  if (refreshing) return text(language, 'Проверяем изменения', 'Checking for changes');
+  const labels: Record<OverlayState['phase'], [string, string]> = {
+    off: ['Ассистент выключен', 'Assistant is off'],
+    starting: ['Подключаемся', 'Connecting'],
+    waiting_for_dota: state.dotaDetected
+      ? ['Ждём выбора героев', 'Waiting for hero selection']
+      : ['Ждём Dota 2', 'Waiting for Dota 2'],
+    watching_draft: ['Следим за пиками', 'Watching picks'],
+    recognizing: ['Распознаём героев', 'Reading hero picks'],
+    analyzing: ['Считаем варианты', 'Calculating options'],
+    ready: ['Рекомендации готовы', 'Recommendations ready'],
+    quota: ['Лимит исчерпан', 'Limit reached'],
+    error: ['Нужна проверка', 'Needs attention'],
+  };
+  return text(language, ...labels[state.phase]);
 }
 
 type ActionFailure = {
@@ -261,6 +290,20 @@ export function OverlayPage() {
   const actionErrorText = actionError
     ? actionFailureMessage(actionError, state.language)
     : null;
+  const stateMessage = actionErrorText ?? (
+    state.message.trim()
+    || text(state.language, 'Ожидаем обновление состояния', 'Waiting for a status update')
+  );
+  const positionSourceLabel = state.positionSource === 'detected'
+    ? text(state.language, 'АВТО', 'AUTO')
+    : text(state.language, 'ВРУЧНУЮ', 'MANUAL');
+  const statusTone = actionError || state.phase === 'error' || state.phase === 'quota'
+    ? ' is-error'
+    : refreshing || state.phase === 'recognizing' || state.phase === 'analyzing'
+      ? ' is-busy'
+      : state.available && state.draftActive
+        ? ' is-live'
+        : '';
 
   useEffect(() => {
     document.documentElement.lang = state.language;
@@ -360,10 +403,10 @@ export function OverlayPage() {
             <strong>COUNTERPICK</strong>
           </div>
           <div
-            className={`draft-overlay__status${state.available && state.draftActive ? ' is-live' : ''}`}
+            className={`draft-overlay__status${statusTone}`}
           >
             <span className="draft-overlay__live-dot" aria-hidden />
-            <span>{phaseLabel(state)}</span>
+            <span>{phaseLabel(state, refreshing)}</span>
             <span>{visiblePicks.length}/10</span>
           </div>
           <button
@@ -391,18 +434,22 @@ export function OverlayPage() {
               aria-live={actionError ? 'assertive' : 'polite'}
               aria-atomic="true"
             >
-              <strong>
-                {visibleRecommendations.length
-                  ? text(state.language, 'Три варианта', 'Three options')
-                  : text(state.language, 'Статус', 'Status')}
-              </strong>
-              <span>{actionErrorText ?? state.message}</span>
+              <strong>{statusHeading(state, refreshing, Boolean(actionError))}</strong>
+              <span>{stateMessage}</span>
             </div>
             <div
               className="overlay-position"
               role="group"
               aria-label={text(state.language, 'Ваша позиция', 'Your position')}
             >
+              <span
+                className={`overlay-position__source overlay-position__source--${state.positionSource}`}
+                title={state.positionSource === 'detected'
+                  ? text(state.language, 'Позиция распознана автоматически', 'Position detected automatically')
+                  : text(state.language, 'Используется выбранная вручную позиция', 'Using the manually selected position')}
+              >
+                {positionSourceLabel} P{state.position}
+              </span>
               {positions.map((position) => (
                 <button
                   className={state.available && state.position === position ? 'is-active' : ''}

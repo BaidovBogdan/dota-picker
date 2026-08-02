@@ -63,6 +63,7 @@ export type EngineState = {
   dotaDetected: boolean;
   recognition?: {
     quality: 'clear' | 'partial' | 'not_dota' | 'too_blurry';
+    detectedPosition: Position | null;
     recognized: {
       side: 'ally' | 'enemy' | 'unknown';
       slot: number;

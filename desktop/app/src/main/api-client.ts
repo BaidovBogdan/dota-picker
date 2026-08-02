@@ -272,8 +272,10 @@ export class ApiClient {
     sessionId: string,
     revision: number,
     idempotencyKey: string,
+    autoPosition: boolean,
   ): Promise<DesktopAnalysisResponse> {
     const query = new URLSearchParams({
+      autoPosition: String(autoPosition),
       position: String(position),
       revision: String(revision),
       sessionId,

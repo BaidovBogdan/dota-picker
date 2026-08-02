@@ -2831,8 +2831,6 @@ h2 {
   width: 100%;
   height: 100%;
   overflow: visible;
-  transform: scale(1.07);
-  transform-origin: 50% 46%;
 }
 
 .game-signal-visual__body,
@@ -2907,16 +2905,17 @@ h2 {
   stroke: var(--signal-secondary);
   stroke-linecap: round;
   transition: stroke 540ms ease, opacity 540ms ease;
+  vector-effect: non-scaling-stroke;
 }
 
 .game-signal-visual__shell-rim--wide {
-  stroke-width: 0.46;
-  opacity: 0.22;
+  stroke-width: 1px;
+  opacity: 0.18;
 }
 
 .game-signal-visual__shell-rim--tall {
-  stroke-width: 0.38;
-  opacity: 0.14;
+  stroke-width: 1px;
+  opacity: 0.11;
 }
 
 .game-signal-visual__filaments {
@@ -2929,33 +2928,43 @@ h2 {
   stroke-dasharray: 1 1;
   stroke-dashoffset: 1;
   transition: stroke 540ms ease, opacity 540ms ease;
+  vector-effect: non-scaling-stroke;
   animation: signal-volume-line 9.6s cubic-bezier(0.55, 0.08, 0.3, 0.96) infinite;
   animation-delay: var(--signal-line-delay);
 }
 
+.game-signal-visual__filament-glow {
+  stroke-width: 2.8px;
+  opacity: 0.2;
+}
+
 .game-signal-visual__filaments--back {
   stroke: var(--signal-secondary);
-  stroke-width: 0.58;
-  opacity: 0.2;
+  stroke-width: 1px;
+  opacity: 0.18;
   animation: signal-volume-back 42s linear infinite;
 }
 
 .game-signal-visual__filaments--middle {
   stroke: var(--signal-primary);
-  stroke-width: 0.78;
-  opacity: 0.42;
+  stroke-width: 1.15px;
+  opacity: 0.38;
   animation: signal-volume-middle 31s linear infinite;
 }
 
 .game-signal-visual__filaments--front {
   stroke: color-mix(in srgb, var(--signal-primary) 72%, white);
-  stroke-width: 1.08;
-  opacity: 0.76;
+  stroke-width: 1.4px;
+  opacity: 0.7;
   animation: signal-volume-front 26s linear infinite;
 }
 
-.game-signal-visual__filaments path[data-energy="surge"] {
+.game-signal-visual__filament-line[data-energy="surge"] {
   opacity: 0.1;
+}
+
+.game-signal-visual__filament-glow[data-energy="surge"] {
+  opacity: 0.025;
 }
 
 .game-signal-visual[data-state="detected"] .game-signal-visual__filaments--back {
@@ -2970,8 +2979,12 @@ h2 {
   opacity: 0.88;
 }
 
-.game-signal-visual[data-state="detected"] .game-signal-visual__filaments path[data-energy="surge"] {
+.game-signal-visual[data-state="detected"] .game-signal-visual__filament-line[data-energy="surge"] {
   opacity: 0.92;
+}
+
+.game-signal-visual[data-state="detected"] .game-signal-visual__filament-glow[data-energy="surge"] {
+  opacity: 0.24;
 }
 
 .game-signal-visual__node {
@@ -3055,9 +3068,10 @@ h2 {
 .game-signal-visual__core-ring {
   fill: none;
   stroke: var(--signal-primary);
-  stroke-width: 0.62;
-  opacity: 0.54;
+  stroke-width: 1px;
+  opacity: 0.48;
   transition: stroke 540ms ease, opacity 540ms ease;
+  vector-effect: non-scaling-stroke;
 }
 
 .game-signal-visual__core-dot {
@@ -3070,8 +3084,9 @@ h2 {
   stroke: var(--signal-secondary);
   stroke-dasharray: 0.12 0.88;
   stroke-linecap: round;
-  stroke-width: 0.9;
-  opacity: 0.72;
+  stroke-width: 1.15px;
+  opacity: 0.66;
+  vector-effect: non-scaling-stroke;
   animation: signal-volume-search 6.4s linear infinite;
   transition: stroke 540ms ease, opacity 360ms ease;
 }
@@ -3084,9 +3099,13 @@ h2 {
 .game-signal-visual__lock {
   fill: none;
   stroke: var(--signal-secondary);
-  stroke-width: 0.58;
+  stroke-width: 1px;
   opacity: 0;
   transition: stroke 540ms ease, opacity 540ms ease;
+}
+
+.game-signal-visual__lock > * {
+  vector-effect: non-scaling-stroke;
 }
 
 .game-signal-visual[data-state="detected"] .game-signal-visual__lock {
@@ -7246,6 +7265,15 @@ h2 {
   background: #6dc99a;
 }
 
+.draft-overlay__status.is-busy .draft-overlay__live-dot {
+  background: #e2a268;
+  animation: overlay-status-pulse 1.2s ease-in-out infinite;
+}
+
+.draft-overlay__status.is-error .draft-overlay__live-dot {
+  background: #df746c;
+}
+
 .draft-overlay__close {
   display: grid;
   width: 26px;
@@ -7398,7 +7426,7 @@ h2 {
 .overlay-position {
   display: grid;
   flex: 0 0 auto;
-  grid-template-columns: repeat(5, 22px);
+  grid-template-columns: auto repeat(5, 20px);
   gap: 2px;
   padding: 2px;
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -7407,9 +7435,29 @@ h2 {
   -webkit-app-region: no-drag;
 }
 
+.overlay-position__source {
+  display: flex;
+  min-width: 46px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 5px;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  color: #a3a7ad;
+  font-size: 7px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 730;
+  letter-spacing: 0.045em;
+  white-space: nowrap;
+}
+
+.overlay-position__source--detected {
+  color: #8fd1ad;
+}
+
 .overlay-position button {
   display: grid;
-  width: 22px;
+  width: 20px;
   height: 20px;
   place-items: center;
   border-radius: 4px;
@@ -7586,8 +7634,25 @@ h2 {
   }
 }
 
+@keyframes overlay-status-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.78);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .overlay-refresh.is-spinning svg {
+    animation: none;
+  }
+
+  .draft-overlay__status.is-busy .draft-overlay__live-dot {
     animation: none;
   }
 

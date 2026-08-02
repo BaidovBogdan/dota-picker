@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { FastifyRequest } from 'fastify';
 import { AppError } from '../../lib/errors.js';
 import type { OpenDotaAdapter } from '../heroes/opendota.adapter.js';
-import type { PhotoRecognizer } from './photo-recognizer.js';
+import type { PhotoRecognitionOptions, PhotoRecognizer } from './photo-recognizer.js';
 
 const allowedImageTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
@@ -101,7 +101,8 @@ export async function recognizeDraftImage(
   upload: DraftImageUpload,
   recognizer: PhotoRecognizer,
   meta: Pick<OpenDotaAdapter, 'getHeroes'>,
+  options?: PhotoRecognitionOptions,
 ) {
   const heroes = await meta.getHeroes();
-  return recognizer.recognize(upload.image, upload.mimeType, heroes);
+  return recognizer.recognize(upload.image, upload.mimeType, heroes, options);
 }

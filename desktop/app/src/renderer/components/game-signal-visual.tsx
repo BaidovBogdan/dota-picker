@@ -69,17 +69,28 @@ const particles = [
   [84, 88, 0.45], [143, 112, 0.5], [102, 115, 0.4], [158, 57, 0.45],
 ] as const;
 
-function renderFilaments(filaments: Filament[], phase: number) {
+function renderFilaments(filaments: Filament[], phase: number, glowId: string) {
   return filaments.map((filament, index) => {
     const delay = -((index * 1.47 + phase * 2.15) % 9.6);
     return (
-      <path
+      <g
         key={filament.d}
-        d={filament.d}
-        data-energy={filament.surge ? 'surge' : 'base'}
-        pathLength="1"
         style={{ '--signal-line-delay': `${delay}s` } as CSSProperties}
-      />
+      >
+        <path
+          className="game-signal-visual__filament-glow"
+          d={filament.d}
+          data-energy={filament.surge ? 'surge' : 'base'}
+          filter={`url(#${glowId})`}
+          pathLength="1"
+        />
+        <path
+          className="game-signal-visual__filament-line"
+          d={filament.d}
+          data-energy={filament.surge ? 'surge' : 'base'}
+          pathLength="1"
+        />
+      </g>
     );
   });
 }
@@ -92,11 +103,12 @@ function GameSignalVisualComponent({ mode }: { mode: ActiveGameSignalMode }) {
   const coreGradientId = `signal-volume-core-${instanceId}`;
   const coreGlowId = `signal-volume-glow-${instanceId}`;
   const nebulaGlowId = `signal-volume-nebula-${instanceId}`;
+  const filamentGlowId = `signal-volume-filament-${instanceId}`;
 
   return (
     <div className="game-signal-visual" data-state={mode} aria-hidden="true">
       <span className="game-signal-visual__viewport" />
-      <svg viewBox="0 0 260 180" focusable="false">
+      <svg viewBox="8.5 5.9 243 168.2" focusable="false" shapeRendering="geometricPrecision">
         <defs>
           <radialGradient id={maskGradientId}>
             <stop offset="0%" stopColor="white" />
@@ -121,6 +133,16 @@ function GameSignalVisualComponent({ mode }: { mode: ActiveGameSignalMode }) {
           </filter>
           <filter id={nebulaGlowId} x="-80%" y="-80%" width="260%" height="260%">
             <feGaussianBlur stdDeviation="11" />
+          </filter>
+          <filter
+            id={filamentGlowId}
+            x="-24%"
+            y="-24%"
+            width="148%"
+            height="148%"
+            colorInterpolationFilters="sRGB"
+          >
+            <feGaussianBlur stdDeviation="0.9" />
           </filter>
         </defs>
 
@@ -158,13 +180,13 @@ function GameSignalVisualComponent({ mode }: { mode: ActiveGameSignalMode }) {
               <ellipse className="game-signal-visual__nebula-hotspot" cx="132" cy="81" rx="25" ry="20" />
             </g>
             <g className="game-signal-visual__filaments game-signal-visual__filaments--back">
-              {renderFilaments(backFilaments, 0)}
+              {renderFilaments(backFilaments, 0, filamentGlowId)}
             </g>
             <g className="game-signal-visual__filaments game-signal-visual__filaments--middle">
-              {renderFilaments(middleFilaments, 1)}
+              {renderFilaments(middleFilaments, 1, filamentGlowId)}
             </g>
             <g className="game-signal-visual__filaments game-signal-visual__filaments--front">
-              {renderFilaments(frontFilaments, 2)}
+              {renderFilaments(frontFilaments, 2, filamentGlowId)}
             </g>
             <g className="game-signal-visual__nodes">
               {nodes.map((node, index) => (

@@ -4,6 +4,15 @@ import type { recognitionResponseSchema } from './photo.schemas.js';
 
 export type PhotoRecognitionResult = z.infer<typeof recognitionResponseSchema>;
 
+export type PhotoRecognitionOptions = {
+  detectPosition?: boolean;
+};
+
 export type PhotoRecognizer = {
-  recognize(image: Buffer, mimeType: string, heroes: HeroMeta[]): Promise<PhotoRecognitionResult>;
+  recognize(
+    image: Buffer,
+    mimeType: string,
+    heroes: HeroMeta[],
+    options?: PhotoRecognitionOptions,
+  ): Promise<PhotoRecognitionResult>;
 };

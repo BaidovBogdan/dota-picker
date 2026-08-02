@@ -1,7 +1,7 @@
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import type { AppConfig } from '../../config/env.js';
-import { AppError } from '../../lib/errors.js';
+import { AppError, RateLimitError } from '../../lib/errors.js';
 import { errorResponseSchema, idempotencyHeadersSchema, paginationQuerySchema } from '../../lib/schemas.js';
 import type { OpenDotaAdapter } from '../heroes/opendota.adapter.js';
 import type { IdempotencyService } from '../idempotency/idempotency.service.js';
@@ -21,7 +21,7 @@ import {
   historyResponseSchema,
 } from './analysis.schemas.js';
 import { AnalysisConsistencyError, type AnalysisService } from './analysis.service.js';
-import { createDesktopDraft } from './desktop-analysis.js';
+import { createDesktopDraft, resolveDesktopPosition } from './desktop-analysis.js';
 
 type Dependencies = {
   config: AppConfig;
@@ -36,6 +36,35 @@ const desktopRecognitionBudgetMultiplier = 4;
 
 export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZod {
   return async (app) => {
+    const desktopUserRateLimit = app.createRateLimit({
+      max: 12,
+      timeWindow: '1 minute',
+      keyGenerator: (request) => `desktop-user:${request.user.sub}`,
+    });
+    const desktopIpRateLimit = app.createRateLimit({
+      max: 48,
+      timeWindow: '1 minute',
+      keyGenerator: (request) => `desktop-ip:${request.ip}`,
+    });
+    const enforceDesktopRateLimits = async (
+      request: Parameters<typeof desktopUserRateLimit>[0],
+    ) => {
+      const userLimit = await desktopUserRateLimit(request);
+      if (!userLimit.isAllowed && userLimit.isExceeded) {
+        throw new RateLimitError(
+          'Desktop analysis user rate limit exceeded',
+          userLimit.ttlInSeconds,
+        );
+      }
+      const ipLimit = await desktopIpRateLimit(request);
+      if (!ipLimit.isAllowed && ipLimit.isExceeded) {
+        throw new RateLimitError(
+          'Desktop analysis IP rate limit exceeded',
+          ipLimit.ttlInSeconds,
+        );
+      }
+    };
+
     app.post('/manual', {
       preHandler: app.authenticate,
       schema: {
@@ -156,19 +185,10 @@ export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZo
     app.post('/desktop', {
       preHandler: [
         app.authenticate,
-        app.rateLimit({
-          max: 3,
-          timeWindow: '1 minute',
-          groupId: 'desktop-analysis',
-          keyGenerator: (request) => request.user.sub,
-        }),
+        enforceDesktopRateLimits,
       ],
       config: {
-        rateLimit: {
-          max: 12,
-          timeWindow: '1 minute',
-          groupId: 'desktop-analysis-ip',
-        },
+        rateLimit: false,
       },
       schema: {
         tags: ['Analyses'],
@@ -203,6 +223,7 @@ export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZo
           frameHash: upload.frameHash,
           mimeType: upload.mimeType,
           position: request.query.position,
+          autoPosition: request.query.autoPosition,
           rank: request.query.rank ?? null,
           revision: request.query.revision,
         },
@@ -224,6 +245,7 @@ export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZo
           {
             sessionId: request.query.sessionId,
             position: request.query.position,
+            autoPosition: request.query.autoPosition,
             rank: request.query.rank ?? null,
           },
         );
@@ -267,10 +289,15 @@ export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZo
           upload,
           dependencies.photoAdapter,
           dependencies.metaAdapter,
+          request.query.autoPosition ? { detectPosition: true } : undefined,
         );
         const decision = createDesktopDraft(
           recognition,
-          request.query.position,
+          resolveDesktopPosition(
+            recognition,
+            request.query.position,
+            request.query.autoPosition,
+          ),
           request.query.rank,
         );
 
@@ -298,11 +325,23 @@ export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZo
             },
           );
           analysisCommitted = true;
+          const analysisPosition = analyzed.analysis.input.position;
+          const completedRecognition = request.query.autoPosition
+            ? {
+                ...recognition,
+                detectedPosition: (
+                  analysisPosition !== request.query.position
+                  || recognition.detectedPosition === analysisPosition
+                )
+                  ? analysisPosition
+                  : null,
+              }
+            : recognition;
           response = {
             status: 'completed' as const,
             revision: request.query.revision,
             frameHash: upload.frameHash,
-            recognition,
+            recognition: completedRecognition,
             analysis: analyzed.analysis,
             quota: analyzed.quota,
           };

@@ -44,6 +44,9 @@ export const desktopAnalysisQuerySchema = z.object({
       z.literal(5),
     ]),
   ),
+  autoPosition: z.enum(['true', 'false'])
+    .transform((value) => value === 'true')
+    .default(false),
   rank: z.coerce.number().pipe(rankBracketSchema).optional(),
   revision: z.coerce.number().int().nonnegative(),
 });
