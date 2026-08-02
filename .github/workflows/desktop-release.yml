@@ -44,11 +44,73 @@ jobs:
             throw "Release tag must point to a commit contained in main"
           }
           "version=$version" >> $env:GITHUB_OUTPUT
+      - name: Check existing public release
+        id: published
+        env:
+          GH_TOKEN: ${{ secrets.COUNTERPICK_RELEASES_TOKEN }}
+          RELEASE_REPOSITORY: BaidovBogdan/counterpick-releases
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
+            throw "COUNTERPICK_RELEASES_TOKEN is not configured"
+          }
+          $version = $env:RELEASE_VERSION
+          $releaseJson = gh release view $env:GITHUB_REF_NAME `
+            --repo $env:RELEASE_REPOSITORY `
+            --json isDraft,isPrerelease,assets 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            "exists=false" >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+          $release = $releaseJson | ConvertFrom-Json
+          if ($release.isDraft -or $release.isPrerelease) {
+            throw "Existing release must be stable and published"
+          }
+          $expected = @(
+            "Counterpick-$version-x64.exe",
+            "Counterpick-$version-x64.exe.blockmap",
+            "latest.yml"
+          )
+          $assets = @{}
+          foreach ($asset in $release.assets) {
+            $assets[$asset.name] = $asset
+          }
+          foreach ($name in $expected) {
+            if (-not $assets.ContainsKey($name) -or [long]$assets[$name].size -le 0) {
+              throw "Existing release is missing a valid asset: $name"
+            }
+          }
+          $manifestDirectory = Join-Path $env:RUNNER_TEMP "counterpick-release-$version"
+          New-Item -ItemType Directory -Path $manifestDirectory -Force | Out-Null
+          gh release download $env:GITHUB_REF_NAME `
+            --repo $env:RELEASE_REPOSITORY `
+            --pattern latest.yml `
+            --dir $manifestDirectory `
+            --clobber
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not download update metadata from the existing release"
+          }
+          $manifest = Get-Content (Join-Path $manifestDirectory "latest.yml") -Raw
+          $escapedVersion = [regex]::Escape($version)
+          $escapedInstaller = [regex]::Escape("Counterpick-$version-x64.exe")
+          if ($manifest -notmatch "(?m)^version:\s*$escapedVersion\s*$") {
+            throw "Existing latest.yml contains a different version"
+          }
+          if ($manifest -notmatch "(?m)^\s*-?\s*url:\s*$escapedInstaller\s*$") {
+            throw "Existing latest.yml contains a different installer URL"
+          }
+          if ($manifest -notmatch "(?m)^\s*sha512:\s*\S+\s*$") {
+            throw "Existing latest.yml does not contain a SHA-512 checksum"
+          }
+          "exists=true" >> $env:GITHUB_OUTPUT
       - name: Install dependencies
+        if: steps.published.outputs.exists != 'true'
         run: npm ci
       - name: Build Windows installer
+        if: steps.published.outputs.exists != 'true'
         run: npm run dist:win
       - name: Verify update artifacts
+        if: steps.published.outputs.exists != 'true'
         env:
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
         run: |
@@ -76,6 +138,7 @@ jobs:
             throw "latest.yml does not contain a SHA-512 checksum"
           }
       - name: Publish public update release
+        if: steps.published.outputs.exists != 'true'
         env:
           GH_TOKEN: ${{ secrets.COUNTERPICK_RELEASES_TOKEN }}
           RELEASE_REPOSITORY: BaidovBogdan/counterpick-releases
