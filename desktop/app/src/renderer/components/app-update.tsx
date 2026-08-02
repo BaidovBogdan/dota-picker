@@ -105,7 +105,7 @@ function UpdateDialog({
       <div className="update-dialog__icon" aria-hidden>
         {update.status === 'error'
           ? <WarningCircleIcon size={27} weight="duotone" />
-          : <DownloadSimpleIcon size={27} weight="duotone" />}
+          : <DownloadSimpleIcon size={27} weight="regular" />}
       </div>
       <p className="update-dialog__eyebrow">
         {text('Обновление Counterpick', 'Counterpick update')}

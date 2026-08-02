@@ -68,6 +68,7 @@ let resumeEngineAfterFailedUpdate = false;
 
 const apiUrl = process.env.MAIN_VITE_API_URL ?? 'https://dota-picker-api.onrender.com/v1';
 const overlayPreview = process.env.COUNTERPICK_OVERLAY_PREVIEW === '1';
+const overlayAlwaysOnTopLevel = process.platform === 'win32' ? 'screen-saver' : 'floating';
 
 function brandIconPath(): string {
   if (app.isPackaged) return join(process.resourcesPath, 'brand', 'counterpick-icon.png');
@@ -118,6 +119,12 @@ function hideOverlay(): void {
   overlayDesiredVisible = false;
   overlayToggleGeneration += 1;
   if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.hide();
+}
+
+function raiseOverlayWindow(window: BrowserWindow): void {
+  if (window.isDestroyed()) return;
+  window.setAlwaysOnTop(true, overlayAlwaysOnTopLevel);
+  if (window.isVisible()) window.moveTop();
 }
 
 function createWindow(preferences: PreferencesStore): BrowserWindow {
@@ -199,6 +206,7 @@ function createOverlayWindow(): BrowserWindow {
     transparent: true,
     backgroundColor: '#00000000',
     alwaysOnTop: true,
+    focusable: process.platform !== 'win32',
     skipTaskbar: true,
     resizable: false,
     minimizable: false,
@@ -219,7 +227,7 @@ function createOverlayWindow(): BrowserWindow {
   });
 
   window.setMenuBarVisibility(false);
-  window.setAlwaysOnTop(true, 'floating');
+  raiseOverlayWindow(window);
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', (event) => event.preventDefault());
   window.webContents.session.setPermissionRequestHandler((_webContents, _permission, callback) => {
@@ -236,6 +244,7 @@ function createOverlayWindow(): BrowserWindow {
   });
   window.on('show', () => {
     overlayDesiredVisible = true;
+    raiseOverlayWindow(window);
   });
   window.on('hide', () => {
     overlayDesiredVisible = false;
@@ -265,7 +274,11 @@ function toggleOverlay(): void {
       if (generation !== overlayToggleGeneration || !overlayDesiredVisible) return;
       const currentWindow = overlayWindow;
       if (!currentWindow || currentWindow.isDestroyed()) return;
-      if (overlayAvailable || overlayPreview) currentWindow.showInactive();
+      if (overlayAvailable || overlayPreview) {
+        raiseOverlayWindow(currentWindow);
+        currentWindow.showInactive();
+        raiseOverlayWindow(currentWindow);
+      }
       else {
         overlayDesiredVisible = false;
         showWindow();

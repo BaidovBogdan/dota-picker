@@ -2738,7 +2738,7 @@ h2 {
 
 .system-card {
   display: grid;
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   min-height: 350px;
 }
 
@@ -2761,10 +2761,25 @@ h2 {
 .system-card__active-signal {
   display: grid;
   min-height: 0;
-  align-content: center;
-  grid-template-rows: minmax(158px, 1fr) auto;
-  padding: 0 0 14px;
+  align-content: stretch;
+  grid-template-rows: minmax(0, 1fr);
+  padding: 0;
+  isolation: isolate;
   animation: game-signal-enter 680ms var(--ease-out) both;
+}
+
+.system-card__active-signal > .game-signal-visual,
+.system-card__active-signal > .system-card__signal--active {
+  grid-area: 1 / 1;
+}
+
+.system-card__active-signal > .game-signal-visual {
+  align-self: start;
+}
+
+.system-card__active-signal > .system-card__signal--active {
+  align-self: end;
+  padding-bottom: 14px;
 }
 
 .game-signal-visual {
@@ -2782,6 +2797,7 @@ h2 {
   contain: layout;
   isolation: isolate;
   overflow: visible;
+  pointer-events: none;
 }
 
 .game-signal-visual[data-state="detected"] {
@@ -2833,7 +2849,7 @@ h2 {
 }
 
 .game-signal-visual__shell {
-  animation: signal-volume-shell 12s ease-in-out infinite;
+  animation: signal-volume-shell 34s linear infinite;
 }
 
 .game-signal-visual__shell-light {
@@ -2922,21 +2938,21 @@ h2 {
   stroke: var(--signal-secondary);
   stroke-width: 0.58;
   opacity: 0.2;
-  animation: signal-volume-back 10.5s ease-in-out infinite;
+  animation: signal-volume-back 42s linear infinite;
 }
 
 .game-signal-visual__filaments--middle {
   stroke: var(--signal-primary);
   stroke-width: 0.78;
   opacity: 0.42;
-  animation: signal-volume-middle 9s ease-in-out infinite;
+  animation: signal-volume-middle 31s linear infinite;
 }
 
 .game-signal-visual__filaments--front {
   stroke: color-mix(in srgb, var(--signal-primary) 72%, white);
   stroke-width: 1.08;
   opacity: 0.76;
-  animation: signal-volume-front 7.4s ease-in-out infinite;
+  animation: signal-volume-front 26s linear infinite;
 }
 
 .game-signal-visual__filaments path[data-energy="surge"] {
@@ -2960,20 +2976,35 @@ h2 {
 }
 
 .game-signal-visual__node {
+  --signal-node-opacity: 0.4;
   fill: var(--signal-secondary);
-  opacity: 0.4;
+  opacity: var(--signal-node-opacity);
+  transform-box: fill-box;
+  transform-origin: center;
   transition: fill 540ms ease, opacity 540ms ease;
+  animation: signal-volume-node var(--signal-node-duration) ease-in-out infinite;
+  animation-delay: var(--signal-node-delay);
 }
 
 .game-signal-visual__node[data-hot="true"] {
+  --signal-node-opacity: 0.72;
   fill: var(--signal-hot);
-  opacity: 0.72;
 }
 
 .game-signal-visual__particles {
   fill: color-mix(in srgb, var(--signal-core) 78%, white);
   opacity: 0.48;
+  transform-box: view-box;
+  transform-origin: 130px 82px;
   transition: fill 540ms ease, opacity 540ms ease;
+  animation: signal-volume-particle-orbit 38s linear infinite;
+}
+
+.game-signal-visual__particles circle {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: signal-volume-particle var(--signal-particle-duration) ease-in-out infinite;
+  animation-delay: var(--signal-particle-delay);
 }
 
 .game-signal-visual[data-state="detected"] .game-signal-visual__particles {
@@ -2981,11 +3012,11 @@ h2 {
 }
 
 .game-signal-visual[data-state="detected"] .game-signal-visual__node {
-  opacity: 0.68;
+  --signal-node-opacity: 0.68;
 }
 
 .game-signal-visual[data-state="detected"] .game-signal-visual__node[data-hot="true"] {
-  opacity: 1;
+  --signal-node-opacity: 1;
   filter: drop-shadow(0 0 2px var(--signal-hot));
 }
 
@@ -3190,46 +3221,109 @@ h2 {
 }
 
 @keyframes signal-volume-shell {
-  0%,
-  100% {
-    transform: rotate(-1deg) scale(0.992);
+  0% {
+    transform: rotate(0) scale(0.992);
   }
 
   50% {
-    transform: rotate(1deg) scale(1.012);
+    transform: rotate(180deg) scale(1.012);
+  }
+
+  100% {
+    transform: rotate(360deg) scale(0.992);
   }
 }
 
 @keyframes signal-volume-back {
-  0%,
-  100% {
-    transform: translate(-2px, 1px) rotate(-0.8deg);
+  0% {
+    transform: translate(-1.5px, 1px) rotate(0);
   }
 
   50% {
-    transform: translate(2px, -1px) rotate(0.8deg);
+    transform: translate(1.5px, -1px) rotate(-180deg);
+  }
+
+  100% {
+    transform: translate(-1.5px, 1px) rotate(-360deg);
   }
 }
 
 @keyframes signal-volume-middle {
-  0%,
-  100% {
-    transform: translateY(-1.5px) rotate(0.7deg);
+  0% {
+    transform: translateY(-1px) rotate(0);
   }
 
   50% {
-    transform: translateY(1.5px) rotate(-0.7deg);
+    transform: translateY(1px) rotate(180deg);
+  }
+
+  100% {
+    transform: translateY(-1px) rotate(360deg);
   }
 }
 
 @keyframes signal-volume-front {
-  0%,
-  100% {
-    transform: translate(1.5px, -1px) rotate(0.6deg);
+  0% {
+    transform: translate(1px, -1px) rotate(0);
   }
 
   50% {
-    transform: translate(-1.5px, 1px) rotate(-0.6deg);
+    transform: translate(-1px, 1px) rotate(-180deg);
+  }
+
+  100% {
+    transform: translate(1px, -1px) rotate(-360deg);
+  }
+}
+
+@keyframes signal-volume-node {
+  0%,
+  100% {
+    opacity: 0.12;
+    transform: scale(0.72);
+  }
+
+  38% {
+    opacity: var(--signal-node-opacity);
+    transform: scale(1);
+  }
+
+  68% {
+    opacity: 0.24;
+    transform: scale(0.86);
+  }
+
+  84% {
+    opacity: var(--signal-node-opacity);
+    transform: scale(1.12);
+  }
+}
+
+@keyframes signal-volume-particle-orbit {
+  to {
+    transform: rotate(-360deg);
+  }
+}
+
+@keyframes signal-volume-particle {
+  0% {
+    opacity: 0;
+    transform: translate(0, 0) scale(0.52);
+  }
+
+  22% {
+    opacity: 0.86;
+    transform: translate(0, 0) scale(1);
+  }
+
+  58% {
+    opacity: 0.5;
+    transform: translate(var(--signal-particle-x), var(--signal-particle-y)) scale(1.14);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate(var(--signal-particle-x), var(--signal-particle-y)) scale(0.58);
   }
 }
 
@@ -3720,7 +3814,6 @@ h2 {
   margin-bottom: 12px;
   padding: 11px 0;
   border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
 }
 
 .history-toolbar__controls {
@@ -4729,7 +4822,6 @@ h2 {
   margin-bottom: 12px;
   padding: 10px 0 9px;
   border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
 }
 
 .meta-controls__top {
@@ -6944,19 +7036,20 @@ h2 {
 
 .sticky-filter-bar {
   position: sticky;
-  top: 12px;
+  top: 0;
   z-index: 75;
   width: 100%;
   background: var(--bg);
+  isolation: isolate;
 }
 
 .sticky-filter-bar::before {
   position: absolute;
-  right: 0;
-  bottom: 100%;
-  left: 0;
-  height: 12px;
+  z-index: -1;
+  inset: 0;
   background: var(--bg);
+  box-shadow: 0 0 0 100vmax var(--bg);
+  clip-path: inset(0 -100vmax);
   content: "";
   pointer-events: none;
 }

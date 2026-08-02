@@ -167,7 +167,7 @@ function GameSignalVisualComponent({ mode }: { mode: ActiveGameSignalMode }) {
               {renderFilaments(frontFilaments, 2)}
             </g>
             <g className="game-signal-visual__nodes">
-              {nodes.map((node) => (
+              {nodes.map((node, index) => (
                 <circle
                   key={`${node.x}-${node.y}`}
                   className="game-signal-visual__node"
@@ -175,13 +175,33 @@ function GameSignalVisualComponent({ mode }: { mode: ActiveGameSignalMode }) {
                   cy={node.y}
                   r={node.radius}
                   data-hot={node.hot ? 'true' : 'false'}
+                  style={{
+                    '--signal-node-duration': `${4.8 + (index % 5) * 0.62}s`,
+                    '--signal-node-delay': `${-((index * 1.31) % 6.8)}s`,
+                  } as CSSProperties}
                 />
               ))}
             </g>
             <g className="game-signal-visual__particles">
-              {particles.map(([x, y, radius]) => (
-                <circle key={`${x}-${y}`} cx={x} cy={y} r={radius} />
-              ))}
+              {particles.map(([x, y, radius], index) => {
+                const directionX = index % 2 === 0 ? 1 : -1;
+                const directionY = index % 3 === 0 ? -1 : 1;
+                const duration = 5.6 + (index % 6) * 0.58;
+                return (
+                  <circle
+                    key={`${x}-${y}`}
+                    cx={x}
+                    cy={y}
+                    r={radius}
+                    style={{
+                      '--signal-particle-duration': `${duration}s`,
+                      '--signal-particle-delay': `${-((index * 1.17) % duration)}s`,
+                      '--signal-particle-x': `${directionX * (3 + (index % 4) * 0.8)}px`,
+                      '--signal-particle-y': `${directionY * (2.2 + ((index * 3) % 4) * 0.65)}px`,
+                    } as CSSProperties}
+                  />
+                );
+              })}
             </g>
           </g>
 
