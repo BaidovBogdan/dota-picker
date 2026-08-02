@@ -22,6 +22,7 @@ import {
   PositionLabel,
   RankLabel,
 } from '../components/dota-taxonomy';
+import { FilterSearchField } from '../components/filter-search-field';
 import { MorphingFilterBar } from '../components/morphing-filter-bar';
 import { AsyncState, Badge, Button, HeroIcon, Page } from '../components/ui';
 import { formatDateTime, heroName, positionName } from '../format';
@@ -156,18 +157,38 @@ export function HistoryPage() {
       title={text('История контрпиков', 'Counterpick history')}
       description={text('Каждый результат хранит входной драфт, численные метрики и происхождение данных.', 'Every result keeps the input draft, numerical metrics, and data provenance.')}
     >
-      <MorphingFilterBar className="history-toolbar" label={text('Фильтры истории контрпиков', 'Counterpick history filters')}>
+      <MorphingFilterBar
+        className="history-toolbar"
+        compactLabel={text('Фильтры', 'Filters')}
+        compactContent={(
+          <>
+            <span className="filter-dock__value" data-active={source !== 'all'}>
+              {sourceOptions.find((option) => option.value === source)?.label}
+            </span>
+            <span className="filter-dock__value" data-active={position !== 'all'}>
+              {positionOptions.find((option) => option.value === String(position))?.label}
+            </span>
+            {search.trim() ? (
+              <span className="filter-dock__value filter-dock__value--query" data-active="true">
+                <MagnifyingGlassIcon size={13} aria-hidden />
+                {search.trim()}
+              </span>
+            ) : null}
+            <span className="filter-dock__count">
+              <strong>{items.length}</strong>
+              {text('результатов', 'results')}
+            </span>
+          </>
+        )}
+        label={text('Фильтры истории контрпиков', 'Counterpick history filters')}
+      >
         <div className="history-toolbar__controls">
-          <label className="search-field">
-            <MagnifyingGlassIcon size={17} aria-hidden />
-            <span className="sr-only">{text('Поиск по герою', 'Search by hero')}</span>
-            <input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder={text('Найти героя в рекомендациях', 'Find a recommended hero')}
-              type="search"
-            />
-          </label>
+          <FilterSearchField
+            value={search}
+            onValueChange={setSearch}
+            label={text('Поиск по герою', 'Search by hero')}
+            placeholder={text('Найти героя в рекомендациях', 'Find a recommended hero')}
+          />
           <AppSelect
             className="history-filter-select history-filter-select--source"
             value={source}

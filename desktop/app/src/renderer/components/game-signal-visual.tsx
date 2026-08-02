@@ -1,4 +1,5 @@
 import { memo, useId } from 'react';
+import type { CSSProperties } from 'react';
 
 export type GameSignalMode = 'off' | 'waiting' | 'detected';
 type ActiveGameSignalMode = Exclude<GameSignalMode, 'off'>;
@@ -68,19 +69,25 @@ const particles = [
   [84, 88, 0.45], [143, 112, 0.5], [102, 115, 0.4], [158, 57, 0.45],
 ] as const;
 
-function renderFilaments(filaments: Filament[]) {
-  return filaments.map((filament) => (
-    <path
-      key={filament.d}
-      d={filament.d}
-      data-energy={filament.surge ? 'surge' : 'base'}
-    />
-  ));
+function renderFilaments(filaments: Filament[], phase: number) {
+  return filaments.map((filament, index) => {
+    const delay = -((index * 1.47 + phase * 2.15) % 9.6);
+    return (
+      <path
+        key={filament.d}
+        d={filament.d}
+        data-energy={filament.surge ? 'surge' : 'base'}
+        pathLength="1"
+        style={{ '--signal-line-delay': `${delay}s` } as CSSProperties}
+      />
+    );
+  });
 }
 
 function GameSignalVisualComponent({ mode }: { mode: ActiveGameSignalMode }) {
   const instanceId = useId().replace(/:/g, '');
-  const clipId = `signal-volume-clip-${instanceId}`;
+  const maskId = `signal-volume-mask-${instanceId}`;
+  const maskGradientId = `signal-volume-mask-gradient-${instanceId}`;
   const shellGradientId = `signal-volume-shell-${instanceId}`;
   const coreGradientId = `signal-volume-core-${instanceId}`;
   const coreGlowId = `signal-volume-glow-${instanceId}`;
@@ -91,9 +98,14 @@ function GameSignalVisualComponent({ mode }: { mode: ActiveGameSignalMode }) {
       <span className="game-signal-visual__viewport" />
       <svg viewBox="0 0 260 180" focusable="false">
         <defs>
-          <clipPath id={clipId}>
-            <circle cx="130" cy="82" r="65" />
-          </clipPath>
+          <radialGradient id={maskGradientId}>
+            <stop offset="0%" stopColor="white" />
+            <stop offset="78%" stopColor="white" />
+            <stop offset="100%" stopColor="black" />
+          </radialGradient>
+          <mask id={maskId} maskUnits="userSpaceOnUse" x="54" y="6" width="152" height="152">
+            <circle cx="130" cy="82" r="72" fill={`url(#${maskGradientId})`} />
+          </mask>
           <radialGradient id={shellGradientId} cx="39%" cy="32%" r="72%">
             <stop className="game-signal-visual__shell-light" offset="0%" />
             <stop className="game-signal-visual__shell-mid" offset="48%" />
@@ -112,94 +124,96 @@ function GameSignalVisualComponent({ mode }: { mode: ActiveGameSignalMode }) {
           </filter>
         </defs>
 
-        <g className="game-signal-visual__shell">
-          <circle
-            className="game-signal-visual__shell-volume"
-            cx="130"
-            cy="82"
-            r="65"
-            fill={`url(#${shellGradientId})`}
-          />
-          <ellipse
-            className="game-signal-visual__shell-rim game-signal-visual__shell-rim--wide"
-            cx="130"
-            cy="82"
-            rx="64"
-            ry="44"
-            transform="rotate(-13 130 82)"
-          />
-          <ellipse
-            className="game-signal-visual__shell-rim game-signal-visual__shell-rim--tall"
-            cx="130"
-            cy="82"
-            rx="38"
-            ry="63"
-            transform="rotate(24 130 82)"
-          />
-        </g>
+        <g className="game-signal-visual__body">
+          <g className="game-signal-visual__shell">
+            <circle
+              className="game-signal-visual__shell-volume"
+              cx="130"
+              cy="82"
+              r="65"
+              fill={`url(#${shellGradientId})`}
+            />
+            <ellipse
+              className="game-signal-visual__shell-rim game-signal-visual__shell-rim--wide"
+              cx="130"
+              cy="82"
+              rx="64"
+              ry="44"
+              transform="rotate(-13 130 82)"
+            />
+            <ellipse
+              className="game-signal-visual__shell-rim game-signal-visual__shell-rim--tall"
+              cx="130"
+              cy="82"
+              rx="38"
+              ry="63"
+              transform="rotate(24 130 82)"
+            />
+          </g>
 
-        <g clipPath={`url(#${clipId})`}>
-          <g className="game-signal-visual__nebula" filter={`url(#${nebulaGlowId})`}>
-            <ellipse className="game-signal-visual__nebula-field" cx="117" cy="76" rx="38" ry="27" />
-            <ellipse className="game-signal-visual__nebula-drift" cx="149" cy="91" rx="35" ry="25" />
-            <ellipse className="game-signal-visual__nebula-hotspot" cx="132" cy="81" rx="25" ry="20" />
+          <g mask={`url(#${maskId})`}>
+            <g className="game-signal-visual__nebula" filter={`url(#${nebulaGlowId})`}>
+              <ellipse className="game-signal-visual__nebula-field" cx="117" cy="76" rx="38" ry="27" />
+              <ellipse className="game-signal-visual__nebula-drift" cx="149" cy="91" rx="35" ry="25" />
+              <ellipse className="game-signal-visual__nebula-hotspot" cx="132" cy="81" rx="25" ry="20" />
+            </g>
+            <g className="game-signal-visual__filaments game-signal-visual__filaments--back">
+              {renderFilaments(backFilaments, 0)}
+            </g>
+            <g className="game-signal-visual__filaments game-signal-visual__filaments--middle">
+              {renderFilaments(middleFilaments, 1)}
+            </g>
+            <g className="game-signal-visual__filaments game-signal-visual__filaments--front">
+              {renderFilaments(frontFilaments, 2)}
+            </g>
+            <g className="game-signal-visual__nodes">
+              {nodes.map((node) => (
+                <circle
+                  key={`${node.x}-${node.y}`}
+                  className="game-signal-visual__node"
+                  cx={node.x}
+                  cy={node.y}
+                  r={node.radius}
+                  data-hot={node.hot ? 'true' : 'false'}
+                />
+              ))}
+            </g>
+            <g className="game-signal-visual__particles">
+              {particles.map(([x, y, radius]) => (
+                <circle key={`${x}-${y}`} cx={x} cy={y} r={radius} />
+              ))}
+            </g>
           </g>
-          <g className="game-signal-visual__filaments game-signal-visual__filaments--back">
-            {renderFilaments(backFilaments)}
-          </g>
-          <g className="game-signal-visual__filaments game-signal-visual__filaments--middle">
-            {renderFilaments(middleFilaments)}
-          </g>
-          <g className="game-signal-visual__filaments game-signal-visual__filaments--front">
-            {renderFilaments(frontFilaments)}
-          </g>
-          <g className="game-signal-visual__nodes">
-            {nodes.map((node) => (
-              <circle
-                key={`${node.x}-${node.y}`}
-                className="game-signal-visual__node"
-                cx={node.x}
-                cy={node.y}
-                r={node.radius}
-                data-hot={node.hot ? 'true' : 'false'}
-              />
-            ))}
-          </g>
-          <g className="game-signal-visual__particles">
-            {particles.map(([x, y, radius]) => (
-              <circle key={`${x}-${y}`} cx={x} cy={y} r={radius} />
-            ))}
-          </g>
-        </g>
 
-        <g className="game-signal-visual__core">
-          <circle
-            className="game-signal-visual__core-glow"
-            cx="130"
-            cy="82"
-            r="27"
-            filter={`url(#${coreGlowId})`}
+          <g className="game-signal-visual__core">
+            <circle
+              className="game-signal-visual__core-glow"
+              cx="130"
+              cy="82"
+              r="27"
+              filter={`url(#${coreGlowId})`}
+            />
+            <circle
+              className="game-signal-visual__core-field"
+              cx="130"
+              cy="82"
+              r="22"
+              fill={`url(#${coreGradientId})`}
+            />
+            <circle className="game-signal-visual__core-ring" cx="130" cy="82" r="12" />
+            <circle className="game-signal-visual__core-dot" cx="130" cy="82" r="3.4" />
+          </g>
+
+          <path
+            className="game-signal-visual__search-arc"
+            d="M79 103 C100 129 162 128 186 92"
+            pathLength="1"
           />
-          <circle
-            className="game-signal-visual__core-field"
-            cx="130"
-            cy="82"
-            r="22"
-            fill={`url(#${coreGradientId})`}
-          />
-          <circle className="game-signal-visual__core-ring" cx="130" cy="82" r="12" />
-          <circle className="game-signal-visual__core-dot" cx="130" cy="82" r="3.4" />
-        </g>
 
-        <path
-          className="game-signal-visual__search-arc"
-          d="M79 103 C100 129 162 128 186 92"
-          pathLength="1"
-        />
-
-        <g className="game-signal-visual__lock">
-          <ellipse cx="130" cy="82" rx="53" ry="25" transform="rotate(-14 130 82)" />
-          <circle className="game-signal-visual__lock-pulse" cx="130" cy="82" r="27" />
+          <g className="game-signal-visual__lock">
+            <ellipse cx="130" cy="82" rx="53" ry="25" transform="rotate(-14 130 82)" />
+            <circle className="game-signal-visual__lock-pulse" cx="130" cy="82" r="27" />
+          </g>
         </g>
       </svg>
     </div>

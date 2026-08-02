@@ -1,10 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
-import { ArrowUpRightIcon, HeartIcon, MagnifyingGlassIcon } from '@phosphor-icons/react';
+import { ArrowUpRightIcon, HeartIcon } from '@phosphor-icons/react';
 import { memo, useDeferredValue, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 
 import { desktop } from '../bridge';
 import { FavoriteButton } from '../components/favorite-button';
+import { FilterSearchField } from '../components/filter-search-field';
 import { formatPercent, heroName, roleName } from '../format';
 import { useI18n } from '../i18n';
 import { AsyncState, HeroArtwork, Page } from '../components/ui';
@@ -85,16 +86,14 @@ export function WishlistPage() {
       }
     >
       {wishlist.length ? (
-        <label className="search-field wishlist-search" data-reveal>
-          <MagnifyingGlassIcon size={17} aria-hidden />
-          <span className="sr-only">{text('Найти в избранном', 'Search favorites')}</span>
-          <input
-            type="search"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder={text('Найти в избранном', 'Search favorites')}
-          />
-        </label>
+        <FilterSearchField
+          className="wishlist-search"
+          value={search}
+          onValueChange={setSearch}
+          label={text('Найти в избранном', 'Search favorites')}
+          placeholder={text('Найти в избранном', 'Search favorites')}
+          reveal
+        />
       ) : null}
 
       {query.isPending ? (

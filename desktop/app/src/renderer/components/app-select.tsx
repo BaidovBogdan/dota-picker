@@ -36,6 +36,8 @@ export function AppSelect({
 }) {
   const { text } = useI18n();
   const selected = options.find((option) => option.value === value);
+  const selectedIcon = selected?.icon ?? leadingIcon;
+  const hasOptionIcons = options.some((option) => option.icon);
   const resolvedPlaceholder = placeholder ?? text('Выберите значение', 'Select a value');
 
   return (
@@ -45,13 +47,15 @@ export function AppSelect({
       disabled={disabled}
     >
       <Select.Trigger
-        className={`app-select ${className}`}
+        className={`app-select ${selectedIcon ? 'app-select--with-icon' : ''} ${className}`}
         aria-label={label}
       >
-        <span className="app-select__leading" aria-hidden>
-          {selected?.icon ?? leadingIcon}
-        </span>
-        <Select.Value placeholder={resolvedPlaceholder}>
+        {selectedIcon ? (
+          <span className="app-select__leading" aria-hidden>
+            {selectedIcon}
+          </span>
+        ) : null}
+        <Select.Value className="app-select__value" placeholder={resolvedPlaceholder}>
           {selected ? (
             <span className="app-select__selected">
               <span>{selected.label}</span>
@@ -67,6 +71,7 @@ export function AppSelect({
         <Select.Content
           className="app-select-content"
           position="popper"
+          align="start"
           sideOffset={6}
           collisionPadding={12}
         >
@@ -76,14 +81,16 @@ export function AppSelect({
           <Select.Viewport className="app-select-viewport">
             {options.map((option) => (
               <Select.Item
-                className="app-select-item"
+                className={`app-select-item ${hasOptionIcons ? 'app-select-item--with-icon' : ''}`}
                 key={option.value}
                 value={option.value}
                 disabled={option.disabled}
               >
-                <span className="app-select-item__icon" aria-hidden>
-                  {option.icon}
-                </span>
+                {hasOptionIcons ? (
+                  <span className="app-select-item__icon" aria-hidden>
+                    {option.icon}
+                  </span>
+                ) : null}
                 <Select.ItemText>
                   <span className="app-select-item__copy">
                     <span>{option.label}</span>

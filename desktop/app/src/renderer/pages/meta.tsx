@@ -19,6 +19,7 @@ import {
   RankLabel,
 } from '../components/dota-taxonomy';
 import { FavoriteButton } from '../components/favorite-button';
+import { FilterSearchField } from '../components/filter-search-field';
 import { MorphingFilterBar } from '../components/morphing-filter-bar';
 import { AsyncState, Badge, HeroIcon, Page } from '../components/ui';
 import { formatDateTime, formatPercent, heroName, rankName } from '../format';
@@ -158,7 +159,37 @@ export function MetaPage() {
         ) : null
       }
     >
-      <MorphingFilterBar className="meta-controls" label={text('Фильтры меты', 'Meta filters')}>
+      <MorphingFilterBar
+        className="meta-controls"
+        compactLabel={text('Фильтры', 'Filters')}
+        compactContent={(
+          <>
+            <span className="filter-dock__value" data-active="true">
+              <PositionLabel position={position} variant="compact" />
+            </span>
+            <span className="filter-dock__value" data-active={rank !== null}>
+              <RankLabel rank={rank} variant="compact" />
+            </span>
+            <span className="filter-dock__value">
+              {sortOptions.find((option) => option.value === sort)?.label}
+              {descending
+                ? <ArrowDownIcon size={13} aria-hidden />
+                : <ArrowUpIcon size={13} aria-hidden />}
+            </span>
+            {search.trim() ? (
+              <span className="filter-dock__value filter-dock__value--query" data-active="true">
+                <MagnifyingGlassIcon size={13} aria-hidden />
+                {search.trim()}
+              </span>
+            ) : null}
+            <span className="filter-dock__count">
+              <strong>{rows.length}</strong>
+              {text('героев', 'heroes')}
+            </span>
+          </>
+        )}
+        label={text('Фильтры меты', 'Meta filters')}
+      >
         <div className="meta-controls__top">
           <div className="meta-controls__positions" aria-label={text('Позиция', 'Position')}>
             {POSITION_VALUES.map((value) => (
@@ -174,16 +205,12 @@ export function MetaPage() {
             ))}
           </div>
           <div className="meta-controls__filters">
-            <label className="search-field">
-              <MagnifyingGlassIcon size={17} aria-hidden />
-              <span className="sr-only">{text('Найти героя', 'Find a hero')}</span>
-              <input
-                type="search"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder={text('Найти героя', 'Find a hero')}
-              />
-            </label>
+            <FilterSearchField
+              value={search}
+              onValueChange={setSearch}
+              label={text('Найти героя', 'Find a hero')}
+              placeholder={text('Найти героя', 'Find a hero')}
+            />
             <AppSelect
               value={rank === null ? 'all' : String(rank)}
               onValueChange={(value) => setRank(value === 'all' ? null : Number(value))}
