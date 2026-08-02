@@ -1,47 +1,58 @@
-import { globalShortcut } from 'electron';
+import { globalShortcut, type BrowserWindow } from 'electron';
 import {
   normalizeOverlayShortcut,
   overlayShortcutSchema,
   type OverlayShortcutStatus,
 } from '../shared/contracts.js';
 import { DesktopError } from './errors.js';
+import {
+  Win32HotkeyRegistry,
+  type Win32HotkeyRegistration,
+  type Win32HotkeyRegistrationResult,
+} from './win32-hotkey.js';
+
+type ShortcutRegistration =
+  | { kind: 'win32'; value: Win32HotkeyRegistration }
+  | { kind: 'electron'; shortcut: string };
+
+type RegistrationResult =
+  | { ok: true; registration: ShortcutRegistration }
+  | { ok: false; reason: 'unsupported' | 'unavailable' };
 
 export class OverlayShortcutManager {
-  private static readonly releaseQuietPeriodMs = 1_200;
   private configuredShortcut = 'PageUp';
-  private registeredShortcut: string | null = null;
-  private readonly pendingShortcuts = new Set<string>();
+  private registeredShortcut: ShortcutRegistration | null = null;
+  private readonly pendingShortcuts = new Set<ShortcutRegistration>();
+  private readonly win32Registry: Win32HotkeyRegistry | null;
   private mutationQueue: Promise<void> = Promise.resolve();
-  private releaseTimer: NodeJS.Timeout | null = null;
-  private shortcutHeld = false;
   private disposed = false;
 
-  constructor(private readonly toggleOverlay: () => void) {}
+  constructor(window: BrowserWindow, private readonly toggleOverlay: () => void) {
+    this.win32Registry = process.platform === 'win32'
+      ? Win32HotkeyRegistry.create(window, this.handleWin32Shortcut)
+      : null;
+  }
 
   private readonly handleShortcut = (): void => {
-    if (this.disposed) return;
-    if (!this.shortcutHeld) {
-      this.shortcutHeld = true;
-      this.toggleOverlay();
+    if (!this.disposed) this.toggleOverlay();
+  };
+
+  private readonly handleWin32Shortcut = (registration: Win32HotkeyRegistration): void => {
+    if (
+      this.disposed
+      || this.registeredShortcut?.kind !== 'win32'
+      || this.registeredShortcut.value !== registration
+    ) {
+      return;
     }
-    if (this.releaseTimer) clearTimeout(this.releaseTimer);
-    this.releaseTimer = setTimeout(() => {
-      this.releaseTimer = null;
-      this.shortcutHeld = false;
-    }, OverlayShortcutManager.releaseQuietPeriodMs);
+    this.toggleOverlay();
   };
 
   initialize(shortcut: string): OverlayShortcutStatus {
     const normalized = this.parse(shortcut);
     this.configuredShortcut = normalized;
-    this.resetRepeatGuard();
-    try {
-      if (globalShortcut.register(normalized, this.handleShortcut)) {
-        this.registeredShortcut = normalized;
-      }
-    } catch {
-      this.registeredShortcut = null;
-    }
+    const result = this.register(normalized);
+    if (result.ok) this.registeredShortcut = result.registration;
     return this.getStatus();
   }
 
@@ -69,7 +80,7 @@ export class OverlayShortcutManager {
     }
     const normalized = this.parse(shortcut);
     const previous = this.registeredShortcut;
-    if (previous === normalized && globalShortcut.isRegistered(normalized)) {
+    if (previous && this.shortcutOf(previous) === normalized && this.isRegistered(previous)) {
       await persist(normalized);
       if (this.disposed) {
         throw new DesktopError(
@@ -81,18 +92,16 @@ export class OverlayShortcutManager {
       return this.getStatus();
     }
 
-    let registered = false;
-    try {
-      registered = globalShortcut.register(normalized, this.handleShortcut);
-    } catch {
-      throw new DesktopError(
-        'INVALID_OVERLAY_SHORTCUT',
-        'Это сочетание не поддерживается операционной системой',
-        null,
-        { shortcut: normalized },
-      );
-    }
-    if (!registered) {
+    const result = this.register(normalized);
+    if (!result.ok) {
+      if (result.reason === 'unsupported') {
+        throw new DesktopError(
+          'INVALID_OVERLAY_SHORTCUT',
+          'Это сочетание не поддерживается операционной системой',
+          null,
+          { shortcut: normalized },
+        );
+      }
       throw new DesktopError(
         'OVERLAY_SHORTCUT_UNAVAILABLE',
         'Это сочетание уже занято другим приложением или системой',
@@ -100,37 +109,39 @@ export class OverlayShortcutManager {
         { shortcut: normalized },
       );
     }
-    this.pendingShortcuts.add(normalized);
+    const next = result.registration;
+    this.pendingShortcuts.add(next);
 
     try {
       await persist(normalized);
     } catch (error) {
-      globalShortcut.unregister(normalized);
-      this.pendingShortcuts.delete(normalized);
+      this.unregister(next);
+      this.pendingShortcuts.delete(next);
       throw error;
     }
 
     if (this.disposed) {
-      globalShortcut.unregister(normalized);
-      this.pendingShortcuts.delete(normalized);
+      this.unregister(next);
+      this.pendingShortcuts.delete(next);
       throw new DesktopError(
         'OVERLAY_SHORTCUT_DISPOSED',
         'Менеджер сочетаний уже остановлен',
       );
     }
 
-    this.registeredShortcut = normalized;
+    this.registeredShortcut = next;
     this.configuredShortcut = normalized;
-    this.resetRepeatGuard();
-    this.pendingShortcuts.delete(normalized);
-    if (previous && previous !== normalized) globalShortcut.unregister(previous);
+    this.pendingShortcuts.delete(next);
+    if (previous && this.shortcutOf(previous) !== normalized) this.unregister(previous);
     return this.getStatus();
   }
 
   getStatus(): OverlayShortcutStatus {
-    const available = this.registeredShortcut === this.configuredShortcut
-      && globalShortcut.isRegistered(this.configuredShortcut);
-    if (!available && this.registeredShortcut === this.configuredShortcut) {
+    const registered = this.registeredShortcut;
+    const available = registered !== null
+      && this.shortcutOf(registered) === this.configuredShortcut
+      && this.isRegistered(registered);
+    if (!available && registered && this.shortcutOf(registered) === this.configuredShortcut) {
       this.registeredShortcut = null;
     }
     return {
@@ -140,18 +151,49 @@ export class OverlayShortcutManager {
   }
 
   dispose(): void {
+    if (this.disposed) return;
     this.disposed = true;
-    this.resetRepeatGuard();
-    if (this.registeredShortcut) globalShortcut.unregister(this.registeredShortcut);
-    for (const shortcut of this.pendingShortcuts) globalShortcut.unregister(shortcut);
+    if (this.registeredShortcut) this.unregister(this.registeredShortcut);
+    for (const shortcut of this.pendingShortcuts) this.unregister(shortcut);
     this.pendingShortcuts.clear();
     this.registeredShortcut = null;
+    this.win32Registry?.dispose();
   }
 
-  private resetRepeatGuard(): void {
-    if (this.releaseTimer) clearTimeout(this.releaseTimer);
-    this.releaseTimer = null;
-    this.shortcutHeld = false;
+  private register(shortcut: string): RegistrationResult {
+    if (process.platform === 'win32') {
+      const result: Win32HotkeyRegistrationResult = this.win32Registry?.register(shortcut)
+        ?? { ok: false, reason: 'unavailable' };
+      return result.ok
+        ? { ok: true, registration: { kind: 'win32', value: result.registration } }
+        : result;
+    }
+    try {
+      if (!globalShortcut.register(shortcut, this.handleShortcut)) {
+        return { ok: false, reason: 'unavailable' };
+      }
+      return { ok: true, registration: { kind: 'electron', shortcut } };
+    } catch {
+      return { ok: false, reason: 'unsupported' };
+    }
+  }
+
+  private unregister(registration: ShortcutRegistration): void {
+    if (registration.kind === 'win32') {
+      this.win32Registry?.unregister(registration.value);
+      return;
+    }
+    globalShortcut.unregister(registration.shortcut);
+  }
+
+  private isRegistered(registration: ShortcutRegistration): boolean {
+    return registration.kind === 'win32'
+      ? this.win32Registry?.isRegistered(registration.value) ?? false
+      : globalShortcut.isRegistered(registration.shortcut);
+  }
+
+  private shortcutOf(registration: ShortcutRegistration): string {
+    return registration.kind === 'win32' ? registration.value.shortcut : registration.shortcut;
   }
 
   private parse(shortcut: string): string {

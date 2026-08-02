@@ -9,6 +9,8 @@ extraResources:
   - from: ../../client/assets/brand/counterpick-icon.png
     to: brand/counterpick-icon.png
 asar: true
+asarUnpack:
+  - node_modules/@koromix/koffi-win32-x64/win32_x64/koffi.node
 publish:
   provider: github
   owner: BaidovBogdan

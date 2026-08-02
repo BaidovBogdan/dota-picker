@@ -85,7 +85,6 @@ const acceleratorByCode: Record<string, string> = {
   PageUp: 'PageUp',
   Period: '.',
   PrintScreen: 'PrintScreen',
-  Quote: '"',
   ScrollLock: 'Scrolllock',
   Semicolon: ';',
   Slash: '/',
@@ -98,6 +97,7 @@ function keyForEvent(event: KeyboardEvent): string | null {
   if (/^Digit[0-9]$/.test(event.code)) return event.code.slice(5);
   if (/^F([1-9]|1\d|2[0-4])$/.test(event.code)) return event.code;
   if (/^Numpad[0-9]$/.test(event.code)) return `num${event.code.slice(6)}`;
+  if (event.code === 'Quote') return event.shiftKey ? '"' : null;
   if (acceleratorByCode[event.code]) return acceleratorByCode[event.code];
   if (event.key === 'AudioVolumeUp') return 'VolumeUp';
   if (event.key === 'AudioVolumeDown') return 'VolumeDown';

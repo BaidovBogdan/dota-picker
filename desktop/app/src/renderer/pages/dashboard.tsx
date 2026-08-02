@@ -131,6 +131,23 @@ export function DashboardPage() {
           'Запустите игру — повторно включать ассистента не нужно',
           'Launch the game — you do not need to enable the assistant again',
         );
+  const gameSignalCopy = (
+    <>
+      <strong>
+        <AnimatedText
+          text={gameSignalTitle}
+          reserveLines={1}
+          live="polite"
+        />
+      </strong>
+      <p>
+        <AnimatedText
+          text={gameSignalDescription}
+          reserveLines={2}
+        />
+      </p>
+    </>
+  );
 
   useEffect(() => {
     if (currentEngine.phase !== 'ready' || !currentEngine.latestAnalysisId) return;
@@ -348,24 +365,21 @@ export function DashboardPage() {
             <span>{text('Сигнал игры', 'Game signal')}</span>
             <Broadcast size={21} weight="duotone" aria-hidden />
           </div>
-          <div className="system-card__stage" data-state={gameSignalMode}>
-            <GameSignalVisual mode={gameSignalMode} />
-            <div className="system-card__signal">
-              <strong>
-                <AnimatedText
-                  text={gameSignalTitle}
-                  reserveLines={1}
-                  live="polite"
-                />
-              </strong>
-              <p>
-                <AnimatedText
-                  text={gameSignalDescription}
-                  reserveLines={2}
-                />
-              </p>
+          {gameSignalMode === 'off' ? (
+            <div
+              className={`system-card__signal system-card__signal--compact ${gameSignalUnavailable ? 'system-card__signal--error' : ''}`}
+            >
+              <span className="system-card__pulse" aria-hidden />
+              <div>{gameSignalCopy}</div>
             </div>
-          </div>
+          ) : (
+            <div className="system-card__active-signal" data-state={gameSignalMode}>
+              <GameSignalVisual mode={gameSignalMode} />
+              <div className="system-card__signal system-card__signal--active">
+                {gameSignalCopy}
+              </div>
+            </div>
+          )}
           <dl className="system-card__telemetry">
             <div>
               <dt>{text('Последний сигнал', 'Last signal')}</dt>

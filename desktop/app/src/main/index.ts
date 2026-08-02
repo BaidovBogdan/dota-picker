@@ -30,6 +30,10 @@ import type {
 } from '../shared/contracts.js';
 import { IPC } from '../shared/ipc-channels.js';
 
+if (process.platform === 'win32') {
+  app.commandLine.appendSwitch('wm-window-animations-disabled');
+}
+
 const instanceLock = app.requestSingleInstanceLock();
 if (!instanceLock) app.quit();
 
@@ -645,7 +649,7 @@ async function bootstrap(): Promise<void> {
   } else {
     await overlayWindow.loadURL('counterpick://app/overlay.html#/overlay');
   }
-  overlayShortcut = new OverlayShortcutManager(toggleOverlay);
+  overlayShortcut = new OverlayShortcutManager(mainWindow, toggleOverlay);
   overlayShortcut.initialize((await preferences.get()).overlayShortcut);
   trayController.refresh(engine.getState());
   await broadcastOverlayState();
