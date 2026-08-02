@@ -20,7 +20,7 @@ import {
 } from '../components/dota-taxonomy';
 import { FavoriteButton } from '../components/favorite-button';
 import { FilterSearchField } from '../components/filter-search-field';
-import { MorphingFilterBar } from '../components/morphing-filter-bar';
+import { StickyFilterBar } from '../components/sticky-filter-bar';
 import { AsyncState, Badge, HeroIcon, Page } from '../components/ui';
 import { formatDateTime, formatPercent, heroName, rankName } from '../format';
 import { useI18n } from '../i18n';
@@ -159,35 +159,8 @@ export function MetaPage() {
         ) : null
       }
     >
-      <MorphingFilterBar
+      <StickyFilterBar
         className="meta-controls"
-        compactLabel={text('Фильтры', 'Filters')}
-        compactContent={(
-          <>
-            <span className="filter-dock__value" data-active="true">
-              <PositionLabel position={position} variant="compact" />
-            </span>
-            <span className="filter-dock__value" data-active={rank !== null}>
-              <RankLabel rank={rank} variant="compact" />
-            </span>
-            <span className="filter-dock__value">
-              {sortOptions.find((option) => option.value === sort)?.label}
-              {descending
-                ? <ArrowDownIcon size={13} aria-hidden />
-                : <ArrowUpIcon size={13} aria-hidden />}
-            </span>
-            {search.trim() ? (
-              <span className="filter-dock__value filter-dock__value--query" data-active="true">
-                <MagnifyingGlassIcon size={13} aria-hidden />
-                {search.trim()}
-              </span>
-            ) : null}
-            <span className="filter-dock__count">
-              <strong>{rows.length}</strong>
-              {text('героев', 'heroes')}
-            </span>
-          </>
-        )}
         label={text('Фильтры меты', 'Meta filters')}
       >
         <div className="meta-controls__top">
@@ -268,7 +241,7 @@ export function MetaPage() {
             <span>{rows.length} {text('героев', 'heroes')}</span>
           </span>
         </div>
-      </MorphingFilterBar>
+      </StickyFilterBar>
 
       {query.isPending ? (
         <AsyncState status="loading" title={text('Собираем мету', 'Loading meta')} />

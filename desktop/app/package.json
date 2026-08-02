@@ -1,6 +1,6 @@
 {
   "name": "@counterpick/desktop",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": true,
   "description": "Counterpick desktop companion for Dota 2",
   "main": "./out/main/index.js",

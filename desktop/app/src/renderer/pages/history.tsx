@@ -7,7 +7,6 @@ import {
   DesktopIcon,
   FunnelIcon,
   ListBulletsIcon,
-  MagnifyingGlassIcon,
   TargetIcon,
   TrophyIcon,
 } from '@phosphor-icons/react';
@@ -23,7 +22,7 @@ import {
   RankLabel,
 } from '../components/dota-taxonomy';
 import { FilterSearchField } from '../components/filter-search-field';
-import { MorphingFilterBar } from '../components/morphing-filter-bar';
+import { StickyFilterBar } from '../components/sticky-filter-bar';
 import { AsyncState, Badge, Button, HeroIcon, Page } from '../components/ui';
 import { formatDateTime, heroName, positionName } from '../format';
 import { useI18n } from '../i18n';
@@ -157,29 +156,8 @@ export function HistoryPage() {
       title={text('История контрпиков', 'Counterpick history')}
       description={text('Каждый результат хранит входной драфт, численные метрики и происхождение данных.', 'Every result keeps the input draft, numerical metrics, and data provenance.')}
     >
-      <MorphingFilterBar
+      <StickyFilterBar
         className="history-toolbar"
-        compactLabel={text('Фильтры', 'Filters')}
-        compactContent={(
-          <>
-            <span className="filter-dock__value" data-active={source !== 'all'}>
-              {sourceOptions.find((option) => option.value === source)?.label}
-            </span>
-            <span className="filter-dock__value" data-active={position !== 'all'}>
-              {positionOptions.find((option) => option.value === String(position))?.label}
-            </span>
-            {search.trim() ? (
-              <span className="filter-dock__value filter-dock__value--query" data-active="true">
-                <MagnifyingGlassIcon size={13} aria-hidden />
-                {search.trim()}
-              </span>
-            ) : null}
-            <span className="filter-dock__count">
-              <strong>{items.length}</strong>
-              {text('результатов', 'results')}
-            </span>
-          </>
-        )}
         label={text('Фильтры истории контрпиков', 'Counterpick history filters')}
       >
         <div className="history-toolbar__controls">
@@ -212,7 +190,7 @@ export function HistoryPage() {
           <strong>{items.length}</strong>
           <span>{text('результатов · сначала новые', 'results · newest first')}</span>
         </div>
-      </MorphingFilterBar>
+      </StickyFilterBar>
 
       {query.isPending ? (
         <AsyncState status="loading" />
