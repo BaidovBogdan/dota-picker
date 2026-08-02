@@ -7,19 +7,36 @@ import {
 import { DesktopError } from './errors.js';
 
 export class OverlayShortcutManager {
+  private static readonly releaseQuietPeriodMs = 1_200;
   private configuredShortcut = 'PageUp';
   private registeredShortcut: string | null = null;
   private readonly pendingShortcuts = new Set<string>();
   private mutationQueue: Promise<void> = Promise.resolve();
+  private releaseTimer: NodeJS.Timeout | null = null;
+  private shortcutHeld = false;
   private disposed = false;
 
   constructor(private readonly toggleOverlay: () => void) {}
 
+  private readonly handleShortcut = (): void => {
+    if (this.disposed) return;
+    if (!this.shortcutHeld) {
+      this.shortcutHeld = true;
+      this.toggleOverlay();
+    }
+    if (this.releaseTimer) clearTimeout(this.releaseTimer);
+    this.releaseTimer = setTimeout(() => {
+      this.releaseTimer = null;
+      this.shortcutHeld = false;
+    }, OverlayShortcutManager.releaseQuietPeriodMs);
+  };
+
   initialize(shortcut: string): OverlayShortcutStatus {
     const normalized = this.parse(shortcut);
     this.configuredShortcut = normalized;
+    this.resetRepeatGuard();
     try {
-      if (globalShortcut.register(normalized, this.toggleOverlay)) {
+      if (globalShortcut.register(normalized, this.handleShortcut)) {
         this.registeredShortcut = normalized;
       }
     } catch {
@@ -66,7 +83,7 @@ export class OverlayShortcutManager {
 
     let registered = false;
     try {
-      registered = globalShortcut.register(normalized, this.toggleOverlay);
+      registered = globalShortcut.register(normalized, this.handleShortcut);
     } catch {
       throw new DesktopError(
         'INVALID_OVERLAY_SHORTCUT',
@@ -104,6 +121,7 @@ export class OverlayShortcutManager {
 
     this.registeredShortcut = normalized;
     this.configuredShortcut = normalized;
+    this.resetRepeatGuard();
     this.pendingShortcuts.delete(normalized);
     if (previous && previous !== normalized) globalShortcut.unregister(previous);
     return this.getStatus();
@@ -123,10 +141,17 @@ export class OverlayShortcutManager {
 
   dispose(): void {
     this.disposed = true;
+    this.resetRepeatGuard();
     if (this.registeredShortcut) globalShortcut.unregister(this.registeredShortcut);
     for (const shortcut of this.pendingShortcuts) globalShortcut.unregister(shortcut);
     this.pendingShortcuts.clear();
     this.registeredShortcut = null;
+  }
+
+  private resetRepeatGuard(): void {
+    if (this.releaseTimer) clearTimeout(this.releaseTimer);
+    this.releaseTimer = null;
+    this.shortcutHeld = false;
   }
 
   private parse(shortcut: string): string {

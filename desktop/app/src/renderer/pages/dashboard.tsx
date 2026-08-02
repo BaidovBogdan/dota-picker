@@ -20,6 +20,7 @@ import { useEffect, useRef, useState } from 'react';
 import { desktop } from '../bridge';
 import { AnimatedText } from '../components/animated-text';
 import { PositionLabel, RankLabel } from '../components/dota-taxonomy';
+import { GameSignalVisual, type GameSignalMode } from '../components/game-signal-visual';
 import { phaseCopy, formatRelative, heroName } from '../format';
 import { useI18n } from '../i18n';
 import { StatusScrub } from '../components/motion';
@@ -98,6 +99,38 @@ export function DashboardPage() {
     : currentEngine.enabled
       ? 'enabled'
       : 'disabled';
+  const gameSignalUnavailable = currentEngine.phase === 'error' && !currentEngine.dotaDetected;
+  const gameSignalMode: GameSignalMode = !currentEngine.enabled || gameSignalUnavailable
+    ? 'off'
+    : currentEngine.dotaDetected
+      ? 'detected'
+      : 'waiting';
+  const gameSignalTitle = gameSignalUnavailable
+    ? text('Сигнал недоступен', 'Signal unavailable')
+    : gameSignalMode === 'off'
+      ? text('Сигнал приостановлен', 'Signal paused')
+    : gameSignalMode === 'detected'
+      ? text('Dota 2 запущена', 'Dota 2 is running')
+      : text('Ожидаем Dota 2', 'Waiting for Dota 2');
+  const gameSignalDescription = gameSignalUnavailable
+    ? text(
+        'Не удалось запустить отслеживание. Повторите попытку в блоке ассистента',
+        'Tracking could not start. Try again from the assistant panel',
+      )
+    : gameSignalMode === 'off'
+      ? text(
+          'Включите ассистента, чтобы начать отслеживание окна игры',
+          'Turn on the assistant to start watching for the game window',
+        )
+    : gameSignalMode === 'detected'
+      ? text(
+          'Окно игры обнаружено. Ожидаем выбор героев',
+          'Game window detected. Waiting for hero selection',
+        )
+      : text(
+          'Запустите игру — повторно включать ассистента не нужно',
+          'Launch the game — you do not need to enable the assistant again',
+        );
 
   useEffect(() => {
     if (currentEngine.phase !== 'ready' || !currentEngine.latestAnalysisId) return;
@@ -315,30 +348,19 @@ export function DashboardPage() {
             <span>{text('Сигнал игры', 'Game signal')}</span>
             <Broadcast size={21} weight="duotone" aria-hidden />
           </div>
-          <div
-            className={`system-card__signal ${currentEngine.dotaDetected ? 'system-card__signal--live' : ''}`}
-          >
-            <span className="system-card__pulse" aria-hidden />
-            <div>
+          <div className="system-card__stage" data-state={gameSignalMode}>
+            <GameSignalVisual mode={gameSignalMode} />
+            <div className="system-card__signal">
               <strong>
                 <AnimatedText
-                  text={currentEngine.dotaDetected
-                    ? text('Dota 2 обнаружена', 'Dota 2 detected')
-                    : text('Ожидаем Dota 2', 'Waiting for Dota 2')}
+                  text={gameSignalTitle}
                   reserveLines={1}
                   live="polite"
                 />
               </strong>
               <p>
                 <AnimatedText
-                  text={
-                    currentEngine.dotaDetected
-                      ? text('Окно игры доступно для анализа', 'The game window is ready for analysis')
-                      : text(
-                          'Запустите игру — повторно включать ассистента не нужно',
-                          'Launch the game — you do not need to enable the assistant again',
-                        )
-                  }
+                  text={gameSignalDescription}
                   reserveLines={2}
                 />
               </p>

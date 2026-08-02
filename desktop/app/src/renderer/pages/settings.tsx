@@ -41,6 +41,8 @@ type ShortcutFeedback =
   | 'conflict'
   | 'error';
 
+type UpdateCheckFeedback = 'idle' | 'checking' | 'current' | 'unsupported' | 'error';
+
 const modifierKeys = new Set([
   'Alt',
   'AltGraph',
@@ -151,11 +153,14 @@ function errorCode(error: unknown): string | null {
 export function SettingsPage() {
   const preferences = useAppStore((state) => state.preferences);
   const engine = useAppStore((state) => state.engine);
+  const updateState = useAppStore((state) => state.update);
   const setPreferences = useAppStore((state) => state.setPreferences);
   const setEngine = useAppStore((state) => state.setEngine);
   const { language, text } = useI18n();
   const [recordingShortcut, setRecordingShortcut] = useState(false);
   const [shortcutFeedback, setShortcutFeedback] = useState<ShortcutFeedback>('idle');
+  const [updateCheckFeedback, setUpdateCheckFeedback] = useState<UpdateCheckFeedback>('idle');
+  const [updateCheckCoolingDown, setUpdateCheckCoolingDown] = useState(false);
   const infoQuery = useQuery({
     queryKey: ['app-info'],
     queryFn: desktop.app.getInfo,
@@ -206,10 +211,26 @@ export function SettingsPage() {
     },
     onSuccess: setPreferences,
   });
+  const updateCheckMutation = useMutation({
+    mutationFn: desktop.updates.check,
+    onMutate: () => setUpdateCheckFeedback('checking'),
+    onSuccess: (nextUpdate) => {
+      setUpdateCheckFeedback(
+        !nextUpdate.supported
+          ? 'unsupported'
+          : nextUpdate.availableVersion
+            ? 'idle'
+            : 'current',
+      );
+    },
+    onError: () => setUpdateCheckFeedback('error'),
+    onSettled: () => setUpdateCheckCoolingDown(true),
+  });
 
   const setOverlayShortcut = shortcutMutation.mutate;
   useEffect(() => {
     if (!recordingShortcut) return undefined;
+    let pendingShortcut: { code: string; accelerator: string } | null = null;
     const handleKeyDown = (event: KeyboardEvent) => {
       event.preventDefault();
       event.stopPropagation();
@@ -220,12 +241,67 @@ export function SettingsPage() {
         setShortcutFeedback('invalid');
         return;
       }
+      pendingShortcut = { code: event.code, accelerator };
+    };
+    const handleKeyUp = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!pendingShortcut || event.code !== pendingShortcut.code) return;
+      const { accelerator } = pendingShortcut;
+      pendingShortcut = null;
       setRecordingShortcut(false);
       setOverlayShortcut(accelerator);
     };
     window.addEventListener('keydown', handleKeyDown, true);
-    return () => window.removeEventListener('keydown', handleKeyDown, true);
+    window.addEventListener('keyup', handleKeyUp, true);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true);
+      window.removeEventListener('keyup', handleKeyUp, true);
+    };
   }, [recordingShortcut, setOverlayShortcut]);
+
+  useEffect(() => {
+    if (updateCheckFeedback !== 'current' && updateCheckFeedback !== 'error') return undefined;
+    const timeout = window.setTimeout(() => setUpdateCheckFeedback('idle'), 5_000);
+    return () => window.clearTimeout(timeout);
+  }, [updateCheckFeedback]);
+
+  useEffect(() => {
+    if (!updateCheckCoolingDown) return undefined;
+    const timeout = window.setTimeout(() => setUpdateCheckCoolingDown(false), 2_500);
+    return () => window.clearTimeout(timeout);
+  }, [updateCheckCoolingDown]);
+
+  const updateBusy = updateState
+    ? ['downloading', 'downloaded', 'installing'].includes(updateState.status)
+    : false;
+  const updateChecking = updateCheckMutation.isPending || updateState?.status === 'checking';
+  const updateCheckDisabled = !updateState
+    || !updateState.supported
+    || updateBusy
+    || updateChecking
+    || updateCheckCoolingDown;
+  const updateCheckLabel = updateChecking
+    ? text('Проверяем…', 'Checking…')
+    : updateBusy
+      ? text('Обновление выполняется', 'Update in progress')
+      : updateCheckFeedback === 'error'
+        ? text('Повторить проверку', 'Try again')
+        : updateCheckFeedback === 'unsupported' || updateState?.supported === false
+          ? text('Недоступно в этой сборке', 'Unavailable in this build')
+          : updateState?.availableVersion || updateCheckFeedback === 'current'
+            ? text('Проверить снова', 'Check again')
+            : text('Проверить обновления', 'Check for updates');
+  const updateCheckDetail = updateCheckFeedback === 'error'
+    ? text('Не удалось подключиться к серверу обновлений', 'Could not reach the update server')
+    : updateState?.availableVersion
+      ? text(
+          `Версия ${updateState.availableVersion} готова к загрузке`,
+          `Version ${updateState.availableVersion} is ready to download`,
+        )
+      : updateCheckFeedback === 'current'
+        ? text('Новых версий нет', 'No newer version found')
+        : null;
 
   if (!preferences) {
     return (
@@ -538,11 +614,32 @@ export function SettingsPage() {
             <ShieldCheckIcon size={20} weight="duotone" aria-hidden />
           </span>
           <span>
-            <strong>Counterpick {infoQuery.data?.version ?? '0.1.1'}</strong>
+            <strong>Counterpick {infoQuery.data?.version ?? '0.1.2'}</strong>
             <small>{infoQuery.data?.platform ?? 'Windows'} · {text('ассистент драфта', 'draft assistant')}</small>
           </span>
         </div>
-        <div>
+        <div className="about-strip__actions">
+          <span className="about-strip__update-check">
+            <button
+              type="button"
+              disabled={updateCheckDisabled}
+              onClick={() => updateCheckMutation.mutate()}
+            >
+              <ArrowCounterClockwiseIcon
+                className={updateChecking ? 'is-spinning' : undefined}
+                size={14}
+                aria-hidden
+              />
+              {updateCheckLabel}
+            </button>
+            <small
+              role={updateCheckFeedback === 'error' ? 'alert' : 'status'}
+              aria-live={updateCheckFeedback === 'error' ? 'assertive' : 'polite'}
+              aria-atomic="true"
+            >
+              {updateCheckDetail}
+            </small>
+          </span>
           <button
             type="button"
             onClick={() => desktop.app.openExternal('https://github.com/BaidovBogdan/dota-picker')}

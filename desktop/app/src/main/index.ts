@@ -190,7 +190,7 @@ function createOverlayWindow(): BrowserWindow {
     x: workArea.x + workArea.width - width - margin,
     y: workArea.y + margin,
     show: false,
-    paintWhenInitiallyHidden: false,
+    paintWhenInitiallyHidden: true,
     frame: false,
     transparent: true,
     backgroundColor: '#00000000',
@@ -382,6 +382,12 @@ async function bootstrap(): Promise<void> {
   let heroImagesRetryAt = 0;
   let trayController: TrayController | null = null;
   let lastTrayEngineEnabled: boolean | null = null;
+  let overlayPresentationSequence = 0;
+  let pendingOverlayPresentation: {
+    id: number;
+    timeout: NodeJS.Timeout;
+    resolve: () => void;
+  } | null = null;
   const getOverlayState = async (): Promise<OverlayState> => {
     if (!engine) throw new Error('Draft engine is unavailable');
     const currentPreferences = await preferences.get();
@@ -399,13 +405,57 @@ async function bootstrap(): Promise<void> {
     overlayAvailable = state.available;
     return state;
   };
-  const publishOverlayState = (state: OverlayState): void => {
+  const completeOverlayPresentation = (presentationId: number): void => {
+    if (pendingOverlayPresentation?.id !== presentationId) return;
+    clearTimeout(pendingOverlayPresentation.timeout);
+    const resolvePresentation = pendingOverlayPresentation.resolve;
+    pendingOverlayPresentation = null;
+    const window = overlayWindow;
+    if (window && !window.isDestroyed() && !window.webContents.isDestroyed()) {
+      window.webContents.setBackgroundThrottling(true);
+    }
+    resolvePresentation();
+  };
+  const publishOverlayState = (state: OverlayState, presentationId?: number): void => {
     const window = overlayWindow;
     if (!window || window.isDestroyed() || window.webContents.isDestroyed()) return;
-    window.webContents.send(IPC.overlayChanged, state);
+    if (presentationId) window.webContents.send(IPC.overlayChanged, state, presentationId);
+    else window.webContents.send(IPC.overlayChanged, state);
   };
   const broadcastOverlayState = async (): Promise<void> => {
     publishOverlayState(await getOverlayState());
+  };
+  const prepareOverlayPresentation = async (): Promise<void> => {
+    const state = await getOverlayState();
+    const window = overlayWindow;
+    if (
+      !window
+      || window.isDestroyed()
+      || window.webContents.isDestroyed()
+      || window.webContents.isLoading()
+    ) {
+      throw new DesktopError(
+        'OVERLAY_RENDERER_UNAVAILABLE',
+        'The overlay is not ready to be shown',
+      );
+    }
+    if (pendingOverlayPresentation) {
+      completeOverlayPresentation(pendingOverlayPresentation.id);
+    }
+    const presentationId = ++overlayPresentationSequence;
+    window.webContents.setBackgroundThrottling(false);
+    await new Promise<void>((resolvePresentation) => {
+      const timeout = setTimeout(
+        () => completeOverlayPresentation(presentationId),
+        750,
+      );
+      pendingOverlayPresentation = {
+        id: presentationId,
+        timeout,
+        resolve: resolvePresentation,
+      };
+      publishOverlayState(state, presentationId);
+    });
   };
   const broadcastVisibleOverlayState = (): Promise<void> => {
     const window = overlayWindow;
@@ -414,7 +464,7 @@ async function bootstrap(): Promise<void> {
     }
     return broadcastOverlayState();
   };
-  syncOverlayState = broadcastOverlayState;
+  syncOverlayState = prepareOverlayPresentation;
   const loadHeroImages = (): Promise<void> => {
     if (heroImagesLoaded || Date.now() < heroImagesRetryAt) return Promise.resolve();
     heroImagesLoading ??= api.heroes()
@@ -481,8 +531,6 @@ async function bootstrap(): Promise<void> {
     }
     await broadcastVisibleOverlayState();
   });
-  overlayShortcut = new OverlayShortcutManager(toggleOverlay);
-  overlayShortcut.initialize((await preferences.get()).overlayShortcut);
   trayController = createTray(
     preferences,
     engine,
@@ -582,6 +630,7 @@ async function bootstrap(): Promise<void> {
       return state;
     },
     hide: hideOverlay,
+    presented: completeOverlayPresentation,
   });
   if (process.env.ELECTRON_RENDERER_URL) {
     await mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
@@ -596,6 +645,9 @@ async function bootstrap(): Promise<void> {
   } else {
     await overlayWindow.loadURL('counterpick://app/overlay.html#/overlay');
   }
+  overlayShortcut = new OverlayShortcutManager(toggleOverlay);
+  overlayShortcut.initialize((await preferences.get()).overlayShortcut);
+  trayController.refresh(engine.getState());
   await broadcastOverlayState();
   if (overlayPreview) overlayWindow.showInactive();
   updates.start();

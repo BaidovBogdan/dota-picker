@@ -298,6 +298,10 @@ export class UpdateManager {
           error: previous.error,
         });
       }
+      throw new DesktopError(
+        'UPDATE_CHECK_FAILED',
+        'Could not check for updates. Check your connection and try again.',
+      );
     }
     return this.getState();
   }

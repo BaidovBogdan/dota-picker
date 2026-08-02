@@ -10,6 +10,7 @@ const IPC = {
   refresh: 'overlay:refresh',
   setPosition: 'overlay:set-position',
   hide: 'overlay:hide',
+  presented: 'overlay:presented',
   changed: 'overlay:changed',
 } as const;
 
@@ -38,8 +39,13 @@ const bridge: OverlayBridge = {
   refresh: () => invoke(IPC.refresh),
   setPosition: (position) => invoke(IPC.setPosition, position),
   hide: () => invoke(IPC.hide),
+  presented: (presentationId) => invoke(IPC.presented, presentationId),
   onState: (listener) => {
-    const handler = (_event: Electron.IpcRendererEvent, state: OverlayState) => listener(state);
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      state: OverlayState,
+      presentationId?: number,
+    ) => listener(state, presentationId);
     ipcRenderer.on(IPC.changed, handler);
     return () => ipcRenderer.removeListener(IPC.changed, handler);
   },

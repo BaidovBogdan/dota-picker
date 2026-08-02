@@ -26,6 +26,7 @@ export const IPC = {
   overlayRefresh: 'overlay:refresh',
   overlaySetPosition: 'overlay:set-position',
   overlayHide: 'overlay:hide',
+  overlayPresented: 'overlay:presented',
   overlayChanged: 'overlay:changed',
   preferencesGet: 'preferences:get',
   preferencesUpdate: 'preferences:update',

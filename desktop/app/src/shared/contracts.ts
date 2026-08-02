@@ -491,7 +491,8 @@ export type OverlayBridge = {
   refresh: () => Promise<OverlayState>;
   setPosition: (position: Position) => Promise<OverlayState>;
   hide: () => Promise<void>;
-  onState: (listener: (state: OverlayState) => void) => () => void;
+  presented: (presentationId: number) => Promise<void>;
+  onState: (listener: (state: OverlayState, presentationId?: number) => void) => () => void;
 };
 
 export type IpcSuccess<T> = { ok: true; value: T };

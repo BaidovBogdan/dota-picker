@@ -4,7 +4,7 @@ import {
   ShieldCheckIcon,
   XIcon,
 } from '@phosphor-icons/react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 
 import type {
   OverlayBridge,
@@ -241,9 +241,13 @@ function actionFailureMessage(failure: ActionFailure, language: Language): strin
 }
 
 export function OverlayPage() {
-  const [state, setState] = useState<OverlayState>(emptyState);
+  const [renderFrame, setRenderFrame] = useState({
+    state: emptyState,
+    presentationId: null as number | null,
+  });
   const [pending, setPending] = useState<'refresh' | Position | null>(null);
   const [actionError, setActionError] = useState<ActionFailure | null>(null);
+  const state = renderFrame.state;
   const bridge = useMemo(overlayBridge, []);
   const refreshing = state.available && (pending !== null || state.refreshing);
   const visiblePicks = state.available ? state.picks : [];
@@ -264,19 +268,30 @@ export function OverlayPage() {
 
   useEffect(() => {
     if (!bridge) {
-      setState((current) => ({
+      setRenderFrame((current) => ({
         ...current,
-        message: text(current.language, 'Overlay bridge недоступен', 'Overlay bridge is unavailable'),
+        state: {
+          ...current.state,
+          message: text(current.state.language, 'Overlay bridge недоступен', 'Overlay bridge is unavailable'),
+        },
       }));
       return;
     }
     let active = true;
-    const unsubscribe = bridge.onState((nextState) => {
-      if (active) setState(nextState);
+    let pushReceived = false;
+    const unsubscribe = bridge.onState((nextState, presentationId) => {
+      if (!active) return;
+      pushReceived = true;
+      setRenderFrame((current) => ({
+        state: nextState,
+        presentationId: presentationId ?? current.presentationId,
+      }));
     });
     void bridge.getState()
       .then((nextState) => {
-        if (active) setState(nextState);
+        if (active && !pushReceived) {
+          setRenderFrame({ state: nextState, presentationId: null });
+        }
       })
       .catch((error: unknown) => {
         if (active) setActionError({ error, context: 'load' });
@@ -287,6 +302,26 @@ export function OverlayPage() {
     };
   }, [bridge]);
 
+  useLayoutEffect(() => {
+    const { presentationId } = renderFrame;
+    if (!bridge || !presentationId) return undefined;
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        setRenderFrame((current) => (
+          current.presentationId === presentationId
+            ? { ...current, presentationId: null }
+            : current
+        ));
+        void bridge.presented(presentationId).catch(() => undefined);
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame) window.cancelAnimationFrame(secondFrame);
+    };
+  }, [bridge, renderFrame]);
+
   const runAction = async (
     key: 'refresh' | Position,
     action: (currentBridge: OverlayBridge) => Promise<OverlayState>,
@@ -295,7 +330,8 @@ export function OverlayPage() {
     setPending(key);
     setActionError(null);
     try {
-      setState(await action(bridge));
+      const nextState = await action(bridge);
+      setRenderFrame((current) => ({ ...current, state: nextState }));
     } catch (error) {
       setActionError({ error, context: 'action' });
     } finally {

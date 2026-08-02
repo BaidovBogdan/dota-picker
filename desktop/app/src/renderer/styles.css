@@ -1648,6 +1648,7 @@ h2 {
   overflow: hidden;
   background: #07090d;
   color: #f5f1eb;
+  color-scheme: dark;
 }
 
 .auth-titlebar {
@@ -1925,6 +1926,16 @@ h2 {
   border-radius: 2px;
   background: rgba(0, 0, 0, 0.24);
   color: #fffaf3;
+}
+
+.auth-console .input-shell input {
+  color: #fffaf3;
+  caret-color: #d6a16a;
+}
+
+.auth-console input:-webkit-autofill {
+  caret-color: #d6a16a;
+  -webkit-text-fill-color: #fffaf3;
 }
 
 .auth-console .input-shell:focus-within,
@@ -2712,51 +2723,264 @@ h2 {
   color: var(--hud-copper);
 }
 
-.system-card__signal {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 28px 0;
+.system-card__stage {
+  display: grid;
+  min-height: 0;
+  align-content: center;
+  grid-template-rows: minmax(128px, 1fr) auto;
+  padding: 2px 0 16px;
 }
 
-.system-card__pulse {
+.game-signal-visual {
+  --signal-primary: #8a72ff;
+  --signal-secondary: #5bb7ff;
+  --signal-soft: rgba(111, 105, 255, 0.18);
   position: relative;
-  width: 14px;
-  height: 14px;
-  flex: 0 0 auto;
-  border: 1px solid var(--hud-pulse);
-  border-radius: 50%;
+  width: min(100%, 250px);
+  min-height: 128px;
+  margin: 0 auto;
+  color: var(--signal-primary);
+  isolation: isolate;
 }
 
-.system-card__pulse::after {
+.game-signal-visual[data-state="off"] {
+  --signal-primary: color-mix(in srgb, var(--hud-muted) 72%, transparent);
+  --signal-secondary: color-mix(in srgb, var(--hud-muted) 54%, transparent);
+  --signal-soft: color-mix(in srgb, var(--hud-muted) 9%, transparent);
+}
+
+.game-signal-visual[data-state="detected"] {
+  --signal-primary: #df8d55;
+  --signal-secondary: #62d5b0;
+  --signal-soft: rgba(92, 211, 174, 0.16);
+}
+
+:root[data-theme="light"] .game-signal-visual:not([data-state="off"]) {
+  --signal-primary: #6045d1;
+  --signal-secondary: #176f9f;
+  --signal-soft: rgba(82, 67, 190, 0.2);
+}
+
+:root[data-theme="light"] .game-signal-visual[data-state="detected"] {
+  --signal-primary: #a34f1f;
+  --signal-secondary: #08765e;
+  --signal-soft: rgba(24, 123, 94, 0.18);
+}
+
+.game-signal-visual svg {
   position: absolute;
-  inset: 4px;
-  border-radius: inherit;
-  background: var(--hud-pulse);
-  content: "";
+  z-index: 2;
+  inset: 50% auto auto 50%;
+  width: 100%;
+  overflow: visible;
+  color: var(--signal-primary);
+  transform: translate(-50%, -50%);
 }
 
-.system-card__signal--live .system-card__pulse {
-  border-color: var(--hud-copper-bright);
-  box-shadow: 0 0 0 7px rgba(198, 138, 91, 0.08);
+.game-signal-visual__halo {
+  position: absolute;
+  z-index: 0;
+  top: 50%;
+  left: 50%;
+  width: 52%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--signal-soft) 0%, transparent 68%);
+  transform: translate(-50%, -50%) scale(1.08);
 }
 
-.system-card__signal--live .system-card__pulse::after {
-  background: var(--hud-crimson);
+.game-signal-visual__orbits {
+  fill: none;
+  stroke: var(--signal-secondary);
+  stroke-dasharray: 4 7;
+  stroke-width: 0.72;
+  opacity: 0.44;
+}
+
+.game-signal-visual__mesh {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.game-signal-visual__mesh line {
+  stroke: var(--signal-secondary);
+  stroke-width: 0.72;
+}
+
+.game-signal-visual__mesh line[data-depth="back"] {
+  opacity: 0.2;
+}
+
+.game-signal-visual__mesh line[data-depth="front"] {
+  opacity: 0.62;
+}
+
+.game-signal-visual__node {
+  fill: var(--signal-primary);
+  opacity: 0.78;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.game-signal-visual__node[data-depth="back"] {
+  opacity: 0.38;
+}
+
+.game-signal-visual__core {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.game-signal-visual__core-ring {
+  fill: none;
+  stroke: var(--signal-secondary);
+  stroke-width: 0.8;
+  opacity: 0.62;
+}
+
+.game-signal-visual__core-dot {
+  fill: var(--signal-primary);
+  filter: drop-shadow(0 0 5px var(--signal-primary));
+}
+
+.game-signal-visual__scan {
+  stroke-width: 1.2;
+  opacity: 0.68;
+}
+
+.game-signal-visual__floor {
+  position: absolute;
+  z-index: 1;
+  bottom: 1px;
+  left: 50%;
+  width: 58%;
+  height: 12px;
+  border-radius: 50%;
+  background: radial-gradient(ellipse, var(--signal-soft), transparent 70%);
+  opacity: 0.72;
+  transform: translateX(-50%);
+}
+
+.game-signal-visual:not([data-state="off"]) .game-signal-visual__orbits {
+  animation: signal-orbits 8s linear infinite;
+}
+
+.game-signal-visual:not([data-state="off"]) .game-signal-visual__mesh {
+  animation: signal-mesh-drift 5.6s ease-in-out infinite;
+}
+
+.game-signal-visual:not([data-state="off"]) .game-signal-visual__node[data-depth="front"] {
+  animation: signal-node 2.4s ease-in-out var(--node-delay) infinite;
+}
+
+.game-signal-visual:not([data-state="off"]) .game-signal-visual__core {
+  animation: signal-core 2.8s ease-in-out infinite;
+}
+
+.game-signal-visual:not([data-state="off"]) .game-signal-visual__scan {
+  animation: signal-scan 3.8s ease-in-out infinite;
+}
+
+.game-signal-visual[data-state="detected"] .game-signal-visual__orbits {
+  animation-duration: 5.5s;
+  opacity: 0.62;
+}
+
+.game-signal-visual[data-state="detected"] .game-signal-visual__core {
+  animation-duration: 1.9s;
+}
+
+.game-signal-visual[data-state="off"] svg {
+  filter: none;
+}
+
+.game-signal-visual[data-state="off"] .game-signal-visual__scan {
+  opacity: 0.16;
+}
+
+@keyframes signal-orbits {
+  to {
+    stroke-dashoffset: -88;
+  }
+}
+
+@keyframes signal-mesh-drift {
+  0%,
+  100% {
+    transform: rotate(-1.4deg) scale(0.985);
+  }
+
+  50% {
+    transform: rotate(1.4deg) scale(1.015);
+  }
+}
+
+@keyframes signal-node {
+  0%,
+  100% {
+    opacity: 0.48;
+    transform: scale(0.82);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1.3);
+  }
+}
+
+@keyframes signal-core {
+  0%,
+  100% {
+    opacity: 0.66;
+    transform: scale(0.9);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+
+@keyframes signal-scan {
+  0%,
+  100% {
+    opacity: 0.12;
+    transform: translateY(-8px) scaleX(0.82);
+  }
+
+  50% {
+    opacity: 0.8;
+    transform: translateY(8px) scaleX(1.04);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .game-signal-visual *,
+  .game-signal-visual *::before,
+  .game-signal-visual *::after {
+    animation: none !important;
+  }
+}
+
+.system-card__signal {
+  position: relative;
+  z-index: 3;
+  min-height: 58px;
+  text-align: center;
 }
 
 .system-card__signal strong {
   display: block;
-  margin-bottom: 5px;
+  margin-bottom: 4px;
   color: var(--hud-ink);
-  font-size: clamp(18px, 1.6vw, 24px);
-  font-weight: 560;
-  letter-spacing: -0.025em;
+  font-size: clamp(17px, 1.5vw, 22px);
+  font-weight: 590;
+  letter-spacing: -0.03em;
 }
 
 .system-card__signal p {
-  max-width: 260px;
-  margin: 0;
+  max-width: 275px;
+  margin: 0 auto;
   color: var(--hud-muted);
   font-size: 10px;
   line-height: 1.5;
@@ -5796,6 +6020,11 @@ h2 {
   gap: 10px;
 }
 
+.about-strip > .about-strip__actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .about-strip__mark {
   display: grid;
   width: 38px;
@@ -5830,6 +6059,43 @@ h2 {
 
 .about-strip button:hover {
   color: var(--teal);
+}
+
+.about-strip button:disabled {
+  cursor: default;
+  opacity: 0.58;
+}
+
+.about-strip__update-check {
+  display: grid;
+  justify-items: end;
+  gap: 3px;
+  padding-right: 10px;
+  border-right: 1px solid var(--line);
+}
+
+.about-strip__update-check button {
+  color: var(--ink);
+  font-weight: 640;
+}
+
+.about-strip__update-check button:hover:not(:disabled) {
+  color: var(--teal);
+}
+
+.about-strip__update-check small {
+  max-width: 220px;
+  color: var(--muted);
+  font-size: 9px;
+  text-align: right;
+}
+
+.about-strip__update-check small:empty {
+  display: none;
+}
+
+.about-strip__update-check svg.is-spinning {
+  animation: spin 900ms linear infinite;
 }
 
 .not-found {

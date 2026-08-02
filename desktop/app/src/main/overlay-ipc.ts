@@ -15,6 +15,7 @@ type OverlayIpcDependencies = {
   refresh: () => Promise<OverlayState>;
   setPosition: (position: Position) => Promise<OverlayState>;
   hide: () => void;
+  presented: (presentationId: number) => void;
 };
 
 function ensureTrustedOverlaySender(
@@ -71,4 +72,10 @@ export function registerOverlayIpc(dependencies: OverlayIpcDependencies): void {
     ([position]) => dependencies.setPosition(position),
   );
   register(IPC.overlayHide, none, dependencies, () => dependencies.hide());
+  register(
+    IPC.overlayPresented,
+    z.tuple([z.number().int().positive()]),
+    dependencies,
+    ([presentationId]) => dependencies.presented(presentationId),
+  );
 }
