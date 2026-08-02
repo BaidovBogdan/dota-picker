@@ -12,7 +12,7 @@ import {
 
 const defaults: Preferences = {
   theme: 'system',
-  language: 'ru',
+  language: 'en',
   position: 3,
   rank: null,
   startWithWindows: false,

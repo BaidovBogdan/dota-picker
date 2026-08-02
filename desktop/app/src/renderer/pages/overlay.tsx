@@ -16,11 +16,11 @@ import type {
 import { BrandMark } from '../components/brand-mark';
 
 const emptyState: OverlayState = {
-  language: 'ru',
+  language: 'en',
   available: false,
   enabled: false,
   phase: 'off',
-  message: 'Подключаем overlay',
+  message: 'Connecting the overlay',
   dotaDetected: false,
   draftActive: false,
   position: 3,

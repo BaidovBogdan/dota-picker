@@ -127,6 +127,14 @@ export const desktop = {
       return native().window.onMaximized(listener) ?? (() => undefined);
     },
   },
+  updates: {
+    getState: () => native().updates.getState(),
+    check: () => native().updates.check(),
+    downloadAndInstall: () => native().updates.downloadAndInstall(),
+    subscribe(listener: Parameters<NativeBridge['updates']['onState']>[0]) {
+      return native().updates.onState(listener) ?? (() => undefined);
+    },
+  },
   app: {
     openExternal: (url: string) => native().app.openExternal(url),
     getInfo: () => native().app.getInfo(),

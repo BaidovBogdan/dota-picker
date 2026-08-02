@@ -21,6 +21,7 @@ import { createOverlayState } from './overlay-state.js';
 import { OverlayShortcutManager } from './overlay-shortcut.js';
 import { PreferencesStore } from './preferences-store.js';
 import { TokenVault } from './token-vault.js';
+import { UpdateManager } from './update-manager.js';
 import type {
   EngineState,
   OverlayShortcutStatus,
@@ -57,6 +58,9 @@ let overlayDesiredVisible = false;
 let overlayToggleGeneration = 0;
 let shutdownPromise: Promise<void> | null = null;
 let shutdownComplete = false;
+let normalQuitPending = false;
+let updateManager: UpdateManager | null = null;
+let resumeEngineAfterFailedUpdate = false;
 
 const apiUrl = process.env.MAIN_VITE_API_URL ?? 'https://dota-picker-api.onrender.com/v1';
 const overlayPreview = process.env.COUNTERPICK_OVERLAY_PREVIEW === '1';
@@ -64,6 +68,35 @@ const overlayPreview = process.env.COUNTERPICK_OVERLAY_PREVIEW === '1';
 function brandIconPath(): string {
   if (app.isPackaged) return join(process.resourcesPath, 'brand', 'counterpick-icon.png');
   return join(app.getAppPath(), '..', '..', 'client', 'assets', 'brand', 'counterpick-icon.png');
+}
+
+function disposeRuntime(): Promise<void> {
+  if (shutdownComplete) return Promise.resolve();
+  shutdownPromise ??= Promise.resolve(engine?.dispose())
+    .catch(() => undefined)
+    .then(() => {
+      shutdownComplete = true;
+    });
+  return shutdownPromise;
+}
+
+async function prepareForUpdateInstall(): Promise<void> {
+  resumeEngineAfterFailedUpdate = engine?.getState().enabled ?? false;
+  await disposeRuntime();
+}
+
+function takeOverForUpdateInstall(): void {
+  quitting = true;
+}
+
+async function recoverAfterUpdateInstallFailure(canRestoreEngine: boolean): Promise<void> {
+  const shouldRestoreEngine = resumeEngineAfterFailedUpdate && canRestoreEngine;
+  resumeEngineAfterFailedUpdate = false;
+  quitting = false;
+  normalQuitPending = false;
+  shutdownPromise = null;
+  shutdownComplete = false;
+  if (shouldRestoreEngine) await engine?.restore();
 }
 
 function showWindow(): void {
@@ -121,6 +154,11 @@ function createWindow(preferences: PreferencesStore): BrowserWindow {
   });
   window.on('close', (event) => {
     if (quitting) return;
+    if (['downloading', 'downloaded', 'installing'].includes(updateManager?.getState().status ?? 'idle')) {
+      event.preventDefault();
+      showWindow();
+      return;
+    }
     event.preventDefault();
     void preferences.get().then((value) => {
       if (value.minimizeToTray) window.hide();
@@ -426,6 +464,13 @@ async function bootstrap(): Promise<void> {
     }
   };
   engine = new DraftEngine(api, preferences, gsi, emitEngine);
+  const updates = new UpdateManager({
+    getWindow: () => mainWindow,
+    prepareForInstall: prepareForUpdateInstall,
+    takeOverForInstall: takeOverForUpdateInstall,
+    recoverAfterInstallFailure: () => recoverAfterUpdateInstallFailure(api.isAuthenticated()),
+  });
+  updateManager = updates;
   api.setAuthenticationListener(async (authenticated) => {
     if (!authenticated) {
       overlayAvailable = false;
@@ -464,6 +509,7 @@ async function bootstrap(): Promise<void> {
     api,
     engine,
     preferences,
+    updates,
     onPreferencesChanged: async (previous, current) => {
       if (previous.position !== current.position || previous.rank !== current.rank) {
         await engine?.refresh(true);
@@ -552,6 +598,7 @@ async function bootstrap(): Promise<void> {
   }
   await broadcastOverlayState();
   if (overlayPreview) overlayWindow.showInactive();
+  updates.start();
 
   app.on('activate', showWindow);
   app.on('second-instance', showWindow);
@@ -561,15 +608,13 @@ app.on('before-quit', (event) => {
   quitting = true;
   if (shutdownComplete) return;
   event.preventDefault();
-  shutdownPromise ??= Promise.resolve(engine?.dispose())
-    .catch(() => undefined)
-    .then(() => {
-      shutdownComplete = true;
-      app.quit();
-    });
+  if (normalQuitPending) return;
+  normalQuitPending = true;
+  void disposeRuntime().then(() => app.quit());
 });
 
 app.on('will-quit', () => {
+  updateManager?.dispose();
   overlayShortcut?.dispose();
 });
 

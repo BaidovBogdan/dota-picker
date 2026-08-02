@@ -3,6 +3,7 @@ import type {
   DesktopBridge,
   EngineState,
   IpcResult,
+  UpdateState,
 } from '../shared/contracts.js';
 import { IPC } from '../shared/ipc-channels.js';
 
@@ -78,6 +79,12 @@ const bridge: DesktopBridge = {
     close: () => invoke(IPC.windowClose),
     isMaximized: () => invoke(IPC.windowIsMaximized),
     onMaximized: (listener) => subscribe<boolean>(IPC.windowMaximizedChanged, listener),
+  },
+  updates: {
+    getState: () => invoke(IPC.updateGetState),
+    check: () => invoke(IPC.updateCheck),
+    downloadAndInstall: () => invoke(IPC.updateDownloadAndInstall),
+    onState: (listener) => subscribe<UpdateState>(IPC.updateChanged, listener),
   },
   app: {
     openExternal: (url) => invoke(IPC.appOpenExternal, url),

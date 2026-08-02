@@ -13,6 +13,7 @@ import { phaseCopy } from '../format';
 import { useI18n } from '../i18n';
 import { useAppStore } from '../store';
 import { BrandMark } from './brand-mark';
+import { AppUpdate } from './app-update';
 import { WindowControls } from './window-controls';
 
 export function AppShell() {
@@ -80,6 +81,7 @@ export function AppShell() {
           ))}
         </nav>
         <div className="sidebar__footer">
+          <AppUpdate />
           <NavLink
             to="/settings"
             aria-label={text('Настройки', 'Settings')}

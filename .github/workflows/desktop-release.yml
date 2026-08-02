@@ -1,0 +1,121 @@
+name: Desktop Release
+
+on:
+  push:
+    tags:
+      - v*.*.*
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-release
+  cancel-in-progress: false
+
+jobs:
+  release-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: desktop/app
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/app/package-lock.json
+      - name: Verify release version
+        id: release
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+            throw "Desktop releases require a stable semantic version"
+          }
+          if ($env:GITHUB_REF_NAME -ne "v$version") {
+            throw "Tag $env:GITHUB_REF_NAME does not match package version $version"
+          }
+          git merge-base --is-ancestor $env:GITHUB_SHA origin/main
+          if ($LASTEXITCODE -ne 0) {
+            throw "Release tag must point to a commit contained in main"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+      - name: Install dependencies
+        run: npm ci
+      - name: Build Windows installer
+        run: npm run dist:win
+      - name: Verify update artifacts
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          $version = $env:RELEASE_VERSION
+          $expected = @(
+            "release/Counterpick-$version-x64.exe",
+            "release/Counterpick-$version-x64.exe.blockmap",
+            "release/latest.yml"
+          )
+          foreach ($path in $expected) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "Missing release artifact: $path"
+            }
+          }
+          $manifest = Get-Content "release/latest.yml" -Raw
+          $escapedVersion = [regex]::Escape($version)
+          $escapedInstaller = [regex]::Escape("Counterpick-$version-x64.exe")
+          if ($manifest -notmatch "(?m)^version:\s*$escapedVersion\s*$") {
+            throw "latest.yml contains a different version"
+          }
+          if ($manifest -notmatch "(?m)^\s*-?\s*url:\s*$escapedInstaller\s*$") {
+            throw "latest.yml contains a different installer URL"
+          }
+          if ($manifest -notmatch "(?m)^\s*sha512:\s*\S+\s*$") {
+            throw "latest.yml does not contain a SHA-512 checksum"
+          }
+      - name: Publish public update release
+        env:
+          GH_TOKEN: ${{ secrets.COUNTERPICK_RELEASES_TOKEN }}
+          RELEASE_REPOSITORY: BaidovBogdan/counterpick-releases
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
+            throw "COUNTERPICK_RELEASES_TOKEN is not configured"
+          }
+          $visibility = gh repo view $env:RELEASE_REPOSITORY --json visibility --jq '.visibility'
+          if ($visibility -ne 'PUBLIC') {
+            throw "$env:RELEASE_REPOSITORY must be public"
+          }
+          $version = $env:RELEASE_VERSION
+          $publishedTags = @(gh release list `
+            --repo $env:RELEASE_REPOSITORY `
+            --limit 100 `
+            --exclude-drafts `
+            --exclude-pre-releases `
+            --json tagName `
+            --jq '.[].tagName')
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not read existing desktop releases"
+          }
+          $releaseVersion = [version]$version
+          foreach ($publishedTag in $publishedTags) {
+            if ($publishedTag.Trim() -match '^v(\d+\.\d+\.\d+)$') {
+              $publishedVersion = [version]$Matches[1]
+              if ($publishedVersion -ge $releaseVersion) {
+                throw "Release $publishedTag is already current or newer"
+              }
+            }
+          }
+          $assets = @(
+            (Resolve-Path "release/Counterpick-$version-x64.exe").Path
+            (Resolve-Path "release/Counterpick-$version-x64.exe.blockmap").Path
+            (Resolve-Path "release/latest.yml").Path
+          )
+          gh release create $env:GITHUB_REF_NAME @assets `
+            --repo $env:RELEASE_REPOSITORY `
+            --target main `
+            --title "Counterpick $version" `
+            --notes "A new Counterpick version is ready with the latest fixes and improvements." `
+            --latest

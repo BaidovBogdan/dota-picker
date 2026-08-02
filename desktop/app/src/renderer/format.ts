@@ -49,21 +49,21 @@ function percentFormatter(language: Language, digits: number): Intl.NumberFormat
   return formatter;
 }
 
-export const formatDateTime = (value: string | null | undefined, language: Language = 'ru') => {
+export const formatDateTime = (value: string | null | undefined, language: Language = 'en') => {
   if (!value) return textFor(language, 'Нет данных', 'No data');
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return textFor(language, 'Нет данных', 'No data');
   return dateTimeFormatters[language].format(date);
 };
 
-export const formatDate = (value: string | null | undefined, language: Language = 'ru') => {
+export const formatDate = (value: string | null | undefined, language: Language = 'en') => {
   if (!value) return textFor(language, 'Нет данных', 'No data');
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return textFor(language, 'Нет данных', 'No data');
   return dateFormatters[language].format(date);
 };
 
-export const formatRelative = (value: string | null | undefined, language: Language = 'ru') => {
+export const formatRelative = (value: string | null | undefined, language: Language = 'en') => {
   if (!value) return textFor(language, 'ещё не было', 'never');
   const date = new Date(value);
   const delta = date.getTime() - Date.now();
@@ -79,19 +79,19 @@ export const formatRelative = (value: string | null | undefined, language: Langu
 export const formatPercent = (
   value: number | null | undefined,
   digits = 1,
-  language: Language = 'ru',
+  language: Language = 'en',
 ) => {
   if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
   return percentFormatter(language, digits).format(value);
 };
 
-export const heroName = (hero: Hero | null | undefined, language: Language = 'ru') => {
+export const heroName = (hero: Hero | null | undefined, language: Language = 'en') => {
   const technicalName = hero?.name?.replace(/^npc_dota_hero_/, '').replaceAll('_', ' ');
-  if (language === 'en') return technicalName || hero?.localizedName?.trim() || 'Unknown hero';
+  if (language === 'en') return hero?.localizedName?.trim() || technicalName || 'Unknown hero';
   return hero?.localizedName?.trim() || technicalName || 'Неизвестный герой';
 };
 
-export const positionName = (position: Position, language: Language = 'ru') => {
+export const positionName = (position: Position, language: Language = 'en') => {
   const positions: Record<Language, Record<Position, string>> = {
     ru: {
       1: 'Керри',
@@ -111,7 +111,7 @@ export const positionName = (position: Position, language: Language = 'ru') => {
   return positions[language][position];
 };
 
-export const rankName = (rank: number | null | undefined, language: Language = 'ru') => {
+export const rankName = (rank: number | null | undefined, language: Language = 'en') => {
   const ranks: Record<Language, Record<number, string>> = {
     ru: {
       1: 'Рекрут',
@@ -139,7 +139,7 @@ export const rankName = (rank: number | null | undefined, language: Language = '
     : textFor(language, 'Все ранги', 'All ranks');
 };
 
-export const confidenceName = (confidence: Confidence, language: Language = 'ru') => {
+export const confidenceName = (confidence: Confidence, language: Language = 'en') => {
   const values: Record<Language, Record<Confidence, string>> = {
     ru: { high: 'Высокая', medium: 'Средняя', low: 'Низкая' },
     en: { high: 'High', medium: 'Medium', low: 'Low' },
@@ -147,7 +147,7 @@ export const confidenceName = (confidence: Confidence, language: Language = 'ru'
   return values[language][confidence];
 };
 
-export const reasonName = (reason: string, language: Language = 'ru') => {
+export const reasonName = (reason: string, language: Language = 'en') => {
   const reasons: Record<Language, Record<string, string>> = {
     ru: {
       strong_counter: 'Сильный ответ на выбранных соперников',
@@ -171,7 +171,7 @@ export const reasonName = (reason: string, language: Language = 'ru') => {
   return reasons[language][reason] ?? reason.replaceAll('_', ' ');
 };
 
-export const roleName = (role: string, language: Language = 'ru') => {
+export const roleName = (role: string, language: Language = 'en') => {
   if (language === 'en') return role;
   const roles: Record<string, string> = {
     Carry: 'Керри',
@@ -187,7 +187,7 @@ export const roleName = (role: string, language: Language = 'ru') => {
   return roles[role] ?? role;
 };
 
-export const phaseCopy = (phase: EnginePhase, language: Language = 'ru') => {
+export const phaseCopy = (phase: EnginePhase, language: Language = 'en') => {
   const copy: Record<Language, Record<EnginePhase, { title: string; description: string }>> = {
     ru: {
       off: { title: 'Ассистент выключен', description: 'Включите его перед поиском матча. Он будет ждать Dota в фоне.' },

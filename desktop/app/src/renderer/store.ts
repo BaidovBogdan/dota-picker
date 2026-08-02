@@ -1,16 +1,18 @@
 import { create } from 'zustand';
 
-import type { Account, EngineState, Preferences } from './types';
+import type { Account, EngineState, Preferences, UpdateState } from './types';
 
 type AppStore = {
   account: Account | null;
   preferences: Preferences | null;
   engine: EngineState | null;
+  update: UpdateState | null;
   wishlist: number[];
   wishlistSet: ReadonlySet<number>;
   setAccount: (account: Account | null) => void;
   setPreferences: (preferences: Preferences) => void;
   setEngine: (engine: EngineState) => void;
+  setUpdate: (update: UpdateState) => void;
   setWishlist: (wishlist: number[]) => void;
   toggleWishlist: (heroId: number) => void;
 };
@@ -19,11 +21,13 @@ export const useAppStore = create<AppStore>((set) => ({
   account: null,
   preferences: null,
   engine: null,
+  update: null,
   wishlist: [],
   wishlistSet: new Set(),
   setAccount: (account) => set({ account }),
   setPreferences: (preferences) => set({ preferences }),
   setEngine: (engine) => set({ engine }),
+  setUpdate: (update) => set({ update }),
   setWishlist: (wishlist) =>
     set((state) => {
       if (

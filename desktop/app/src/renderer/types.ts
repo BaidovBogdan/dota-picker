@@ -1,3 +1,7 @@
+import type { UpdateState } from '../shared/contracts';
+
+export type { UpdateProgress, UpdateState, UpdateStatus } from '../shared/contracts';
+
 export type ThemeMode = 'system' | 'light' | 'dark';
 export type Language = 'ru' | 'en';
 export type Position = 1 | 2 | 3 | 4 | 5;
@@ -413,6 +417,12 @@ export type NativeBridge = {
     close: () => Promise<void> | void;
     isMaximized: () => Promise<boolean>;
     onMaximized: (listener: (maximized: boolean) => void) => (() => void) | void;
+  };
+  updates: {
+    getState: () => Promise<UpdateState>;
+    check: () => Promise<UpdateState>;
+    downloadAndInstall: () => Promise<UpdateState>;
+    onState: (listener: (state: UpdateState) => void) => (() => void) | void;
   };
   app: {
     openExternal: (url: string) => Promise<void> | void;

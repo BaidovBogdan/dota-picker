@@ -11,7 +11,7 @@ export function textFor(language: Language, russian: string, english: string): s
 }
 
 export function useI18n() {
-  const language = useAppStore((state) => state.preferences?.language ?? 'ru');
+  const language = useAppStore((state) => state.preferences?.language ?? 'en');
   const text = useCallback(
     (russian: string, english: string) => textFor(language, russian, english),
     [language],

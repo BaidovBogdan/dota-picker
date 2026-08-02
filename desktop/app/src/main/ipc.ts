@@ -22,12 +22,14 @@ import type { ApiClient } from './api-client.js';
 import type { DraftEngine } from './draft-engine.js';
 import { DesktopError, normalizeError } from './errors.js';
 import type { PreferencesStore } from './preferences-store.js';
+import type { UpdateManager } from './update-manager.js';
 
 type Dependencies = {
   getWindow: () => BrowserWindow | null;
   api: ApiClient;
   engine: DraftEngine;
   preferences: PreferencesStore;
+  updates: UpdateManager;
   onPreferencesChanged?: (previous: Preferences, current: Preferences) => void | Promise<void>;
   getOverlayShortcut: () => OverlayShortcutStatus;
   setOverlayShortcut: (shortcut: string) => Promise<OverlayShortcutStatus>;
@@ -220,6 +222,12 @@ export function registerIpc(dependencies: Dependencies): void {
   });
   register(IPC.windowIsMaximized, none, dependencies.getWindow, () =>
     dependencies.getWindow()?.isMaximized() ?? false);
+  register(IPC.updateGetState, none, dependencies.getWindow, () =>
+    dependencies.updates.getState());
+  register(IPC.updateCheck, none, dependencies.getWindow, () =>
+    dependencies.updates.check());
+  register(IPC.updateDownloadAndInstall, none, dependencies.getWindow, () =>
+    dependencies.updates.downloadAndInstall());
   register(IPC.appOpenExternal, z.tuple([externalUrlSchema]), dependencies.getWindow, async ([url]) => {
     await shell.openExternal(url);
   });

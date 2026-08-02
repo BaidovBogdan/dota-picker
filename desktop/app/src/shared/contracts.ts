@@ -394,6 +394,33 @@ export type AppInfo = {
   platform: NodeJS.Platform;
 };
 
+export type UpdateStatus =
+  | 'idle'
+  | 'checking'
+  | 'available'
+  | 'downloading'
+  | 'downloaded'
+  | 'installing'
+  | 'error';
+
+export type UpdateProgress = {
+  percent: number;
+  transferred: number;
+  total: number;
+  bytesPerSecond: number;
+};
+
+export type UpdateState = {
+  supported: boolean;
+  status: UpdateStatus;
+  currentVersion: string;
+  availableVersion: string | null;
+  releaseName: string | null;
+  releaseNotes: string | null;
+  progress: UpdateProgress | null;
+  error: string | null;
+};
+
 export type BillingStatus = {
   plan: 'free' | 'pro';
   active: boolean;
@@ -446,6 +473,12 @@ export type DesktopBridge = {
     close: () => Promise<void>;
     isMaximized: () => Promise<boolean>;
     onMaximized: (listener: (maximized: boolean) => void) => () => void;
+  };
+  updates: {
+    getState: () => Promise<UpdateState>;
+    check: () => Promise<UpdateState>;
+    downloadAndInstall: () => Promise<UpdateState>;
+    onState: (listener: (state: UpdateState) => void) => () => void;
   };
   app: {
     openExternal: (url: string) => Promise<void>;

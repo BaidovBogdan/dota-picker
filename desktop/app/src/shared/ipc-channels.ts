@@ -36,6 +36,10 @@ export const IPC = {
   windowClose: 'window:close',
   windowIsMaximized: 'window:is-maximized',
   windowMaximizedChanged: 'window:maximized-changed',
+  updateGetState: 'update:get-state',
+  updateCheck: 'update:check',
+  updateDownloadAndInstall: 'update:download-and-install',
+  updateChanged: 'update:changed',
   appOpenExternal: 'app:open-external',
   appInfo: 'app:info',
 } as const;

@@ -18,6 +18,7 @@ import { z } from 'zod';
 import authHeroesLoop from '../assets/auth-heroes-loop.mp4';
 import authHeroesPoster from '../assets/auth-heroes-poster.jpg';
 import { desktop } from '../bridge';
+import { AppUpdate } from '../components/app-update';
 import { BrandMark } from '../components/brand-mark';
 import { ImageReveal, PageReveal } from '../components/motion';
 import { OtpCodeField } from '../components/otp-code-field';
@@ -517,6 +518,9 @@ export function AuthPage() {
           </section>
         </PageReveal>
       </main>
+      <div className="standalone-update">
+        <AppUpdate />
+      </div>
     </div>
   );
 }

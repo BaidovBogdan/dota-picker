@@ -10,6 +10,7 @@ import {
 
 import { desktop } from './bridge';
 import { AppShell } from './components/app-shell';
+import { AppUpdate } from './components/app-update';
 import { BrandMark } from './components/brand-mark';
 import { AsyncState } from './components/ui';
 import { WindowControls } from './components/window-controls';
@@ -168,6 +169,9 @@ function BootstrapScreen({ children }: { children: React.ReactNode }) {
         <WindowControls />
       </header>
       <div className="bootstrap-screen">{children}</div>
+      <div className="standalone-update">
+        <AppUpdate />
+      </div>
     </>
   );
 }
@@ -192,10 +196,35 @@ function Router() {
   );
 }
 
+function UpdateSync() {
+  const setUpdate = useAppStore((state) => state.setUpdate);
+
+  useEffect(() => {
+    let active = true;
+    let eventReceived = false;
+    const unsubscribe = desktop.updates.subscribe((update) => {
+      eventReceived = true;
+      if (active) setUpdate(update);
+    });
+    void desktop.updates.getState()
+      .then((update) => {
+        if (active && !eventReceived) setUpdate(update);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [setUpdate]);
+
+  return null;
+}
+
 export function App() {
   const { text } = useI18n();
   return (
     <HashRouter>
+      <UpdateSync />
       <Suspense
         fallback={
           <BootstrapScreen>

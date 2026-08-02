@@ -9,6 +9,11 @@ extraResources:
   - from: ../../client/assets/brand/counterpick-icon.png
     to: brand/counterpick-icon.png
 asar: true
+publish:
+  provider: github
+  owner: BaidovBogdan
+  repo: counterpick-releases
+  private: false
 win:
   executableName: Counterpick
   icon: ../../client/assets/brand/counterpick-icon.png
