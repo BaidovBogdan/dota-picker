@@ -32,30 +32,28 @@ export function createDesktopDraft(
   }
   if (
     recognition.quality === 'too_blurry'
+    || recognition.quality === 'partial'
   ) {
     return { status: 'waiting', reason: 'image_unclear' };
   }
-
-  const trustedEntries = recognition.recognized.filter((entry) => (
-    entry.heroId !== null
-    && entry.side !== 'unknown'
-    && !entry.needsReview
-  ));
-  if (trustedEntries.length === 0) {
-    return {
-      status: 'waiting',
-      reason: recognition.quality === 'partial' ? 'image_unclear' : 'uncertain_picks',
-    };
-  }
-  if (trustedEntries.some((entry) => entry.confidence < 0.7)) {
+  if (
+    recognition.recognized.length === 0
+    || recognition.recognized.some(
+      (entry) => (
+        entry.heroId === null
+        || entry.side === 'unknown'
+        || entry.needsReview
+      ),
+    )
+  ) {
     return { status: 'waiting', reason: 'uncertain_picks' };
   }
 
-  const allyHeroIds = trustedEntries
+  const allyHeroIds = recognition.recognized
     .filter((entry) => entry.side === 'ally')
     .map((entry) => entry.heroId)
     .filter((heroId): heroId is number => heroId !== null);
-  const enemyHeroIds = trustedEntries
+  const enemyHeroIds = recognition.recognized
     .filter((entry) => entry.side === 'enemy')
     .map((entry) => entry.heroId)
     .filter((heroId): heroId is number => heroId !== null);
