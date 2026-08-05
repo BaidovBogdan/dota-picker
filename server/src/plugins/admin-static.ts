@@ -32,8 +32,6 @@ export const adminStaticPlugin: FastifyPluginAsync = async (app) => {
     decorateReply: true,
   });
 
-  app.get('/admin', async (_request, reply) => reply.redirect('/admin/', 308));
-
   app.get('/admin/assets/*', async (request, reply) => {
     const asset = (request.params as { '*': string })['*'];
     return reply
@@ -45,6 +43,7 @@ export const adminStaticPlugin: FastifyPluginAsync = async (app) => {
     .header('Content-Security-Policy', adminContentSecurityPolicy)
     .sendFile('index.html', { cacheControl: false });
 
+  app.get('/admin', sendAdminShell);
   app.get('/admin/', sendAdminShell);
   app.get('/admin/*', sendAdminShell);
 };
