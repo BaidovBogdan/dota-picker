@@ -13,6 +13,7 @@ import {
 } from '../photo/photo-upload.js';
 import type { QuotaService } from '../quota/quota.service.js';
 import { draftSchema } from '../recommendation/recommendation.schemas.js';
+import { DesktopConsensusTracker } from './desktop-consensus.js';
 import {
   analysisResponseSchema,
   desktopAnalysisQuerySchema,
@@ -33,6 +34,7 @@ type Dependencies = {
 };
 
 const desktopRecognitionBudgetMultiplier = 4;
+const desktopConsensusTracker = new DesktopConsensusTracker();
 
 export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZod {
   return async (app) => {
@@ -291,15 +293,18 @@ export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZo
           dependencies.metaAdapter,
           request.query.autoPosition ? { detectPosition: true } : undefined,
         );
-        const decision = createDesktopDraft(
+        const consensus = desktopConsensusTracker.stabilize({
+          sessionId: request.query.sessionId,
+          revision: request.query.revision,
+          autoPosition: request.query.autoPosition,
+          requestedPosition: request.query.position,
+          rank: request.query.rank ?? null,
           recognition,
-          resolveDesktopPosition(
-            recognition,
-            request.query.position,
-            request.query.autoPosition,
-          ),
-          request.query.rank,
-        );
+        });
+        const analysisPosition = consensus.resolvedPosition;
+        const decision = consensus.decision.status === 'ready'
+          ? { status: 'ready', draft: consensus.decision.draft }
+          : { status: 'waiting', reason: consensus.decision.reason };
 
         if (decision.status === 'waiting') {
           await dependencies.idempotencyService.abort(
@@ -311,13 +316,16 @@ export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZo
             reason: decision.reason,
             revision: request.query.revision,
             frameHash: upload.frameHash,
-            recognition,
+            recognition: consensus.recognition,
             quota,
           };
         } else {
           const analyzed = await dependencies.analysisService.analyze(
             request.user.sub,
-            decision.draft,
+            {
+              ...decision.draft,
+              position: analysisPosition,
+            },
             {
               idempotencyRecordId: sessionClaim.id,
               leaseToken: sessionClaim.leaseToken,
@@ -325,23 +333,20 @@ export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZo
             },
           );
           analysisCommitted = true;
-          const analysisPosition = analyzed.analysis.input.position;
-          const completedRecognition = request.query.autoPosition
+          const normalizedRecognition = request.query.autoPosition
             ? {
-                ...recognition,
-                detectedPosition: (
-                  analysisPosition !== request.query.position
-                  || recognition.detectedPosition === analysisPosition
-                )
-                  ? analysisPosition
-                  : null,
-              }
-            : recognition;
+              ...consensus.recognition,
+              detectedPosition: analysisPosition,
+            }
+            : {
+              ...consensus.recognition,
+              detectedPosition: null,
+            };
           response = {
             status: 'completed' as const,
             revision: request.query.revision,
             frameHash: upload.frameHash,
-            recognition: completedRecognition,
+            recognition: normalizedRecognition,
             analysis: analyzed.analysis,
             quota: analyzed.quota,
           };

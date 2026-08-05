@@ -17,6 +17,7 @@ import {
   OtpError,
   UnauthorizedError,
 } from '../../lib/errors.js';
+import { hasTransferableRevenueCatEntitlement } from '../billing/billing-plan.js';
 import type { OtpChallengeResponse } from './otp.service.js';
 import { OtpService, type DatabaseTransaction } from './otp.service.js';
 
@@ -442,8 +443,7 @@ export class AuthService {
         throw new NotFoundError('Account not found');
       }
       const now = new Date();
-      const activePro = account.plan === 'pro'
-        && (account.planExpiresAt === null || account.planExpiresAt.getTime() > now.getTime());
+      const activePro = hasTransferableRevenueCatEntitlement(account, now);
       const retainUntil = activePro && account.planExpiresAt
           ? new Date(account.planExpiresAt.getTime() + 30 * 24 * 60 * 60 * 1_000)
           : new Date(now.getTime() + 365 * 24 * 60 * 60 * 1_000);

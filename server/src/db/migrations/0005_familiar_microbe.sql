@@ -1,0 +1,1 @@
+ALTER TABLE "accounts" ADD COLUMN "complimentary_pro" boolean DEFAULT false NOT NULL;

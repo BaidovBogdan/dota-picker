@@ -38,6 +38,7 @@ export const accounts = pgTable(
     passwordHash: text('password_hash'),
     tokenVersion: integer('token_version').notNull().default(0),
     plan: planEnum('plan').notNull().default('free'),
+    complimentaryPro: boolean('complimentary_pro').notNull().default(false),
     planProductId: text('plan_product_id'),
     planExpiresAt: timestamp('plan_expires_at', { withTimezone: true }),
     billingUpdatedAt: timestamp('billing_updated_at', { withTimezone: true }),
@@ -235,6 +236,22 @@ export const billingTombstones = pgTable(
   (table) => [index('billing_tombstones_retain_until_idx').on(table.retainUntil)],
 );
 
+export const adminAuditEvents = pgTable(
+  'admin_audit_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    action: text('action').notNull(),
+    marker: text('marker').notNull(),
+    actor: text('actor').notNull(),
+    details: jsonb('details').$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('admin_audit_events_marker_unique').on(table.marker),
+    index('admin_audit_events_created_idx').on(table.createdAt, table.id),
+  ],
+);
+
 export const accountsRelations = relations(accounts, ({ many }) => ({
   analyses: many(analyses),
   analysisReviews: many(analysisReviews),
@@ -259,3 +276,4 @@ export type Account = typeof accounts.$inferSelect;
 export type NewAccount = typeof accounts.$inferInsert;
 export type Analysis = typeof analyses.$inferSelect;
 export type AnalysisReview = typeof analysisReviews.$inferSelect;
+export type AdminAuditEvent = typeof adminAuditEvents.$inferSelect;

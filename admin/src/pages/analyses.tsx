@@ -1,19 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import {
-  Camera,
-  CheckCircle2,
-  ChevronLeft,
-  ChevronRight,
-  CircleAlert,
-  Clock3,
-  Download,
-  ImageOff,
-  MousePointer2,
-  RotateCcw,
-  ScanSearch,
-  Sparkles,
-  Timer,
-} from 'lucide-react';
+import { Camera, ChevronLeft, ChevronRight, MousePointer2 } from 'lucide-react';
+import type { PageResource } from '../App';
 import {
   Button,
   CustomSelect,
@@ -25,443 +12,128 @@ import {
   SegmentedControl,
   StatusBadge,
   TableRowButton,
-  UserAvatar,
 } from '../components/ui';
-import {
-  downloadCsv,
-  formatDateTime,
-  formatDuration,
-  formatPercent,
-  formatRelativeTime,
-} from '../lib/format';
-import type {
-  AdminAnalysis,
-  AdminUser,
-  AnalysisSource,
-  AnalysisStatus,
-} from '../types';
-
-type StatusFilter = 'all' | AnalysisStatus;
-type SourceFilter = 'all' | AnalysisSource;
-
-type AnalysesPageProps = {
-  analyses: AdminAnalysis[];
-  users: AdminUser[];
-  selectedAnalysis: AdminAnalysis | null;
-  onSelectAnalysis: (id: string) => void;
-  onCloseAnalysis: () => void;
-  onNotify: (message: string) => void;
-};
+import { formatDateTime, formatDuration, formatNumber, formatRelativeTime } from '../lib/format';
+import type { AdminAnalysesResponse, AdminAnalysis, AnalysisSource, AnalysisStatus } from '../types';
 
 const pageSize = 12;
 
-const statusLabel: Record<AnalysisStatus, string> = {
-  completed: 'Готово',
-  failed: 'Ошибка',
-  processing: 'В процессе',
-};
+const statusLabel: Record<AnalysisStatus, string> = { completed: 'Готово', failed: 'Ошибка', processing: 'В процессе' };
+const statusTone: Record<AnalysisStatus, 'positive' | 'negative' | 'warning'> = { completed: 'positive', failed: 'negative', processing: 'warning' };
 
-const statusTone: Record<AnalysisStatus, 'positive' | 'negative' | 'warning'> = {
-  completed: 'positive',
-  failed: 'negative',
-  processing: 'warning',
-};
+function numberArray(value: unknown) {
+  return Array.isArray(value) ? value.filter((item): item is number => typeof item === 'number') : [];
+}
 
-const rankLabel = [
-  'Не указан',
-  'Рекрут',
-  'Страж',
-  'Рыцарь',
-  'Герой',
-  'Легенда',
-  'Властелин',
-  'Божество',
-  'Титан',
-] as const;
+function recommendations(analysis: AdminAnalysis) {
+  const value = analysis.result?.recommendations;
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== 'object') return [];
+    const candidate = item as { hero?: { localizedName?: unknown } };
+    return typeof candidate.hero?.localizedName === 'string' ? [candidate.hero.localizedName] : [];
+  });
+}
 
-export function AnalysesPage({
-  analyses,
-  users,
-  selectedAnalysis,
-  onSelectAnalysis,
-  onCloseAnalysis,
-  onNotify,
-}: AnalysesPageProps) {
+function inputValue(analysis: AdminAnalysis, key: string) {
+  return analysis.input[key];
+}
+
+function accountLabel(analysis: AdminAnalysis) {
+  return analysis.account.email ?? `Гость ${analysis.account.id.slice(0, 8)}`;
+}
+
+export function AnalysesPage({ resource, onRetry }: { resource: PageResource<AdminAnalysesResponse>; onRetry: () => void }) {
   const [query, setQuery] = useState('');
-  const [status, setStatus] = useState<StatusFilter>('all');
-  const [source, setSource] = useState<SourceFilter>('all');
+  const [status, setStatus] = useState<'all' | AnalysisStatus>('all');
+  const [source, setSource] = useState<'all' | AnalysisSource>('all');
   const [page, setPage] = useState(1);
-  const usersById = useMemo(() => new Map(users.map((user) => [user.id, user])), [users]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const items = resource.data?.items ?? [];
 
-  const filteredAnalyses = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
-    return analyses.filter((analysis) => {
-      const user = usersById.get(analysis.userId);
-      const matchesQuery = !normalizedQuery
-        || analysis.id.toLowerCase().includes(normalizedQuery)
-        || analysis.recommendation?.toLowerCase().includes(normalizedQuery)
-        || analysis.recommendations.some((hero) => hero.toLowerCase().includes(normalizedQuery))
-        || analysis.enemyHeroes.some((hero) => hero.toLowerCase().includes(normalizedQuery))
-        || analysis.allyHeroes.some((hero) => hero.toLowerCase().includes(normalizedQuery))
-        || analysis.errorCode?.toLowerCase().includes(normalizedQuery)
-        || user?.displayName.toLowerCase().includes(normalizedQuery)
-        || user?.email?.toLowerCase().includes(normalizedQuery);
-      return matchesQuery
-        && (status === 'all' || analysis.status === status)
-        && (source === 'all' || analysis.source === source);
+  const filtered = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    return items.filter((analysis) => {
+      const matchesQuery = !normalized
+        || analysis.id.toLowerCase().includes(normalized)
+        || analysis.accountId.toLowerCase().includes(normalized)
+        || analysis.account.email?.toLowerCase().includes(normalized)
+        || analysis.errorCode?.toLowerCase().includes(normalized)
+        || recommendations(analysis).some((hero) => hero.toLowerCase().includes(normalized));
+      return matchesQuery && (status === 'all' || analysis.status === status) && (source === 'all' || analysis.source === source);
     });
-  }, [analyses, query, source, status, usersById]);
+  }, [items, query, source, status]);
 
+  useEffect(() => setPage(1), [query, source, status]);
   useEffect(() => {
-    setPage(1);
-  }, [query, source, status]);
+    if (selectedId && !items.some((analysis) => analysis.id === selectedId)) setSelectedId(null);
+  }, [items, selectedId]);
 
-  const pages = Math.max(1, Math.ceil(filteredAnalyses.length / pageSize));
-  const visibleAnalyses = filteredAnalyses.slice((page - 1) * pageSize, page * pageSize);
-  const completed = analyses.filter((analysis) => analysis.status === 'completed');
-  const failed = analyses.filter((analysis) => analysis.status === 'failed');
+  const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const currentPage = Math.min(page, pages);
+  const visible = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const selected = items.find((analysis) => analysis.id === selectedId) ?? null;
+  const completed = items.filter((analysis) => analysis.status === 'completed');
   const averageDuration = completed.length
-    ? completed.reduce((sum, analysis) => sum + (analysis.durationMs ?? 0), 0) / completed.length
-    : 0;
-  const selectedUser = selectedAnalysis ? usersById.get(selectedAnalysis.userId) ?? null : null;
+    ? completed.reduce((total, analysis) => total + (analysis.durationMs ?? 0), 0) / completed.length
+    : null;
 
-  const exportAnalyses = () => {
-    downloadCsv('counterpick-checks.csv', [
-      ['ID', 'Пользователь', 'Статус', 'Источник', 'Рекомендации', 'Соперники', 'Союзники', 'Позиция', 'Ранг', 'Патч', 'Длительность', 'Создан'],
-      ...filteredAnalyses.map((analysis) => [
-        analysis.id,
-        usersById.get(analysis.userId)?.email ?? analysis.userId,
-        analysis.status,
-        analysis.source,
-        analysis.recommendations.join(', '),
-        analysis.enemyHeroes.join(', '),
-        analysis.allyHeroes.join(', '),
-        analysis.position,
-        analysis.rank ?? '',
-        analysis.patch,
-        analysis.durationMs ?? '',
-        analysis.createdAt,
-      ]),
-    ]);
-    onNotify('CSV проверок сохранён');
-  };
+  if (resource.loading && !resource.data) return <div className="page-stack" aria-busy="true"><div className="page-skeleton page-skeleton--heading" /><div className="page-skeleton page-skeleton--table" /></div>;
+  if (resource.error && !resource.data) return <EmptyState title="Проверки недоступны" text={resource.error} action={<Button onClick={onRetry}>Повторить</Button>} />;
+  if (!resource.data) return <EmptyState title="Нет данных" text="API не вернул проверки." action={<Button onClick={onRetry}>Обновить</Button>} />;
 
   return (
     <div className="page-stack">
       <header className="page-heading">
-        <div>
-          <span className="eyebrow">Результаты и качество распознавания</span>
-          <h1>Проверки</h1>
-          <p>Ручные и фото-анализы, завершившиеся рекомендацией.</p>
-        </div>
-        <Button icon={<Download size={16} />} onClick={exportAnalyses}>
-          Экспорт CSV
-        </Button>
+        <div><span className="eyebrow">Журнал production-анализов</span><h1>Проверки</h1><p>{formatNumber(resource.data.pagination.total)} записей · среднее время {formatDuration(averageDuration)}</p></div>
       </header>
-
-      <div className="compact-stat-grid">
-        <article>
-          <span className="compact-stat-grid__icon compact-stat-grid__icon--blue"><CheckCircle2 size={18} /></span>
-          <div><span>Завершено</span><strong>{completed.length}</strong></div>
-          <small>{formatPercent((completed.length / Math.max(1, analyses.length)) * 100, 1)}</small>
-        </article>
-        <article>
-          <span className="compact-stat-grid__icon compact-stat-grid__icon--red"><CircleAlert size={18} /></span>
-          <div><span>Ошибки</span><strong>{failed.length}</strong></div>
-          <small>{formatPercent((failed.length / Math.max(1, analyses.length)) * 100, 1)}</small>
-        </article>
-        <article>
-          <span className="compact-stat-grid__icon compact-stat-grid__icon--violet"><Timer size={18} /></span>
-          <div><span>Среднее время</span><strong>{formatDuration(averageDuration)}</strong></div>
-          <small>только готовые</small>
-        </article>
-      </div>
+      {resource.error ? <div className="inline-error"><span>{resource.error}</span><button type="button" onClick={onRetry}>Повторить</button></div> : null}
 
       <Panel className="table-panel">
         <div className="table-toolbar">
-          <SearchInput
-            value={query}
-            onChange={setQuery}
-            placeholder="ID, пользователь или герой"
-            ariaLabel="Поиск проверок"
-          />
+          <SearchInput value={query} onChange={setQuery} placeholder="ID, email, герой или ошибка" ariaLabel="Поиск проверок" />
           <div className="table-toolbar__filters">
-            <SegmentedControl
-              value={status}
-              onChange={setStatus}
-              ariaLabel="Статус проверки"
-              options={[
-                { value: 'all', label: 'Все' },
-                { value: 'completed', label: 'Готово' },
-                { value: 'failed', label: 'Ошибки' },
-                { value: 'processing', label: 'В работе' },
-              ]}
-            />
-            <CustomSelect
-              value={source}
-              onChange={setSource}
-              ariaLabel="Источник"
-              label="Источник"
-              options={[
-                { value: 'all', label: 'Все источники' },
-                { value: 'photo', label: 'Фото' },
-                { value: 'manual', label: 'Вручную' },
-              ]}
-            />
+            <SegmentedControl value={status} onChange={setStatus} ariaLabel="Статус" options={[{ value: 'all', label: 'Все' }, { value: 'completed', label: 'Готово' }, { value: 'failed', label: 'Ошибки' }, { value: 'processing', label: 'Процесс' }]} />
+            <CustomSelect value={source} onChange={setSource} ariaLabel="Источник" label="Источник" options={[{ value: 'all', label: 'Все источники' }, { value: 'photo', label: 'Фото' }, { value: 'manual', label: 'Вручную' }]} />
           </div>
         </div>
 
-        {visibleAnalyses.length ? (
+        {visible.length ? (
           <div className="data-table-wrap">
-            <table className="data-table analyses-table">
-              <thead>
-                <tr>
-                  <th>Проверка</th>
-                  <th>Пользователь</th>
-                  <th>Источник</th>
-                  <th>Результат</th>
-                  <th>Качество</th>
-                  <th>Время</th>
-                  <th>Создана</th>
-                  <th><span className="sr-only">Действия</span></th>
-                </tr>
-              </thead>
+            <table className="data-table">
+              <thead><tr><th>ID</th><th>Пользователь</th><th>Статус</th><th>Источник</th><th>Результат</th><th>Патч</th><th>Время</th><th>Создана</th><th><span className="sr-only">Открыть</span></th></tr></thead>
               <tbody>
-                {visibleAnalyses.map((analysis) => {
-                  const user = usersById.get(analysis.userId);
+                {visible.map((analysis) => {
+                  const heroes = recommendations(analysis);
                   return (
-                    <tr key={analysis.id} onClick={() => onSelectAnalysis(analysis.id)}>
-                      <td>
-                        <div className="check-id">
-                          {analysis.imageUrl ? (
-                            <span className="analysis-thumbnail">
-                              <img
-                                src={analysis.imageUrl}
-                                alt=""
-                                loading="lazy"
-                              />
-                              <i className={`analysis-state analysis-state--${analysis.status}`} />
-                            </span>
-                          ) : (
-                            <span className={`analysis-state analysis-state--${analysis.status}`} />
-                          )}
-                          <div>
-                            <strong>{analysis.id}</strong>
-                            <small>Патч {analysis.patch}</small>
-                          </div>
-                        </div>
-                      </td>
-                      <td>
-                        {user ? (
-                          <div className="table-user table-user--compact">
-                            <UserAvatar name={user.displayName} size="sm" />
-                            <span>
-                              <strong>{user.displayName}</strong>
-                              <small>{user.email ?? 'Гость'}</small>
-                            </span>
-                          </div>
-                        ) : <span>Удалённый пользователь</span>}
-                      </td>
-                      <td>
-                        <span className="source-cell">
-                          {analysis.source === 'photo' ? <Camera size={15} /> : <MousePointer2 size={15} />}
-                          {analysis.source === 'photo' ? 'Фото' : 'Вручную'}
-                        </span>
-                      </td>
-                      <td>
-                        <div className="result-cell">
-                          <strong>{analysis.recommendation ?? analysis.errorCode ?? 'Обработка'}</strong>
-                          <small>Позиция {analysis.position}</small>
-                        </div>
-                      </td>
-                      <td>
-                        <StatusBadge tone={statusTone[analysis.status]}>
-                          {analysis.confidence !== null
-                            ? formatPercent(analysis.confidence * 100, 0)
-                            : statusLabel[analysis.status]}
-                        </StatusBadge>
-                      </td>
-                      <td><span className="table-date">{formatDuration(analysis.durationMs)}</span></td>
+                    <tr key={analysis.id} onClick={() => setSelectedId(analysis.id)}>
+                      <td><code className="table-id">{analysis.id.slice(0, 8)}</code></td>
+                      <td><strong>{accountLabel(analysis)}</strong></td>
+                      <td><StatusBadge tone={statusTone[analysis.status]}>{statusLabel[analysis.status]}</StatusBadge></td>
+                      <td><span className="source-label">{analysis.source === 'photo' ? <Camera size={14} /> : <MousePointer2 size={14} />}{analysis.source === 'photo' ? 'Фото' : 'Вручную'}</span></td>
+                      <td>{analysis.errorCode ? <code className="error-code">{analysis.errorCode}</code> : heroes.length ? heroes.join(', ') : '—'}</td>
+                      <td>{analysis.patch ?? '—'}</td>
+                      <td>{formatDuration(analysis.durationMs)}</td>
                       <td><span className="table-date">{formatRelativeTime(analysis.createdAt)}</span></td>
-                      <td onClick={(event) => event.stopPropagation()}>
-                        <TableRowButton label={`Открыть ${analysis.id}`} onClick={() => onSelectAnalysis(analysis.id)} />
-                      </td>
+                      <td onClick={(event) => event.stopPropagation()}><TableRowButton label={`Открыть ${analysis.id}`} onClick={() => setSelectedId(analysis.id)} /></td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
           </div>
-        ) : (
-          <EmptyState
-            title="Проверок нет"
-            text="Измените запрос или сбросьте фильтры."
-            action={<Button onClick={() => { setQuery(''); setStatus('all'); setSource('all'); }}>Сбросить фильтры</Button>}
-          />
-        )}
+        ) : <EmptyState title="Проверок не найдено" text={items.length ? 'Измените фильтры или запрос.' : 'В production-базе пока нет анализов.'} />}
 
-        <footer className="table-footer">
-          <span>
-            {filteredAnalyses.length
-              ? `${(page - 1) * pageSize + 1}–${Math.min(page * pageSize, filteredAnalyses.length)} из ${filteredAnalyses.length}`
-              : '0 записей'}
-          </span>
-          <div>
-            <IconButton label="Предыдущая страница" disabled={page === 1} onClick={() => setPage((value) => value - 1)}>
-              <ChevronLeft size={17} />
-            </IconButton>
-            <span>{page} / {pages}</span>
-            <IconButton label="Следующая страница" disabled={page === pages} onClick={() => setPage((value) => value + 1)}>
-              <ChevronRight size={17} />
-            </IconButton>
-          </div>
-        </footer>
+        <footer className="table-footer"><span>{filtered.length ? `${(currentPage - 1) * pageSize + 1}–${Math.min(currentPage * pageSize, filtered.length)} из ${filtered.length}` : '0 записей'}{resource.data.pagination.total > items.length ? ` · всего в базе ${resource.data.pagination.total}` : ''}</span><div><IconButton label="Предыдущая страница" disabled={currentPage === 1} onClick={() => setPage((value) => Math.max(1, value - 1))}><ChevronLeft size={17} /></IconButton><span>{currentPage} / {pages}</span><IconButton label="Следующая страница" disabled={currentPage === pages} onClick={() => setPage((value) => Math.min(pages, value + 1))}><ChevronRight size={17} /></IconButton></div></footer>
       </Panel>
 
-      <Drawer
-        open={Boolean(selectedAnalysis)}
-        title={selectedAnalysis?.id ?? 'Проверка'}
-        eyebrow={selectedAnalysis ? formatDateTime(selectedAnalysis.createdAt) : undefined}
-        onClose={onCloseAnalysis}
-      >
-        {selectedAnalysis ? (
+      <Drawer open={Boolean(selected)} title={selected ? `Проверка ${selected.id.slice(0, 8)}` : 'Проверка'} eyebrow={selected?.id} onClose={() => setSelectedId(null)}>
+        {selected ? (
           <div className="analysis-drawer">
-            <div className={`analysis-outcome analysis-outcome--${selectedAnalysis.status}`}>
-              <span>
-                {selectedAnalysis.status === 'completed'
-                  ? <Sparkles size={22} />
-                  : selectedAnalysis.status === 'failed'
-                    ? <ImageOff size={22} />
-                    : <Clock3 size={22} />}
-              </span>
-              <div>
-                <small>{statusLabel[selectedAnalysis.status]}</small>
-                <strong>{selectedAnalysis.recommendation ?? selectedAnalysis.errorCode ?? 'Распознаём драфт'}</strong>
-                <p>
-                  {selectedAnalysis.status === 'completed'
-                    ? `Рекомендация для позиции ${selectedAnalysis.position}`
-                    : selectedAnalysis.status === 'failed'
-                      ? 'Результат не был создан, попытка возвращена.'
-                      : 'Запрос ещё выполняется.'}
-                </p>
-              </div>
-            </div>
-
-            {selectedAnalysis.imageUrl ? (
-              <section className="drawer-section analysis-image-section">
-                <div className="drawer-section__heading">
-                  <h3>Исходный скриншот</h3>
-                  <StatusBadge tone="neutral">Фото</StatusBadge>
-                </div>
-                <figure className="analysis-image">
-                  <img
-                    src={selectedAnalysis.imageUrl}
-                    alt={`Исходный скриншот драфта для проверки ${selectedAnalysis.id}`}
-                  />
-                  <figcaption>
-                    <span>Распознано героев</span>
-                    <strong>{selectedAnalysis.enemyHeroes.length + selectedAnalysis.allyHeroes.length}</strong>
-                  </figcaption>
-                </figure>
-              </section>
-            ) : null}
-
-            {selectedUser ? (
-              <section className="drawer-section">
-                <h3>Пользователь</h3>
-                <div className="drawer-user-card">
-                  <UserAvatar name={selectedUser.displayName} />
-                  <div><strong>{selectedUser.displayName}</strong><small>{selectedUser.email ?? selectedUser.id}</small></div>
-                  <StatusBadge tone={selectedUser.plan === 'pro' ? 'info' : 'neutral'}>
-                    {selectedUser.plan === 'pro' ? 'Pro' : 'Free'}
-                  </StatusBadge>
-                </div>
-              </section>
-            ) : null}
-
-            {selectedAnalysis.recommendations.length ? (
-              <section className="drawer-section">
-                <div className="drawer-section__heading">
-                  <h3>Три рекомендации</h3>
-                  <span>{selectedAnalysis.recommendations.length}</span>
-                </div>
-                <div className="recommendation-stack">
-                  {selectedAnalysis.recommendations.map((hero, index) => (
-                    <div key={hero}>
-                      <span>{index + 1}</span>
-                      <p><strong>{hero}</strong><small>{index === 0 ? 'Основной выбор' : 'Альтернатива'}</small></p>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            ) : null}
-
-            <section className="drawer-section">
-              <div className="drawer-section__heading">
-                <h3>{selectedAnalysis.source === 'photo' ? 'Распознанный драфт' : 'Введённый драфт'}</h3>
-                <span>{selectedAnalysis.enemyHeroes.length + selectedAnalysis.allyHeroes.length}</span>
-              </div>
-              <div className="draft-team-stack">
-                <div>
-                  <span className="draft-team-stack__label">Соперники · {selectedAnalysis.enemyHeroes.length}</span>
-                  <div className="hero-chip-grid">
-                    {selectedAnalysis.enemyHeroes.map((hero, index) => (
-                      <div key={`enemy-${hero}-${index}`}>
-                        <span>{String(index + 1).padStart(2, '0')}</span>
-                        <strong>{hero}</strong>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <span className="draft-team-stack__label">Союзники · {selectedAnalysis.allyHeroes.length}</span>
-                  {selectedAnalysis.allyHeroes.length ? (
-                    <div className="hero-chip-grid">
-                      {selectedAnalysis.allyHeroes.map((hero, index) => (
-                        <div key={`ally-${hero}-${index}`}>
-                          <span>{String(index + 1).padStart(2, '0')}</span>
-                          <strong>{hero}</strong>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <span className="draft-team-stack__empty">Не указаны — это допустимо</span>
-                  )}
-                </div>
-              </div>
-            </section>
-
-            <section className="drawer-section drawer-section--details">
-              <h3>Технические данные</h3>
-              <dl>
-                <div><dt>Источник</dt><dd>{selectedAnalysis.source === 'photo' ? 'Фото' : 'Вручную'}</dd></div>
-                <div><dt>Длительность</dt><dd>{formatDuration(selectedAnalysis.durationMs)}</dd></div>
-                <div><dt>Уверенность</dt><dd>{selectedAnalysis.confidence !== null ? formatPercent(selectedAnalysis.confidence * 100, 0) : '—'}</dd></div>
-                <div><dt>Ранг</dt><dd>{rankLabel[selectedAnalysis.rank ?? 0]}</dd></div>
-                <div><dt>Позиция</dt><dd>P{selectedAnalysis.position}</dd></div>
-                <div><dt>Патч</dt><dd>{selectedAnalysis.patch}</dd></div>
-                <div><dt>Модельная стоимость</dt><dd>${selectedAnalysis.costUsd.toFixed(4)}</dd></div>
-                <div><dt>Ошибка</dt><dd>{selectedAnalysis.errorCode ?? '—'}</dd></div>
-              </dl>
-            </section>
-
-            {selectedAnalysis.status === 'failed' ? (
-              <Button
-                className="drawer-wide-button"
-                icon={<RotateCcw size={16} />}
-                onClick={() => onNotify('Повторная проверка поставлена в очередь')}
-              >
-                Повторить проверку
-              </Button>
-            ) : (
-              <Button
-                className="drawer-wide-button"
-                icon={<ScanSearch size={16} />}
-                onClick={() => onNotify('Технический JSON скопирован')}
-              >
-                Скопировать технический JSON
-              </Button>
-            )}
+            <div className="analysis-outcome"><span>{selected.status === 'completed' ? '✓' : selected.status === 'failed' ? '!' : '…'}</span><div><small>{statusLabel[selected.status]}</small><strong>{selected.errorCode ?? (recommendations(selected).join(', ') || 'Результат формируется')}</strong><p>{accountLabel(selected)} · {formatDateTime(selected.createdAt)}</p></div></div>
+            <section className="drawer-section drawer-section--details"><h3>Входные данные</h3><dl><div><dt>Позиция</dt><dd>{String(inputValue(selected, 'position') ?? '—')}</dd></div><div><dt>Ранг</dt><dd>{String(inputValue(selected, 'rank') ?? 'Не указан')}</dd></div><div><dt>Союзники</dt><dd>{numberArray(inputValue(selected, 'allyHeroIds')).join(', ') || 'Нет'}</dd></div><div><dt>Противники</dt><dd>{numberArray(inputValue(selected, 'enemyHeroIds')).join(', ') || 'Нет'}</dd></div></dl></section>
+            <section className="drawer-section drawer-section--details"><h3>Технические данные</h3><dl><div><dt>Источник</dt><dd>{selected.source}</dd></div><div><dt>Патч</dt><dd>{selected.patch ?? '—'}</dd></div><div><dt>Длительность</dt><dd>{formatDuration(selected.durationMs)}</dd></div><div><dt>Обновлена</dt><dd>{formatDateTime(selected.updatedAt)}</dd></div></dl></section>
+            <section className="drawer-section unavailable-actions"><div className="drawer-section__heading"><h3>Повторить проверку</h3><StatusBadge tone="warning">Нет endpoint</StatusBadge></div><p>Команда retry отключена: backend не предоставляет безопасный административный endpoint для повторного запуска.</p></section>
           </div>
         ) : null}
       </Drawer>

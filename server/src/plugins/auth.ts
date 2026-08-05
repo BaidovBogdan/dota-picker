@@ -5,6 +5,7 @@ import type { AppConfig } from '../config/env.js';
 import type { Database } from '../db/client.js';
 import { accounts } from '../db/schema.js';
 import { UnauthorizedError } from '../lib/errors.js';
+import { secureEqual } from '../lib/secure-equal.js';
 
 function isAccessToken(value: unknown) {
   return typeof value === 'object'
@@ -15,6 +16,15 @@ function isAccessToken(value: unknown) {
     && typeof value.sub === 'string'
     && 'ver' in value
     && typeof value.ver === 'number';
+}
+
+function isAdminToken(value: unknown) {
+  return typeof value === 'object'
+    && value !== null
+    && 'type' in value
+    && value.type === 'admin'
+    && 'sub' in value
+    && value.sub === 'counterpick-admin';
 }
 
 export const authPlugin = fp<{ config: AppConfig; db: Database }>(async (app, options) => {
@@ -45,6 +55,33 @@ export const authPlugin = fp<{ config: AppConfig; db: Database }>(async (app, op
         throw error;
       }
       throw new UnauthorizedError('TOKEN_INVALID', 'Access token is invalid or expired');
+    }
+  });
+
+  app.decorate('authenticateAdmin', async (request) => {
+    const authorization = request.headers.authorization;
+    if (authorization?.startsWith('Bearer ')) {
+      try {
+        const payload = await request.jwtVerify();
+        if (!isAdminToken(payload)) {
+          throw new UnauthorizedError('ADMIN_AUTH_REQUIRED', 'A valid admin session is required');
+        }
+        return;
+      } catch (error) {
+        if (error instanceof UnauthorizedError) {
+          throw error;
+        }
+        throw new UnauthorizedError('ADMIN_AUTH_REQUIRED', 'Admin session is invalid or expired');
+      }
+    }
+
+    const provided = request.headers['x-admin-key'];
+    if (
+      !options.config.adminApiKey
+      || typeof provided !== 'string'
+      || !secureEqual(provided, options.config.adminApiKey)
+    ) {
+      throw new UnauthorizedError('ADMIN_AUTH_REQUIRED', 'A valid admin session is required');
     }
   });
 });

@@ -6,6 +6,10 @@ import { accounts, billingEvents, billingTombstones } from '../../db/schema.js';
 import { hmacSha256 } from '../../lib/crypto.js';
 import { NotFoundError } from '../../lib/errors.js';
 import type { QuotaService } from '../quota/quota.service.js';
+import {
+  hasTransferableRevenueCatEntitlement,
+  resolvePlanAfterRevenueCatEvent,
+} from './billing-plan.js';
 import type { revenueCatWebhookSchema } from './billing.schemas.js';
 
 type Webhook = z.infer<typeof revenueCatWebhookSchema>;
@@ -230,8 +234,7 @@ export class BillingService {
           return candidate && candidate.accountHash !== destinationTombstone.accountHash ? [candidate] : [];
         });
         const sourceAccount = sourceAccounts.find((candidate) => (
-          candidate.plan === 'pro'
-          && (candidate.planExpiresAt === null || candidate.planExpiresAt.getTime() > now.getTime())
+          hasTransferableRevenueCatEntitlement(candidate, now)
         ));
         const sourceTombstone = sourceTombstones.find((candidate) => (
           candidate.hasEntitlement
@@ -307,8 +310,7 @@ export class BillingService {
           return candidate ? [candidate] : [];
         });
         const sourceAccount = sourceAccounts.find((candidate) => (
-          candidate.plan === 'pro'
-          && (candidate.planExpiresAt === null || candidate.planExpiresAt.getTime() > now.getTime())
+          hasTransferableRevenueCatEntitlement(candidate, now)
         ));
         const sourceTombstone = sourceTombstones.find((candidate) => (
           candidate.hasEntitlement
@@ -380,18 +382,21 @@ export class BillingService {
         return markProcessed();
       }
 
-      const active = !terminal && (expiresAt === null || expiresAt.getTime() > now.getTime());
-      const plan = active ? 'pro' : 'free';
-      const policy = this.config.quota[plan];
-      const nextBalance = active
+      const revenueCatActive = !terminal && (expiresAt === null || expiresAt.getTime() > now.getTime());
+      const resolvedPlan = resolvePlanAfterRevenueCatEvent({
+        complimentaryPro: account.complimentaryPro,
+        revenueCatActive,
+        revenueCatProductId: event.product_id ?? null,
+        revenueCatExpiresAt: expiresAt,
+      });
+      const policy = this.config.quota[resolvedPlan.plan];
+      const nextBalance = revenueCatActive
         ? (grantsQuota ? policy.max : Math.min(account.quotaBalance, policy.max))
         : Math.min(account.quotaBalance, policy.max);
       await tx
         .update(accounts)
         .set({
-          plan,
-          planProductId: active ? event.product_id ?? null : null,
-          planExpiresAt: active ? expiresAt : null,
+          ...resolvedPlan,
           billingUpdatedAt: eventAt,
           quotaBalance: nextBalance,
           quotaRefreshedAt: now,
@@ -408,14 +413,19 @@ export class BillingService {
     eventAt: Date,
     now: Date,
   ) {
+    const resolvedPlan = resolvePlanAfterRevenueCatEvent({
+      complimentaryPro: account.complimentaryPro,
+      revenueCatActive: false,
+      revenueCatProductId: null,
+      revenueCatExpiresAt: null,
+    });
+    const policy = this.config.quota[resolvedPlan.plan];
     await tx
       .update(accounts)
       .set({
-        plan: 'free',
-        planProductId: null,
-        planExpiresAt: null,
+        ...resolvedPlan,
         billingUpdatedAt: eventAt,
-        quotaBalance: Math.min(account.quotaBalance, this.config.quota.free.max),
+        quotaBalance: Math.min(account.quotaBalance, policy.max),
         quotaRefreshedAt: now,
         updatedAt: now,
       })

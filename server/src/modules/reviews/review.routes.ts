@@ -1,8 +1,5 @@
-import { timingSafeEqual } from 'node:crypto';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import type { AppConfig } from '../../config/env.js';
-import { AppError } from '../../lib/errors.js';
 import { emptyResponseSchema, errorResponseSchema } from '../../lib/schemas.js';
 import {
   accountReviewsQuerySchema,
@@ -15,18 +12,14 @@ import {
 import type { ReviewService } from './review.service.js';
 
 type Dependencies = {
-  config: AppConfig;
   reviewService: ReviewService;
 };
 
 const idParamsSchema = z.object({ id: z.uuid() });
-const adminHeadersSchema = z.object({ 'x-admin-key': z.string().min(1).optional() });
-
-function secureEqual(left: string, right: string) {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
-}
+const adminHeadersSchema = z.object({
+  authorization: z.string().min(1).optional(),
+  'x-admin-key': z.string().min(1).optional(),
+});
 
 export function reviewRoutes(dependencies: Dependencies): FastifyPluginAsyncZod {
   return async (app) => {
@@ -83,21 +76,11 @@ export function reviewRoutes(dependencies: Dependencies): FastifyPluginAsyncZod 
       return { success: true as const };
     });
 
-    const authenticateAdmin = async (request: { headers: Record<string, unknown> }) => {
-      const provided = request.headers['x-admin-key'];
-      if (
-        !dependencies.config.adminApiKey
-        || typeof provided !== 'string'
-        || !secureEqual(provided, dependencies.config.adminApiKey)
-      ) {
-        throw new AppError(401, 'ADMIN_AUTH_REQUIRED', 'A valid admin API key is required');
-      }
-    };
-
     app.get('/admin/reviews', {
-      preHandler: authenticateAdmin,
+      preHandler: app.authenticateAdmin,
       schema: {
         tags: ['Admin'],
+        security: [{ adminBearerAuth: [] }, { adminApiKey: [] }],
         headers: adminHeadersSchema,
         querystring: adminReviewsQuerySchema,
         response: {
@@ -108,9 +91,10 @@ export function reviewRoutes(dependencies: Dependencies): FastifyPluginAsyncZod 
     }, async (request) => dependencies.reviewService.listForAdmin(request.query));
 
     app.delete('/admin/reviews/:id', {
-      preHandler: authenticateAdmin,
+      preHandler: app.authenticateAdmin,
       schema: {
         tags: ['Admin'],
+        security: [{ adminBearerAuth: [] }, { adminApiKey: [] }],
         headers: adminHeadersSchema,
         params: idParamsSchema,
         response: {

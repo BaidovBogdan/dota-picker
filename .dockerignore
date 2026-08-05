@@ -1,0 +1,12 @@
+*
+!admin/
+!admin/**
+!server/
+!server/**
+**/node_modules/
+**/dist/
+**/coverage/
+**/.codebase-memory/
+**/*.tsbuildinfo
+**/.env
+**/.env.*

@@ -14,6 +14,8 @@ import {
 import { loadConfig, type AppConfig } from './config/env.js';
 import { createDatabase } from './db/client.js';
 import { accountRoutes } from './modules/account/account.routes.js';
+import { adminRoutes } from './modules/admin/admin.routes.js';
+import { AdminService } from './modules/admin/admin.service.js';
 import { AnalysisService } from './modules/analysis/analysis.service.js';
 import { analysisRoutes } from './modules/analysis/analysis.routes.js';
 import { authRoutes } from './modules/auth/auth.routes.js';
@@ -29,6 +31,7 @@ import { QuotaService } from './modules/quota/quota.service.js';
 import { RecommendationEngine } from './modules/recommendation/recommendation.engine.js';
 import { reviewRoutes } from './modules/reviews/review.routes.js';
 import { ReviewService } from './modules/reviews/review.service.js';
+import { adminStaticPlugin } from './plugins/admin-static.js';
 import { authPlugin } from './plugins/auth.js';
 import { errorPlugin } from './plugins/errors.js';
 import { healthRoutes } from './routes/health.routes.js';
@@ -43,6 +46,7 @@ export function buildApp(config: AppConfig = loadConfig()) {
         'req.headers.authorization',
         'req.headers.cookie',
         'req.headers.x-admin-key',
+        'req.body.key',
         'res.headers.set-cookie',
       ],
       ...(config.nodeEnv === 'development'
@@ -71,6 +75,7 @@ export function buildApp(config: AppConfig = loadConfig()) {
   const photoAdapter = new GeminiPhotoAdapter(config.gemini);
   const billingService = new BillingService(db, config, quotaService);
   const reviewService = new ReviewService(db);
+  const adminService = new AdminService(db, config);
 
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
@@ -100,6 +105,8 @@ export function buildApp(config: AppConfig = loadConfig()) {
       components: {
         securitySchemes: {
           bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
+          adminBearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
+          adminApiKey: { type: 'apiKey', in: 'header', name: 'x-admin-key' },
         },
       },
     },
@@ -125,7 +132,9 @@ export function buildApp(config: AppConfig = loadConfig()) {
     quotaService,
   }), { prefix: '/v1/analyses' });
   app.register(billingRoutes({ config, billingService }), { prefix: '/v1/billing' });
-  app.register(reviewRoutes({ config, reviewService }), { prefix: '/v1' });
+  app.register(adminRoutes({ config, adminService }), { prefix: '/v1/admin' });
+  app.register(reviewRoutes({ reviewService }), { prefix: '/v1' });
+  app.register(adminStaticPlugin);
 
   app.addHook('onClose', async () => {
     await pool.end();

@@ -46,6 +46,12 @@ describe('application composition', () => {
     expect(document.paths).toHaveProperty('/v1/account/reviews/{id}');
     expect(document.paths).toHaveProperty('/v1/admin/reviews');
     expect(document.paths).toHaveProperty('/v1/admin/reviews/{id}');
+    expect(document.paths).toHaveProperty('/v1/admin/session');
+    expect(document.paths).toHaveProperty('/v1/admin/overview');
+    expect(document.paths).toHaveProperty('/v1/admin/users');
+    expect(document.paths).toHaveProperty('/v1/admin/analyses');
+    expect(document.paths).toHaveProperty('/v1/admin/system');
+    expect(document.paths).toHaveProperty('/v1/admin/grants/pro-all');
     expect(document.paths).not.toHaveProperty('/v1/v1/auth/guest');
   }, 20_000);
 

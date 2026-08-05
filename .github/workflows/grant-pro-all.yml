@@ -1,0 +1,42 @@
+name: Grant Pro to all current users
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type GRANT_PRO_ALL to confirm the production update
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: grant-pro-all-production
+  cancel-in-progress: false
+
+jobs:
+  grant:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    env:
+      NODE_ENV: test
+      DATABASE_URL: ${{ secrets.DOTA_PICKER_DATABASE_URL }}
+      JWT_SECRET: github-actions-only-jwt-secret-0000000000000000
+      REVENUECAT_WEBHOOK_SECRET: github-actions-only-revenuecat-secret
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci
+      - name: Preview affected accounts
+        run: npm run admin:grant-pro-all
+      - name: Grant Pro in one transaction
+        env:
+          ADMIN_GRANT_CONFIRMATION: ${{ inputs.confirmation }}
+        run: npm run admin:grant-pro-all -- --apply

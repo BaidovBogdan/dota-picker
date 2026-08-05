@@ -5,13 +5,13 @@ declare module '@fastify/jwt' {
     payload: {
       sub: string;
       kind: 'guest' | 'user';
-      type: 'access';
+      type: 'access' | 'admin';
       ver: number;
     };
     user: {
       sub: string;
       kind: 'guest' | 'user';
-      type: 'access';
+      type: 'access' | 'admin';
       ver: number;
     };
   }
@@ -20,5 +20,6 @@ declare module '@fastify/jwt' {
 declare module 'fastify' {
   interface FastifyInstance {
     authenticate(request: FastifyRequest, reply: FastifyReply): Promise<void>;
+    authenticateAdmin(request: FastifyRequest, reply: FastifyReply): Promise<void>;
   }
 }

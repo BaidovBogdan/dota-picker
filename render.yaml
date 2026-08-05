@@ -7,7 +7,7 @@ services:
     plan: free
     region: frankfurt
     dockerfilePath: ./server/Dockerfile
-    dockerContext: ./server
+    dockerContext: .
     healthCheckPath: /health/ready
     autoDeployTrigger: checksPass
     envVars:

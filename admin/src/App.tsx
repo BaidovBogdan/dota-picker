@@ -1,37 +1,50 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Activity,
   BarChart3,
-  Bell,
   ChevronDown,
-  Command,
   LayoutDashboard,
+  LogOut,
   Menu,
   MessageSquareText,
+  RefreshCw,
   ScanSearch,
-  Search,
   Server,
   Users,
   X,
 } from 'lucide-react';
-import { ConfirmDialog, IconButton, Toast, UserAvatar } from './components/ui';
 import {
-  dailyMetrics,
-  heroDetails,
-  initialActivity,
-  initialAnalyses,
-  initialReviews,
-  initialUsers,
-  metaSnapshots,
-} from './data/mock-data';
-import { downloadCsv } from './lib/format';
+  adminApi,
+  ApiError,
+  clearSession,
+  createSession,
+  readSession,
+  saveSession,
+} from './api/client';
+import { Button, IconButton, Toast, UserAvatar } from './components/ui';
 import { AnalysesPage } from './pages/analyses';
 import { MetaPage } from './pages/meta';
 import { OverviewPage } from './pages/overview';
 import { ReviewsPage } from './pages/reviews';
 import { SystemPage } from './pages/system';
 import { UsersPage } from './pages/users';
-import type { AdminAnalysis, AdminReview, AdminUser, PageId } from './types';
+import type {
+  AdminAnalysesResponse,
+  AdminOverview,
+  AdminReviewsResponse,
+  AdminSession,
+  AdminSystem,
+  AdminUsersResponse,
+  PageId,
+} from './types';
+
+type Resource<T> = {
+  data: T | null;
+  loading: boolean;
+  error: string | null;
+};
+
+const emptyResource = <T,>(): Resource<T> => ({ data: null, loading: false, error: null });
 
 const navigation = [
   { id: 'overview', label: 'Обзор', icon: LayoutDashboard },
@@ -42,114 +55,206 @@ const navigation = [
   { id: 'system', label: 'Система', icon: Activity },
 ] satisfies Array<{ id: PageId; label: string; icon: typeof LayoutDashboard }>;
 
-const pageFromHash = (): PageId => {
+function pageFromHash(): PageId {
   const value = window.location.hash.replace(/^#\/?/, '');
   return navigation.some((item) => item.id === value) ? value as PageId : 'overview';
-};
+}
+
+function errorText(error: unknown) {
+  if (error instanceof ApiError) return error.message;
+  if (error instanceof Error && error.name === 'AbortError') return null;
+  return 'Не удалось получить данные. Проверьте соединение и повторите запрос.';
+}
+
+function LoginScreen({ onAuthenticated }: { onAuthenticated: (session: AdminSession) => void }) {
+  const [key, setKey] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+
+  const submit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const normalized = key.trim();
+    if (!normalized || submitting) return;
+    setSubmitting(true);
+    setError('');
+    try {
+      const session = await createSession(normalized);
+      saveSession(session);
+      setKey('');
+      onAuthenticated(session);
+    } catch (requestError) {
+      setError(errorText(requestError) ?? 'Вход отменён.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <main className="admin-login">
+      <section className="admin-login__card" aria-labelledby="admin-login-title">
+        <div className="admin-login__brand"><span>C</span><strong>Counterpick</strong></div>
+        <div className="admin-login__copy">
+          <span className="eyebrow">Защищённая консоль</span>
+          <h1 id="admin-login-title">Вход администратора</h1>
+          <p>Введите ADMIN_API_KEY. Ключ используется один раз и не сохраняется в браузере.</p>
+        </div>
+        <form onSubmit={submit} className="admin-login__form">
+          <label htmlFor="admin-key">ADMIN_API_KEY</label>
+          <input
+            id="admin-key"
+            type="password"
+            autoComplete="off"
+            autoFocus
+            value={key}
+            onChange={(event) => setKey(event.target.value)}
+            aria-invalid={Boolean(error)}
+            aria-describedby={error ? 'admin-login-error' : undefined}
+            placeholder="Вставьте секретный ключ"
+          />
+          {error ? <p id="admin-login-error" className="admin-login__error" role="alert">{error}</p> : null}
+          <Button type="submit" variant="primary" disabled={!key.trim() || submitting}>
+            {submitting ? 'Проверяем доступ…' : 'Войти в консоль'}
+          </Button>
+        </form>
+        <p className="admin-login__security">После входа в sessionStorage хранится только короткоживущий JWT. Закрытие вкладки удалит сессию.</p>
+      </section>
+    </main>
+  );
+}
 
 export function App() {
+  const [session, setSession] = useState<AdminSession | null>(readSession);
   const [page, setPage] = useState<PageId>(pageFromHash);
-  const [users, setUsers] = useState<AdminUser[]>(initialUsers);
-  const [analyses, setAnalyses] = useState<AdminAnalysis[]>(initialAnalyses);
-  const [reviews, setReviews] = useState<AdminReview[]>(initialReviews);
-  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
-  const [selectedAnalysisId, setSelectedAnalysisId] = useState<string | null>(null);
-  const [deleteCandidate, setDeleteCandidate] = useState<AdminUser | null>(null);
+  const [overviewDays, setOverviewDays] = useState<7 | 30>(30);
+  const [overview, setOverview] = useState<Resource<AdminOverview>>(emptyResource);
+  const [users, setUsers] = useState<Resource<AdminUsersResponse>>(emptyResource);
+  const [analyses, setAnalyses] = useState<Resource<AdminAnalysesResponse>>(emptyResource);
+  const [reviews, setReviews] = useState<Resource<AdminReviewsResponse>>(emptyResource);
+  const [system, setSystem] = useState<Resource<AdminSystem>>(emptyResource);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
   const [toastVisible, setToastVisible] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [commandOpen, setCommandOpen] = useState(false);
-  const [commandQuery, setCommandQuery] = useState('');
   const toastTimer = useRef<number | null>(null);
 
-  const selectedUser = users.find((user) => user.id === selectedUserId) ?? null;
-  const selectedAnalysis = analyses.find((analysis) => analysis.id === selectedAnalysisId) ?? null;
+  const logout = useCallback(() => {
+    clearSession();
+    setSession(null);
+    setOverview(emptyResource());
+    setUsers(emptyResource());
+    setAnalyses(emptyResource());
+    setReviews(emptyResource());
+    setSystem(emptyResource());
+  }, []);
 
-  const commandResults = useMemo(() => {
-    const query = commandQuery.trim().toLowerCase();
-    if (!query) return users.slice(0, 4);
-    return users
-      .filter((user) =>
-        user.displayName.toLowerCase().includes(query)
-        || user.email?.toLowerCase().includes(query)
-        || user.id.toLowerCase().includes(query),
-      )
-      .slice(0, 6);
-  }, [commandQuery, users]);
+  const notify = useCallback((message: string) => {
+    if (toastTimer.current) window.clearTimeout(toastTimer.current);
+    setToastMessage(message);
+    setToastVisible(true);
+    toastTimer.current = window.setTimeout(() => setToastVisible(false), 3_000);
+  }, []);
+
+  const load = useCallback(async <T,>(
+    setter: React.Dispatch<React.SetStateAction<Resource<T>>>,
+    request: Promise<T>,
+  ) => {
+    setter((current) => ({ ...current, loading: true, error: null }));
+    try {
+      const data = await request;
+      setter({ data, loading: false, error: null });
+    } catch (requestError) {
+      if (requestError instanceof ApiError && requestError.status === 401) {
+        logout();
+        return;
+      }
+      const message = errorText(requestError);
+      if (message) setter((current) => ({ ...current, loading: false, error: message }));
+    }
+  }, [logout]);
+
+  const refreshOverview = useCallback((signal?: AbortSignal) => {
+    if (!session) return Promise.resolve();
+    return load(setOverview, adminApi.overview(session.token, overviewDays, signal));
+  }, [load, overviewDays, session]);
+
+  const refreshUsers = useCallback((signal?: AbortSignal) => {
+    if (!session) return Promise.resolve();
+    return load(setUsers, adminApi.users(session.token, signal));
+  }, [load, session]);
+
+  const refreshAnalyses = useCallback((signal?: AbortSignal) => {
+    if (!session) return Promise.resolve();
+    return load(setAnalyses, adminApi.analyses(session.token, signal));
+  }, [load, session]);
+
+  const refreshReviews = useCallback((signal?: AbortSignal) => {
+    if (!session) return Promise.resolve();
+    return load(setReviews, adminApi.reviews(session.token, signal));
+  }, [load, session]);
+
+  const refreshSystem = useCallback((signal?: AbortSignal) => {
+    if (!session) return Promise.resolve();
+    return load(setSystem, adminApi.system(session.token, signal));
+  }, [load, session]);
+
+  useEffect(() => {
+    if (!session) return;
+    const controller = new AbortController();
+    void Promise.all([
+      refreshUsers(controller.signal),
+      refreshAnalyses(controller.signal),
+      refreshReviews(controller.signal),
+      refreshSystem(controller.signal),
+    ]);
+    return () => controller.abort();
+  }, [refreshAnalyses, refreshReviews, refreshSystem, refreshUsers, session]);
+
+  useEffect(() => {
+    if (!session) return;
+    const controller = new AbortController();
+    void refreshOverview(controller.signal);
+    return () => controller.abort();
+  }, [refreshOverview, session]);
 
   useEffect(() => {
     const onHashChange = () => setPage(pageFromHash());
     const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
-        event.preventDefault();
-        setCommandOpen((value) => !value);
-      }
-      if (event.key === 'Escape') {
-        setCommandOpen(false);
-        setSidebarOpen(false);
-        setSelectedUserId(null);
-        setSelectedAnalysisId(null);
-      }
+      if (event.key === 'Escape') setSidebarOpen(false);
     };
     window.addEventListener('hashchange', onHashChange);
     window.addEventListener('keydown', onKeyDown);
+    if (!window.location.hash) window.history.replaceState(null, '', '#/overview');
     return () => {
       window.removeEventListener('hashchange', onHashChange);
       window.removeEventListener('keydown', onKeyDown);
+      if (toastTimer.current) window.clearTimeout(toastTimer.current);
     };
   }, []);
 
-  useEffect(() => {
-    if (!window.location.hash) {
-      window.history.replaceState(null, '', '#/overview');
-    }
-  }, []);
+  if (!session) return <LoginScreen onAuthenticated={setSession} />;
 
   const navigate = (nextPage: PageId) => {
     window.location.hash = `/${nextPage}`;
     setPage(nextPage);
     setSidebarOpen(false);
-    setSelectedUserId(null);
-    setSelectedAnalysisId(null);
   };
 
-  const notify = (message: string) => {
-    if (toastTimer.current) window.clearTimeout(toastTimer.current);
-    setToastMessage(message);
-    setToastVisible(true);
-    toastTimer.current = window.setTimeout(() => setToastVisible(false), 2_600);
+  const refreshCurrent = () => {
+    if (page === 'overview') void refreshOverview();
+    if (page === 'users') void refreshUsers();
+    if (page === 'analyses') void refreshAnalyses();
+    if (page === 'reviews') void refreshReviews();
+    if (page === 'system' || page === 'meta') void refreshSystem();
   };
 
-  const updateUser = (id: string, patch: Partial<AdminUser>) => {
-    setUsers((current) => current.map((user) => user.id === id ? { ...user, ...patch } : user));
-  };
-
-  const deleteUser = () => {
-    if (!deleteCandidate) return;
-    setUsers((current) => current.filter((user) => user.id !== deleteCandidate.id));
-    setAnalyses((current) => current.filter((analysis) => analysis.userId !== deleteCandidate.id));
-    setReviews((current) => current.filter((review) => review.userId !== deleteCandidate.id));
-    setSelectedUserId(null);
-    setDeleteCandidate(null);
-    notify('Пользователь и связанные демо-данные удалены');
-  };
-
-  const openUser = (id: string) => {
-    if (page !== 'users') navigate('users');
-    window.setTimeout(() => setSelectedUserId(id), 0);
-  };
-
-  const openAnalysis = (id: string) => {
-    setSelectedAnalysisId(id);
-  };
-
-  const exportOverview = () => {
-    downloadCsv('counterpick-overview.csv', [
-      ['Дата', 'Проверки', 'Пользователи', 'Ошибки'],
-      ...dailyMetrics.map((item) => [item.date, item.checks, item.users, item.failures]),
-    ]);
-    notify('Отчёт за 30 дней сохранён');
-  };
+  const currentLoading = page === 'overview'
+    ? overview.loading
+    : page === 'users'
+      ? users.loading
+      : page === 'analyses'
+        ? analyses.loading
+        : page === 'reviews'
+          ? reviews.loading
+          : system.loading;
 
   return (
     <div className="admin-shell">
@@ -163,175 +268,82 @@ export function App() {
         <div className="brand">
           <span className="brand__mark">C</span>
           <div><strong>Counterpick</strong><small>Admin console</small></div>
-          <IconButton label="Закрыть меню" className="sidebar__close" onClick={() => setSidebarOpen(false)}>
-            <X size={19} />
-          </IconButton>
+          <IconButton label="Закрыть меню" className="sidebar__close" onClick={() => setSidebarOpen(false)}><X size={19} /></IconButton>
         </div>
-
         <div className="workspace-switcher">
           <span><Server size={16} /></span>
-          <div><strong>Основной проект</strong><small>Demo workspace</small></div>
+          <div><strong>Production data</strong><small>Same-origin API</small></div>
           <ChevronDown size={16} />
         </div>
-
         <nav className="sidebar-nav" aria-label="Основная навигация">
           <span className="sidebar-nav__label">Управление</span>
           {navigation.map((item) => {
             const Icon = item.icon;
             return (
-              <button
-                type="button"
-                key={item.id}
-                className={page === item.id ? 'is-active' : ''}
-                onClick={() => navigate(item.id)}
-              >
+              <button type="button" key={item.id} className={page === item.id ? 'is-active' : ''} onClick={() => navigate(item.id)}>
                 <Icon size={18} />
                 <span>{item.label}</span>
-                {item.id === 'analyses' ? <b>{analyses.filter((analysis) => analysis.status === 'processing').length}</b> : null}
+                {item.id === 'analyses' && overview.data?.totals.processing ? <b>{overview.data.totals.processing}</b> : null}
               </button>
             );
           })}
         </nav>
-
-        <div className="sidebar-note">
-          <span>Демо-режим</span>
-          <p>Все изменения применяются только к мок-данным в этом окне.</p>
+        <div className="sidebar-note sidebar-note--live">
+          <span>Реальные данные</span>
+          <p>Все показатели загружены из защищённого API. Недоступные возможности подписаны прямо в интерфейсе.</p>
         </div>
-
         <div className="sidebar-profile">
-          <UserAvatar name="Bogdan Admin" size="sm" />
-          <div><strong>Bogdan</strong><small>Владелец</small></div>
-          <IconButton label="Меню профиля"><ChevronDown size={16} /></IconButton>
+          <UserAvatar name="Admin" size="sm" />
+          <div><strong>Administrator</strong><small>JWT до {new Date(session.expiresAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</small></div>
+          <IconButton label="Выйти" onClick={logout}><LogOut size={16} /></IconButton>
         </div>
       </aside>
 
       <main className="main-content">
         <header className="topbar">
-          <IconButton label="Открыть меню" className="topbar__menu" onClick={() => setSidebarOpen(true)}>
-            <Menu size={20} />
-          </IconButton>
-          <button className="command-trigger" type="button" onClick={() => setCommandOpen(true)}>
-            <Search size={17} />
-            <span>Найти пользователя, проверку или раздел</span>
-            <kbd><Command size={12} />K</kbd>
-          </button>
+          <IconButton label="Открыть меню" className="topbar__menu" onClick={() => setSidebarOpen(true)}><Menu size={20} /></IconButton>
+          <div className="production-context"><i /><span>Production API</span></div>
           <div className="topbar__right">
-            <span className="environment-pill"><i />Демо-данные</span>
-            <IconButton label="Уведомления" className="notification-button">
-              <Bell size={18} />
-              <i />
-            </IconButton>
+            <span className="environment-pill"><i />Защищённая сессия</span>
+            <Button size="sm" icon={<RefreshCw className={currentLoading ? 'button-spinner' : ''} size={15} />} onClick={refreshCurrent} disabled={currentLoading}>
+              Обновить
+            </Button>
           </div>
         </header>
-
         <div className="page-container">
-          {page === 'overview' ? (
-            <OverviewPage
-              users={users}
-              analyses={analyses}
-              metrics={dailyMetrics}
-              activity={initialActivity}
-              onExport={exportOverview}
-              onOpenUser={openUser}
-            />
-          ) : null}
+          {page === 'overview' ? <OverviewPage resource={overview} days={overviewDays} onDaysChange={setOverviewDays} onRetry={() => void refreshOverview()} /> : null}
           {page === 'users' ? (
             <UsersPage
-              users={users}
-              analyses={analyses}
-              selectedUser={selectedUser}
-              onSelectUser={setSelectedUserId}
-              onCloseUser={() => setSelectedUserId(null)}
-              onUpdateUser={updateUser}
-              onRequestDelete={setDeleteCandidate}
-              onNotify={notify}
-            />
-          ) : null}
-          {page === 'analyses' ? (
-            <AnalysesPage
-              analyses={analyses}
-              users={users}
-              selectedAnalysis={selectedAnalysis}
-              onSelectAnalysis={openAnalysis}
-              onCloseAnalysis={() => setSelectedAnalysisId(null)}
-              onNotify={notify}
-            />
-          ) : null}
-          {page === 'reviews' ? (
-            <ReviewsPage
-              reviews={reviews}
-              users={users}
-              analyses={analyses}
-              onDelete={(review) => {
-                setReviews((current) => current.filter((item) => item.id !== review.id));
-                notify('Отзыв удалён из демо-набора');
+              resource={users}
+              onRetry={() => void refreshUsers()}
+              onGrantProAll={async () => {
+                const result = await adminApi.grantProAll(session.token);
+                notify(result.alreadyApplied
+                  ? `Pro уже был выдан всем: ${result.totalAccounts} аккаунтов`
+                  : `Pro выдан: ${result.grantedAccounts} аккаунтов, квота ${result.quotaBalance}`);
+                await Promise.all([refreshUsers(), refreshOverview(), refreshSystem()]);
               }}
             />
           ) : null}
-          {page === 'meta' ? (
-            <MetaPage snapshots={metaSnapshots} heroDetails={heroDetails} />
+          {page === 'analyses' ? <AnalysesPage resource={analyses} onRetry={() => void refreshAnalyses()} /> : null}
+          {page === 'reviews' ? (
+            <ReviewsPage
+              resource={reviews}
+              onRetry={() => void refreshReviews()}
+              onDelete={async (reviewId) => {
+                await adminApi.deleteReview(session.token, reviewId);
+                notify('Отзыв удалён из базы');
+                await Promise.all([refreshReviews(), refreshOverview()]);
+              }}
+            />
           ) : null}
-          {page === 'system' ? <SystemPage analyses={analyses} onNotify={notify} /> : null}
+          {page === 'meta' ? <MetaPage resource={system} onRetry={() => void refreshSystem()} /> : null}
+          {page === 'system' ? <SystemPage resource={system} onRetry={() => void refreshSystem()} /> : null}
         </div>
       </main>
-
-      {commandOpen ? (
-        <div className="command-backdrop" onMouseDown={() => setCommandOpen(false)} role="presentation">
-          <div className="command-palette" role="dialog" aria-modal="true" aria-label="Быстрый поиск" onMouseDown={(event) => event.stopPropagation()}>
-            <div className="command-palette__input">
-              <Search size={19} />
-              <input
-                autoFocus
-                value={commandQuery}
-                onChange={(event) => setCommandQuery(event.target.value)}
-                placeholder="Введите имя, email или раздел"
-              />
-              <kbd>Esc</kbd>
-            </div>
-            <div className="command-palette__results">
-              <span>Разделы</span>
-              {navigation
-                .filter((item) => !commandQuery || item.label.toLowerCase().includes(commandQuery.toLowerCase()))
-                .map((item) => {
-                  const Icon = item.icon;
-                  return (
-                    <button type="button" key={item.id} onClick={() => { navigate(item.id); setCommandOpen(false); setCommandQuery(''); }}>
-                      <i><Icon size={17} /></i>
-                      <strong>{item.label}</strong>
-                      <small>Перейти</small>
-                    </button>
-                  );
-                })}
-              <span>Пользователи</span>
-              {commandResults.map((user) => (
-                <button
-                  type="button"
-                  key={user.id}
-                  onClick={() => {
-                    openUser(user.id);
-                    setCommandOpen(false);
-                    setCommandQuery('');
-                  }}
-                >
-                  <UserAvatar name={user.displayName} size="sm" />
-                  <strong>{user.displayName}</strong>
-                  <small>{user.email ?? 'Гость'}</small>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      <ConfirmDialog
-        open={Boolean(deleteCandidate)}
-        title="Удалить пользователя?"
-        description={`Аккаунт ${deleteCandidate?.email ?? deleteCandidate?.displayName ?? ''} и связанные проверки исчезнут из демо-набора. Отменить это действие нельзя.`}
-        confirmLabel="Удалить пользователя"
-        onConfirm={deleteUser}
-        onCancel={() => setDeleteCandidate(null)}
-      />
       <Toast message={toastMessage} visible={toastVisible} />
     </div>
   );
 }
+
+export type PageResource<T> = Resource<T>;

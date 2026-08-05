@@ -1,17 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import {
-  ArrowDownUp,
-  Ban,
-  ChevronLeft,
-  ChevronRight,
-  Download,
-  KeyRound,
-  Plus,
-  ShieldCheck,
-  Trash2,
-} from 'lucide-react';
+import { ChevronLeft, ChevronRight, ShieldCheck, Sparkles } from 'lucide-react';
+import type { PageResource } from '../App';
 import {
   Button,
+  ConfirmDialog,
   CustomSelect,
   Drawer,
   EmptyState,
@@ -23,358 +15,167 @@ import {
   TableRowButton,
   UserAvatar,
 } from '../components/ui';
-import {
-  downloadCsv,
-  formatDateTime,
-  formatNumber,
-  formatPercent,
-  formatRelativeTime,
-} from '../lib/format';
-import type { AdminAnalysis, AdminUser, Plan } from '../types';
+import { formatDateTime, formatNumber, formatPercent, formatRelativeTime } from '../lib/format';
+import type { AdminUser, AdminUsersResponse, Plan } from '../types';
 
-type UserFilter = 'all' | 'user' | 'guest';
-type SortKey = 'recent' | 'checks' | 'created';
+const pageSize = 12;
 
-type UsersPageProps = {
-  users: AdminUser[];
-  analyses: AdminAnalysis[];
-  selectedUser: AdminUser | null;
-  onSelectUser: (id: string) => void;
-  onCloseUser: () => void;
-  onUpdateUser: (id: string, patch: Partial<AdminUser>) => void;
-  onRequestDelete: (user: AdminUser) => void;
-  onNotify: (message: string) => void;
-};
-
-const pageSize = 10;
-
-const planTone = (plan: Plan) => (plan === 'pro' ? 'info' : 'neutral');
+function userLabel(user: AdminUser) {
+  return user.email ?? `Гость ${user.id.slice(0, 8)}`;
+}
 
 export function UsersPage({
-  users,
-  analyses,
-  selectedUser,
-  onSelectUser,
-  onCloseUser,
-  onUpdateUser,
-  onRequestDelete,
-  onNotify,
-}: UsersPageProps) {
+  resource,
+  onRetry,
+  onGrantProAll,
+}: {
+  resource: PageResource<AdminUsersResponse>;
+  onRetry: () => void;
+  onGrantProAll: () => Promise<void>;
+}) {
   const [query, setQuery] = useState('');
-  const [kind, setKind] = useState<UserFilter>('all');
+  const [kind, setKind] = useState<'all' | 'user' | 'guest'>('all');
   const [plan, setPlan] = useState<'all' | Plan>('all');
-  const [sort, setSort] = useState<SortKey>('recent');
   const [page, setPage] = useState(1);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [grantOpen, setGrantOpen] = useState(false);
+  const [grantBusy, setGrantBusy] = useState(false);
+  const [actionError, setActionError] = useState('');
 
-  const filteredUsers = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
-    return users
-      .filter((user) => kind === 'all' || user.kind === kind)
-      .filter((user) => plan === 'all' || user.plan === plan)
-      .filter((user) =>
-        !normalizedQuery
-        || user.displayName.toLowerCase().includes(normalizedQuery)
-        || user.email?.toLowerCase().includes(normalizedQuery)
-        || user.id.toLowerCase().includes(normalizedQuery),
-      )
-      .sort((a, b) => {
-        if (sort === 'checks') return b.analysesCount - a.analysesCount;
-        if (sort === 'created') return b.createdAt.localeCompare(a.createdAt);
-        return b.lastActiveAt.localeCompare(a.lastActiveAt);
-      });
-  }, [kind, plan, query, sort, users]);
+  const items = resource.data?.items ?? [];
+  const filtered = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    return items.filter((user) => (
+      (kind === 'all' || user.kind === kind)
+      && (plan === 'all' || user.plan === plan)
+      && (!normalized || user.id.toLowerCase().includes(normalized) || user.email?.toLowerCase().includes(normalized))
+    ));
+  }, [items, kind, plan, query]);
 
+  useEffect(() => setPage(1), [kind, plan, query]);
   useEffect(() => {
-    setPage(1);
-  }, [kind, plan, query, sort]);
+    if (selectedId && !items.some((user) => user.id === selectedId)) setSelectedId(null);
+  }, [items, selectedId]);
 
-  const pages = Math.max(1, Math.ceil(filteredUsers.length / pageSize));
-  const visibleUsers = filteredUsers.slice((page - 1) * pageSize, page * pageSize);
-  const selectedAnalyses = selectedUser
-    ? analyses.filter((analysis) => analysis.userId === selectedUser.id).slice(0, 5)
-    : [];
+  const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const currentPage = Math.min(page, pages);
+  const visible = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const selected = items.find((user) => user.id === selectedId) ?? null;
 
-  const exportUsers = () => {
-    downloadCsv('counterpick-users.csv', [
-      ['ID', 'Имя', 'Email', 'Тип', 'Тариф', 'Статус', 'Проверки', 'Квота', 'Создан'],
-      ...filteredUsers.map((user) => [
-        user.id,
-        user.displayName,
-        user.email ?? '',
-        user.kind,
-        user.plan,
-        user.status,
-        user.analysesCount,
-        user.quotaBalance,
-        user.createdAt,
-      ]),
-    ]);
-    onNotify('CSV пользователей сохранён');
-  };
+  if (resource.loading && !resource.data) {
+    return <div className="page-stack" aria-busy="true"><div className="page-skeleton page-skeleton--heading" /><div className="page-skeleton page-skeleton--table" /></div>;
+  }
+  if (resource.error && !resource.data) return <EmptyState title="Пользователи недоступны" text={resource.error} action={<Button onClick={onRetry}>Повторить</Button>} />;
+  if (!resource.data) return <EmptyState title="Нет данных" text="API не вернул список пользователей." action={<Button onClick={onRetry}>Обновить</Button>} />;
 
-  const updatePlan = (nextPlan: Plan) => {
-    if (!selectedUser) return;
-    onUpdateUser(selectedUser.id, {
-      plan: nextPlan,
-      quotaBalance: nextPlan === 'pro' ? Math.max(25, selectedUser.quotaBalance) : Math.min(3, selectedUser.quotaBalance),
-      planExpiresAt: nextPlan === 'pro'
-        ? new Date('2026-08-26T16:35:00.000Z').toISOString()
-        : null,
-    });
-    onNotify(nextPlan === 'pro' ? 'Пользователю включён Pro' : 'Пользователь переведён на Free');
+  const grantAll = async () => {
+    if (grantBusy) return;
+    setGrantBusy(true);
+    setActionError('');
+    try {
+      await onGrantProAll();
+      setGrantOpen(false);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Не удалось выдать Pro.');
+    } finally {
+      setGrantBusy(false);
+    }
   };
 
   return (
     <div className="page-stack">
       <header className="page-heading">
         <div>
-          <span className="eyebrow">Управление доступом и квотами</span>
+          <span className="eyebrow">Аккаунты production-базы</span>
           <h1>Пользователи</h1>
-          <p>{formatNumber(users.length)} аккаунта в демо-наборе.</p>
+          <p>{formatNumber(resource.data.pagination.total)} аккаунтов. Загружено {items.length}.</p>
         </div>
-        <Button icon={<Download size={16} />} onClick={exportUsers}>
-          Экспорт CSV
-        </Button>
+        <Button variant="primary" icon={<Sparkles size={16} />} onClick={() => { setActionError(''); setGrantOpen(true); }}>Выдать Pro всем</Button>
       </header>
+
+      {resource.error ? <div className="inline-error" role="status"><span>{resource.error}</span><button type="button" onClick={onRetry}>Повторить</button></div> : null}
 
       <Panel className="table-panel">
         <div className="table-toolbar">
-          <SearchInput
-            value={query}
-            onChange={setQuery}
-            placeholder="Имя, email или ID"
-            ariaLabel="Поиск пользователей"
-          />
+          <SearchInput value={query} onChange={setQuery} placeholder="Email или ID" ariaLabel="Поиск пользователей" />
           <div className="table-toolbar__filters">
             <SegmentedControl
               value={kind}
               onChange={setKind}
-              ariaLabel="Тип пользователя"
-              options={[
-                { value: 'all', label: 'Все' },
-                { value: 'user', label: 'Аккаунты' },
-                { value: 'guest', label: 'Гости' },
-              ]}
+              ariaLabel="Тип аккаунта"
+              options={[{ value: 'all', label: 'Все' }, { value: 'user', label: 'Аккаунты' }, { value: 'guest', label: 'Гости' }]}
             />
             <CustomSelect
               value={plan}
               onChange={setPlan}
               ariaLabel="Тариф"
               label="Тариф"
-              options={[
-                { value: 'all', label: 'Все тарифы' },
-                { value: 'free', label: 'Free' },
-                { value: 'pro', label: 'Pro' },
-              ]}
-            />
-            <CustomSelect
-              value={sort}
-              onChange={setSort}
-              ariaLabel="Сортировка"
-              icon={<ArrowDownUp size={15} />}
-              className="custom-select--sort"
-              options={[
-                { value: 'recent', label: 'Недавно активные' },
-                { value: 'checks', label: 'Больше проверок' },
-                { value: 'created', label: 'Сначала новые' },
-              ]}
+              options={[{ value: 'all', label: 'Все тарифы' }, { value: 'free', label: 'Free' }, { value: 'pro', label: 'Pro' }]}
             />
           </div>
         </div>
 
-        {visibleUsers.length ? (
+        {visible.length ? (
           <div className="data-table-wrap">
             <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Пользователь</th>
-                  <th>Тариф</th>
-                  <th>Статус</th>
-                  <th>Проверки</th>
-                  <th>Квота</th>
-                  <th>Последняя активность</th>
-                  <th><span className="sr-only">Действия</span></th>
-                </tr>
-              </thead>
+              <thead><tr><th>Пользователь</th><th>Тариф</th><th>Проверки</th><th>Успешность</th><th>Квота</th><th>Последняя проверка</th><th><span className="sr-only">Открыть</span></th></tr></thead>
               <tbody>
-                {visibleUsers.map((user) => (
-                  <tr key={user.id} onClick={() => onSelectUser(user.id)}>
-                    <td>
-                      <div className="table-user">
-                        <UserAvatar name={user.displayName} size="sm" />
-                        <span>
-                          <strong>{user.displayName}</strong>
-                          <small>{user.email ?? `${user.device} · ${user.id}`}</small>
-                        </span>
-                      </div>
-                    </td>
-                    <td><StatusBadge tone={planTone(user.plan)}>{user.plan === 'pro' ? 'Pro' : 'Free'}</StatusBadge></td>
-                    <td>
-                      <span className={`presence presence--${user.status}`}>
-                        <i />
-                        {user.status === 'active' ? 'Активен' : 'Ограничен'}
-                      </span>
-                    </td>
-                    <td>
-                      <strong className="table-number">{user.analysesCount}</strong>
-                      <small className="table-subvalue">{formatPercent(user.successRate, 0)} успешно</small>
-                    </td>
-                    <td><strong className="table-number">{user.quotaBalance}</strong></td>
-                    <td>
-                      <span className="table-date">{formatRelativeTime(user.lastActiveAt)}</span>
-                      <small className="table-subvalue">{user.country} · {user.device}</small>
-                    </td>
-                    <td onClick={(event) => event.stopPropagation()}>
-                      <TableRowButton label={`Открыть ${user.displayName}`} onClick={() => onSelectUser(user.id)} />
-                    </td>
-                  </tr>
-                ))}
+                {visible.map((user) => {
+                  const successRate = user.analysesCount ? (user.completedCount / user.analysesCount) * 100 : 0;
+                  return (
+                    <tr key={user.id} onClick={() => setSelectedId(user.id)}>
+                      <td><div className="table-user"><UserAvatar name={userLabel(user)} size="sm" /><span><strong>{userLabel(user)}</strong><small>{user.kind === 'guest' ? 'Гостевой аккаунт' : user.id}</small></span></div></td>
+                      <td><StatusBadge tone={user.plan === 'pro' ? 'info' : 'neutral'}>{user.plan === 'pro' ? (user.complimentaryPro ? 'Pro · подарок' : 'Pro') : 'Free'}</StatusBadge></td>
+                      <td><strong className="table-number">{user.analysesCount}</strong><small className="table-subvalue">{user.failedCount} ошибок</small></td>
+                      <td><strong className="table-number">{formatPercent(successRate, 0)}</strong></td>
+                      <td><strong className="table-number">{user.quotaBalance}</strong></td>
+                      <td><span className="table-date">{user.lastAnalysisAt ? formatRelativeTime(user.lastAnalysisAt) : 'Ещё не было'}</span></td>
+                      <td onClick={(event) => event.stopPropagation()}><TableRowButton label={`Открыть ${userLabel(user)}`} onClick={() => setSelectedId(user.id)} /></td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
-        ) : (
-          <EmptyState
-            title="Никого не нашли"
-            text="Измените запрос или сбросьте один из фильтров."
-            action={<Button onClick={() => { setQuery(''); setKind('all'); setPlan('all'); }}>Сбросить фильтры</Button>}
-          />
-        )}
+        ) : <EmptyState title="Пользователей не найдено" text={items.length ? 'Измените фильтры или поисковый запрос.' : 'В production-базе пока нет аккаунтов.'} />}
 
         <footer className="table-footer">
-          <span>
-            {filteredUsers.length
-              ? `${(page - 1) * pageSize + 1}–${Math.min(page * pageSize, filteredUsers.length)} из ${filteredUsers.length}`
-              : '0 записей'}
-          </span>
-          <div>
-            <IconButton label="Предыдущая страница" disabled={page === 1} onClick={() => setPage((value) => value - 1)}>
-              <ChevronLeft size={17} />
-            </IconButton>
-            <span>{page} / {pages}</span>
-            <IconButton label="Следующая страница" disabled={page === pages} onClick={() => setPage((value) => value + 1)}>
-              <ChevronRight size={17} />
-            </IconButton>
-          </div>
+          <span>{filtered.length ? `${(currentPage - 1) * pageSize + 1}–${Math.min(currentPage * pageSize, filtered.length)} из ${filtered.length}` : '0 записей'}{resource.data.pagination.total > items.length ? ` · всего в базе ${resource.data.pagination.total}` : ''}</span>
+          <div><IconButton label="Предыдущая страница" disabled={currentPage === 1} onClick={() => setPage((value) => Math.max(1, value - 1))}><ChevronLeft size={17} /></IconButton><span>{currentPage} / {pages}</span><IconButton label="Следующая страница" disabled={currentPage === pages} onClick={() => setPage((value) => Math.min(pages, value + 1))}><ChevronRight size={17} /></IconButton></div>
         </footer>
       </Panel>
 
-      <Drawer
-        open={Boolean(selectedUser)}
-        title={selectedUser?.displayName ?? 'Пользователь'}
-        eyebrow={selectedUser?.id}
-        onClose={onCloseUser}
-      >
-        {selectedUser ? (
+      <Drawer open={Boolean(selected)} title={selected ? userLabel(selected) : 'Пользователь'} eyebrow={selected?.id} onClose={() => setSelectedId(null)}>
+        {selected ? (
           <div className="user-drawer">
-            <div className="user-identity">
-              <UserAvatar name={selectedUser.displayName} size="lg" />
-              <div>
-                <div>
-                  <StatusBadge tone={planTone(selectedUser.plan)}>
-                    {selectedUser.plan === 'pro' ? 'Pro' : 'Free'}
-                  </StatusBadge>
-                  <span className={`presence presence--${selectedUser.status}`}><i />{selectedUser.status === 'active' ? 'Активен' : 'Ограничен'}</span>
-                </div>
-                <p>{selectedUser.email ?? 'Гостевой аккаунт'}</p>
-              </div>
-            </div>
-
-            <div className="drawer-stat-grid">
-              <div><span>Проверки</span><strong>{selectedUser.analysesCount}</strong></div>
-              <div><span>Успешность</span><strong>{formatPercent(selectedUser.successRate, 0)}</strong></div>
-              <div><span>Остаток</span><strong>{selectedUser.quotaBalance}</strong></div>
-            </div>
-
-            <section className="drawer-section">
-              <h3>Управление</h3>
-              <div className="action-list">
-                <button
-                  type="button"
-                  onClick={() => {
-                    onUpdateUser(selectedUser.id, { quotaBalance: selectedUser.quotaBalance + 5 });
-                    onNotify('Добавлено 5 проверок');
-                  }}
-                >
-                  <span><Plus size={17} /></span>
-                  <p><strong>Добавить 5 проверок</strong><small>Ручная корректировка квоты</small></p>
-                  <ChevronRight size={17} />
-                </button>
-                <button type="button" onClick={() => updatePlan(selectedUser.plan === 'pro' ? 'free' : 'pro')}>
-                  <span><ShieldCheck size={17} /></span>
-                  <p>
-                    <strong>{selectedUser.plan === 'pro' ? 'Перевести на Free' : 'Выдать Pro на месяц'}</strong>
-                    <small>Демо-действие без RevenueCat</small>
-                  </p>
-                  <ChevronRight size={17} />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const nextStatus = selectedUser.status === 'active' ? 'suspended' : 'active';
-                    onUpdateUser(selectedUser.id, { status: nextStatus });
-                    onNotify(nextStatus === 'active' ? 'Ограничение снято' : 'Доступ пользователя ограничен');
-                  }}
-                >
-                  <span><Ban size={17} /></span>
-                  <p>
-                    <strong>{selectedUser.status === 'active' ? 'Ограничить доступ' : 'Восстановить доступ'}</strong>
-                    <small>Сессии и новые запросы</small>
-                  </p>
-                  <ChevronRight size={17} />
-                </button>
-                <button type="button" onClick={() => onNotify('Все активные сессии отозваны')}>
-                  <span><KeyRound size={17} /></span>
-                  <p><strong>Выйти на всех устройствах</strong><small>Отозвать refresh-токены</small></p>
-                  <ChevronRight size={17} />
-                </button>
-              </div>
-            </section>
-
-            <section className="drawer-section">
-              <div className="drawer-section__heading">
-                <h3>Последние проверки</h3>
-                <span>{selectedAnalyses.length}</span>
-              </div>
-              <div className="drawer-analysis-list">
-                {selectedAnalyses.length ? selectedAnalyses.map((analysis) => (
-                  <div key={analysis.id}>
-                    <span className={`analysis-state analysis-state--${analysis.status}`} />
-                    <p>
-                      <strong>{analysis.recommendation ?? analysis.errorCode ?? 'В обработке'}</strong>
-                      <small>{analysis.source === 'photo' ? 'По фото' : 'Вручную'} · {formatDateTime(analysis.createdAt)}</small>
-                    </p>
-                    <StatusBadge tone={analysis.status === 'completed' ? 'positive' : analysis.status === 'failed' ? 'negative' : 'warning'}>
-                      {analysis.status === 'completed' ? 'Готово' : analysis.status === 'failed' ? 'Ошибка' : 'Процесс'}
-                    </StatusBadge>
-                  </div>
-                )) : (
-                  <p className="muted-message">У пользователя ещё нет проверок.</p>
-                )}
-              </div>
-            </section>
-
+            <div className="user-identity"><UserAvatar name={userLabel(selected)} size="lg" /><div><div><StatusBadge tone={selected.plan === 'pro' ? 'info' : 'neutral'}>{selected.plan === 'pro' ? (selected.complimentaryPro ? 'Подарочный Pro' : 'Pro') : 'Free'}</StatusBadge><StatusBadge tone="neutral">{selected.kind === 'guest' ? 'Гость' : 'Аккаунт'}</StatusBadge></div><p>{selected.email ?? 'Email отсутствует'}</p></div></div>
+            <div className="drawer-stat-grid"><div><span>Проверки</span><strong>{selected.analysesCount}</strong></div><div><span>Успешно</span><strong>{selected.completedCount}</strong></div><div><span>Квота</span><strong>{selected.quotaBalance}</strong></div></div>
             <section className="drawer-section drawer-section--details">
               <h3>Детали аккаунта</h3>
               <dl>
-                <div><dt>Создан</dt><dd>{formatDateTime(selectedUser.createdAt)}</dd></div>
-                <div><dt>Устройство</dt><dd>{selectedUser.device}</dd></div>
-                <div><dt>Страна</dt><dd>{selectedUser.country}</dd></div>
-                <div><dt>Тип</dt><dd>{selectedUser.kind === 'guest' ? 'Гость' : 'Аккаунт'}</dd></div>
+                <div><dt>Создан</dt><dd>{formatDateTime(selected.createdAt)}</dd></div>
+                <div><dt>Обновлён</dt><dd>{formatDateTime(selected.updatedAt)}</dd></div>
+                <div><dt>Отзывов</dt><dd>{selected.reviewsCount}</dd></div>
+                <div><dt>Pro до</dt><dd>{selected.complimentaryPro ? 'Бессрочно' : selected.planExpiresAt ? formatDateTime(selected.planExpiresAt) : 'Не задано'}</dd></div>
               </dl>
             </section>
-
-            <div className="danger-zone">
-              <div>
-                <Trash2 size={18} />
-                <p><strong>Удалить пользователя</strong><small>Аккаунт и связанные данные будут удалены.</small></p>
-              </div>
-              <Button variant="danger" size="sm" onClick={() => onRequestDelete(selectedUser)}>
-                Удалить
-              </Button>
-            </div>
+            <section className="drawer-section unavailable-actions">
+              <div className="drawer-section__heading"><h3>Управление аккаунтом</h3><StatusBadge tone="warning">Нет endpoint</StatusBadge></div>
+              <p>Изменение квоты, блокировка, отзыв сессий и удаление аккаунта отключены: backend пока не предоставляет защищённые команды и аудит для этих операций.</p>
+            </section>
           </div>
         ) : null}
       </Drawer>
+
+      <ConfirmDialog
+        open={grantOpen}
+        title="Выдать Pro всем пользователям?"
+        description="Это реальная массовая операция в production-базе. Backend выполнит её идемпотентно и запишет результат в аудит. Отменить изменение автоматически нельзя."
+        confirmLabel={grantBusy ? 'Выдаём Pro…' : 'Подтвердить выдачу'}
+        onConfirm={() => void grantAll()}
+        onCancel={() => { if (!grantBusy) setGrantOpen(false); }}
+      />
+      {actionError ? <div className="action-error-toast" role="alert"><ShieldCheck size={17} /><span>{actionError}</span><button type="button" onClick={() => setActionError('')}>Закрыть</button></div> : null}
     </div>
   );
 }
