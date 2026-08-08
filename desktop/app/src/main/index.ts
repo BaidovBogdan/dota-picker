@@ -36,6 +36,9 @@ import type {
 } from '../shared/contracts.js';
 import { IPC } from '../shared/ipc-channels.js';
 
+const processStartedAt = performance.now();
+const startupLog = log.scope('startup');
+
 if (process.platform === 'win32') {
   app.commandLine.appendSwitch('wm-window-animations-disabled');
 }
@@ -382,6 +385,9 @@ function createTray(
 
 async function bootstrap(): Promise<void> {
   await app.whenReady();
+  startupLog.info('Electron runtime is ready', {
+    durationMs: Math.round((performance.now() - processStartedAt) * 10) / 10,
+  });
   app.setAppUserModelId('com.counterpick.desktop');
 
   const rendererRoot = fileURLToPath(new URL('../renderer', import.meta.url));
@@ -406,7 +412,9 @@ async function bootstrap(): Promise<void> {
   const userData = app.getPath('userData');
   const preferences = new PreferencesStore(join(userData, 'preferences.json'));
   const tokenVault = new TokenVault(join(userData, 'secure', 'session.bin'));
-  const api = new ApiClient(apiUrl, tokenVault);
+  const api = new ApiClient(apiUrl, tokenVault, (diagnostic) => {
+    startupLog.info('Session bootstrap operation completed', diagnostic);
+  });
   const gsi = new GsiReceiver(join(userData, 'gsi', 'token'));
 
   mainWindow = createWindow(preferences);
@@ -709,6 +717,9 @@ async function bootstrap(): Promise<void> {
   } else {
     await mainWindow.loadURL('counterpick://app/index.html');
   }
+  startupLog.info('Main renderer loaded', {
+    durationMs: Math.round((performance.now() - processStartedAt) * 10) / 10,
+  });
 
   if (process.env.ELECTRON_RENDERER_URL) {
     const overlayUrl = new URL('/overlay.html', process.env.ELECTRON_RENDERER_URL);

@@ -47,4 +47,5 @@ export const IPC = {
   overwolfChanged: 'overwolf:changed',
   appOpenExternal: 'app:open-external',
   appInfo: 'app:info',
+  appStartupDiagnostic: 'app:startup-diagnostic',
 } as const;

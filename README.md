@@ -12,7 +12,7 @@ The repository contains the mobile product, API, Windows desktop companion, prot
 | [`server`](server/README.md) | Fastify API, PostgreSQL data layer, OpenDota and Gemini integrations | Main backend |
 | [`desktop/app`](desktop/app/README.md) | Electron companion with automatic Dota 2 draft detection | Main desktop product |
 | [`admin`](admin/README.md) | Protected React/Vite operations dashboard backed by the real API and database | Operations console |
-| [`landing`](landing/README.md) | Astro marketing site for the future Windows client | Canonical landing |
+| [`landing`](landing/README.md) | Astro marketing site for the Windows client | Canonical pre-release landing |
 | [`desktop/gsi-probe`](desktop/gsi-probe/README.md) | Local Valve Game State Integration research receiver | Research tool |
 | [`desktop/capture-probe`](desktop/capture-probe/README.md) | Safe Windows window-capture proof of concept | Research tool |
 | [`design-preview`](design-preview) | Historical UI directions and interactive prototypes | Design archive |
@@ -29,7 +29,8 @@ There is no root npm workspace. Install dependencies and run commands inside the
 - Free and Pro quotas, RevenueCat billing adapter, and analysis feedback.
 - Russian and English localization with system, light, and dark themes.
 - A deterministic recommendation path when Gemini reranking is disabled or unavailable.
-- An opt-in Windows assistant that watches the Dota 2 draft, skips unchanged frames, and shows one automatic result per draft session.
+- An opt-in Windows assistant that watches the Dota 2 draft, skips unchanged frames, and updates one live result as the draft gains new picks.
+- Optional exact-pick ingestion through a local Overwolf companion; its public Appstore release is still pending.
 
 ## Technology
 
@@ -106,4 +107,4 @@ npm run build
 
 ## Current scope
 
-The mobile client, desktop companion, and API are the primary product surfaces. The desktop app automatically detects Dota 2 hero selection through GSI and analyzes changed window captures; the probes remain isolated research tools. The Astro package is the canonical public landing. The protected admin console reads real accounts, analyses, quota events, reviews, meta snapshots and system status from the same-origin API. Source screenshots are intentionally not persisted, and integrations without required external configuration are reported as unavailable rather than represented with placeholder data.
+The mobile client, desktop companion, and API are the primary product surfaces. Vision mode uses GSI to detect the draft phase and the local player's team signal, processes changed Dota-window captures in memory, and updates the same saved analysis through a bounded live revision chain. Overwolf Live uses exact structured pick events through an authenticated loopback companion, but that companion is not yet published in the Overwolf Appstore. The probes remain isolated research tools. The Astro package is the canonical public landing. The protected admin console reads real accounts, analyses, quota events, reviews, meta snapshots and system status from the same-origin API. Source screenshots are intentionally not persisted, and integrations without required external configuration are reported as unavailable rather than represented with placeholder data.

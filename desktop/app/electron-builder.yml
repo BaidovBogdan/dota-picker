@@ -11,6 +11,9 @@ extraResources:
 asar: true
 asarUnpack:
   - node_modules/@koromix/koffi-win32-x64/win32_x64/koffi.node
+electronLanguages:
+  - en-US
+  - ru
 publish:
   provider: github
   owner: BaidovBogdan
@@ -27,6 +30,10 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
+  include: installer/installer.nsh
+  installerLanguages:
+    - en_US
+    - ru_RU
 mac:
   target:
     - dmg

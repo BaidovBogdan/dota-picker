@@ -22,11 +22,25 @@ function json(value: unknown) {
   });
 }
 
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error('Operation timed out')), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('OpenDotaAdapter position meta', () => {
+describe('OpenDotaAdapter', () => {
   it('loads current-patch matchup and synergy rows with split indexed branches and caches the snapshot', async () => {
     const requestedSql: string[] = [];
     const requestedUrls: string[] = [];
@@ -397,6 +411,126 @@ describe('OpenDotaAdapter position meta', () => {
     expect(explorerSql).toHaveLength(1);
     expect(explorerSql[0]).toContain('JOIN public_matches pub USING(match_id)');
     expect(explorerSql[0]).toContain('ORDER BY m.start_time DESC, pm.match_id DESC');
+  });
+
+  it('returns core hero statistics while the build snapshot refreshes in the background', async () => {
+    const diagnostics: Record<string, unknown>[] = [];
+    let resolveExplorer: ((response: Response) => void) | undefined;
+    const explorerResponse = new Promise<Response>((resolve) => {
+      resolveExplorer = resolve;
+    });
+    let explorerRequests = 0;
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
+      if (url.endsWith('/heroStats')) {
+        return json([{
+          id: 1,
+          name: 'npc_dota_hero_antimage',
+          localized_name: 'Anti-Mage',
+          primary_attr: 'agi',
+          attack_type: 'Melee',
+          roles: ['Carry'],
+          img: '/apps/dota2/images/dota_react/heroes/antimage.png',
+          icon: '/apps/dota2/images/dota_react/heroes/icons/antimage.png',
+          pub_pick: 100,
+          pub_win: 51,
+        }]);
+      }
+      if (url.endsWith('/constants/patch')) {
+        return json([{ id: 60, name: '7.41', date: '2026-03-24T00:50:59.580Z' }]);
+      }
+      if (url.endsWith('/constants/items')) {
+        return json({});
+      }
+      if (url.includes('/explorer?sql=')) {
+        explorerRequests += 1;
+        return explorerResponse;
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const adapter = new OpenDotaAdapter(config, (diagnostic) => diagnostics.push(diagnostic));
+
+    const first = await withTimeout(adapter.getHeroDetail(1), 500);
+    const concurrent = await adapter.getHeroDetail(1);
+
+    expect(first).toMatchObject({
+      hero: { id: 1 },
+      patch: { name: '7.41' },
+      availability: { builds: 'collecting' },
+    });
+    expect(concurrent.availability.builds).toBe('collecting');
+    expect(explorerRequests).toBe(1);
+
+    resolveExplorer?.(json({ rows: [] }));
+    await vi.waitFor(() => {
+      const pending = (adapter as unknown as { detailPending: Map<string, unknown> }).detailPending;
+      expect(pending.size).toBe(0);
+    });
+    expect(diagnostics).toMatchObject([{
+      operation: 'hero-detail-refresh',
+      heroId: 1,
+      patch: '7.41',
+      outcome: 'success',
+      availability: 'collecting',
+    }]);
+    expect(typeof diagnostics[0]?.durationMs).toBe('number');
+  });
+
+  it('reports background build failures and serves an unavailable fail-soft state', async () => {
+    const diagnostics: Record<string, unknown>[] = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
+      if (url.endsWith('/heroStats')) {
+        return json([{
+          id: 1,
+          name: 'npc_dota_hero_antimage',
+          localized_name: 'Anti-Mage',
+          primary_attr: 'agi',
+          attack_type: 'Melee',
+          roles: ['Carry'],
+          img: '/hero.png',
+          icon: '/hero-icon.png',
+          pub_pick: 100,
+          pub_win: 51,
+        }]);
+      }
+      if (url.endsWith('/constants/patch')) {
+        return json([{ id: 60, name: '7.41', date: null }]);
+      }
+      if (url.endsWith('/constants/items')) {
+        throw new Error('Items provider failed');
+      }
+      if (url.includes('/explorer?sql=')) {
+        return json({ rows: [] });
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const adapter = new OpenDotaAdapter(config, (diagnostic) => diagnostics.push(diagnostic));
+
+    const first = await adapter.getHeroDetail(1);
+    expect(first.availability.builds).toBe('collecting');
+    await vi.waitFor(() => {
+      const pending = (adapter as unknown as { detailPending: Map<string, unknown> }).detailPending;
+      expect(pending.size).toBe(0);
+    });
+
+    const settled = await adapter.getHeroDetail(1);
+    expect(settled.availability.builds).toBe('unavailable');
+    expect(diagnostics).toMatchObject([{
+      outcome: 'fallback',
+      availability: 'unavailable',
+    }]);
+    expect(String(diagnostics[0]?.reason)).toContain('temporarily unavailable');
   });
 
   it('combines current-patch position meta with the selected-rank matchup baseline', async () => {

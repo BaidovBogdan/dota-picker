@@ -701,7 +701,7 @@ export function SettingsPage() {
             <ShieldCheckIcon size={20} weight="duotone" aria-hidden />
           </span>
           <span>
-            <strong>Counterpick {infoQuery.data?.version ?? '0.1.2'}</strong>
+            <strong>{infoQuery.data?.version ? `Counterpick ${infoQuery.data.version}` : 'Counterpick'}</strong>
             <small>{infoQuery.data?.platform ?? 'Windows'} · {text('ассистент драфта', 'draft assistant')}</small>
           </span>
         </div>

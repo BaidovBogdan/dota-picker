@@ -22,6 +22,7 @@ import {
 import { Link, useNavigate } from 'react-router';
 import {
   useEffect,
+  useId,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -34,6 +35,7 @@ import { PositionLabel, RankLabel } from '../components/dota-taxonomy';
 import { GameSignalVisual, type GameSignalMode } from '../components/game-signal-visual';
 import { phaseCopy, formatRelative, heroName } from '../format';
 import { useI18n } from '../i18n';
+import { ModalPortal } from '../components/modal-portal';
 import { StatusScrub } from '../components/motion';
 import { AsyncState, Button, HeroIcon, Panel, TextLink } from '../components/ui';
 import { useAppStore } from '../store';
@@ -214,7 +216,7 @@ export function DashboardPage() {
     dotaDetected: false,
   };
   const assistantMode = preferences?.assistantMode ?? 'vision';
-  const modeInteractionBlocked = modeMutation.isPending || !preferences;
+  const modeInteractionBlocked = modeMutation.isPending || !preferences || !currentEngine.enabled;
   const overwolfState: OverwolfBridgeState = overwolfQuery.data ?? {
     phase: 'stopped',
     configured: false,
@@ -561,38 +563,46 @@ export function DashboardPage() {
             <Broadcast size={21} weight="duotone" aria-hidden />
           </div>
           <div
-            className="assistant-mode-switch"
-            role="radiogroup"
-            aria-label={text('Способ распознавания драфта', 'Draft detection method')}
-            aria-busy={modeMutation.isPending}
-            data-mode={assistantMode}
+            className="assistant-mode-reveal"
+            data-open={currentEngine.enabled}
+            aria-hidden={!currentEngine.enabled}
           >
-            <span className="assistant-mode-switch__indicator" aria-hidden />
-            <button
-              type="button"
-              role="radio"
-              {...assistantModeOptionA11y('vision', assistantMode, modeInteractionBlocked)}
-              data-assistant-mode="vision"
-              className={assistantMode === 'vision' ? 'is-active' : ''}
-              onClick={() => selectAssistantMode('vision')}
-              onKeyDown={handleModeKeyDown}
-            >
-              <Eye size={15} weight="duotone" aria-hidden />
-              <span>Draft Vision</span>
-            </button>
-            <button
-              type="button"
-              role="radio"
-              {...assistantModeOptionA11y('overwolf', assistantMode, modeInteractionBlocked)}
-              data-assistant-mode="overwolf"
-              className={assistantMode === 'overwolf' ? 'is-active' : ''}
-              onClick={() => selectAssistantMode('overwolf')}
-              onKeyDown={handleModeKeyDown}
-            >
-              <Radio size={15} weight="duotone" aria-hidden />
-              <span>Overwolf Live</span>
-              <i data-state={overwolfState.phase} aria-hidden />
-            </button>
+            <div className="assistant-mode-reveal__inner">
+              <div
+                className="assistant-mode-switch"
+                role="radiogroup"
+                aria-label={text('Способ распознавания драфта', 'Draft detection method')}
+                aria-busy={modeMutation.isPending}
+                data-mode={assistantMode}
+              >
+                <span className="assistant-mode-switch__indicator" aria-hidden />
+                <button
+                  type="button"
+                  role="radio"
+                  {...assistantModeOptionA11y('vision', assistantMode, modeInteractionBlocked)}
+                  data-assistant-mode="vision"
+                  className={assistantMode === 'vision' ? 'is-active' : ''}
+                  onClick={() => selectAssistantMode('vision')}
+                  onKeyDown={handleModeKeyDown}
+                >
+                  <Eye size={15} weight="duotone" aria-hidden />
+                  <span>Draft Vision</span>
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  {...assistantModeOptionA11y('overwolf', assistantMode, modeInteractionBlocked)}
+                  data-assistant-mode="overwolf"
+                  className={assistantMode === 'overwolf' ? 'is-active' : ''}
+                  onClick={() => selectAssistantMode('overwolf')}
+                  onKeyDown={handleModeKeyDown}
+                >
+                  <Radio size={15} weight="duotone" aria-hidden />
+                  <span>Overwolf Live</span>
+                  <i data-state={overwolfState.phase} aria-hidden />
+                </button>
+              </div>
+            </div>
           </div>
           {gameSignalMode === 'off' ? (
             <div
@@ -813,8 +823,8 @@ export function DashboardPage() {
                 <small className="mode-comparison-card__release-note">
                   <Info size={14} weight="duotone" aria-hidden />
                   {text(
-                    'Установка откроется после публикации companion в Overwolf Appstore.',
-                    'Installation becomes available after the companion is published in the Overwolf Appstore.',
+                    'Counterpick Live пока не опубликован в Overwolf Appstore. Одна платформа Overwolf не установит companion и не включит Live-режим.',
+                    'Counterpick Live is not published in the Overwolf Appstore yet. The Overwolf platform alone will not install the companion or enable Live mode.',
                   )}
                 </small>
               ) : null}
@@ -888,7 +898,8 @@ export function DashboardPage() {
       </section>
 
       {consentOpen ? (
-        <div className="modal-backdrop" role="presentation">
+        <ModalPortal>
+          <div className="modal-backdrop" role="presentation">
           <section
             className="consent-dialog"
             role="dialog"
@@ -973,11 +984,13 @@ export function DashboardPage() {
               </Button>
             </div>
           </section>
-        </div>
+          </div>
+        </ModalPortal>
       ) : null}
 
       {overwolfConsentOpen ? (
-        <div className="modal-backdrop" role="presentation">
+        <ModalPortal>
+          <div className="modal-backdrop" role="presentation">
           <section
             className="consent-dialog consent-dialog--overwolf"
             role="dialog"
@@ -1059,21 +1072,24 @@ export function DashboardPage() {
               </Button>
             </div>
           </section>
-        </div>
+          </div>
+        </ModalPortal>
       ) : null}
     </main>
   );
 }
 
 function TermTooltip({ term, explanation }: { term: string; explanation: string }) {
+  const tooltipId = useId();
+
   return (
-    <span className="term-tooltip" tabIndex={0} aria-label={`${term}: ${explanation}`}>
-      <span>
+    <button className="term-tooltip" type="button" aria-describedby={tooltipId}>
+      <span className="term-tooltip__label">
         {term}
         <Info size={12} weight="duotone" aria-hidden />
       </span>
-      <span className="term-tooltip__bubble" role="tooltip">{explanation}</span>
-    </span>
+      <span className="term-tooltip__bubble" id={tooltipId} role="tooltip">{explanation}</span>
+    </button>
   );
 }
 

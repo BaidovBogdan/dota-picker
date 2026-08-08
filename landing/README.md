@@ -1,6 +1,6 @@
 # Counterpick landing
 
-This is the canonical public marketing site for the planned Counterpick Windows desktop application. It presents the live-draft problem, visualizes the future overlay workflow, explains the recommendation signal, and routes visitors to the available release or beta action.
+This is the canonical pre-release marketing site for the Counterpick Windows desktop application. It presents the live-draft problem, visualizes the overlay workflow, explains the recommendation signal, and routes visitors to the configured release or beta action.
 
 The current implementation is one animated page at `/`. Earlier multi-route design directions are retained only as research documents and are not live application routes.
 

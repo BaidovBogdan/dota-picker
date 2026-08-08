@@ -65,7 +65,13 @@ export function buildApp(config: AppConfig = loadConfig()) {
   const quotaService = new QuotaService(db, config.quota);
   const otpService = new OtpService(db, config);
   const authService = new AuthService(db, config, otpService);
-  const metaAdapter = new OpenDotaAdapter(config.openDota);
+  const metaAdapter = new OpenDotaAdapter(config.openDota, (diagnostic) => {
+    if (diagnostic.outcome === 'fallback') {
+      app.log.warn(diagnostic, 'OpenDota hero detail refresh used a fallback');
+      return;
+    }
+    app.log.info(diagnostic, 'OpenDota hero detail refresh completed');
+  });
   const recommendationEngine = new RecommendationEngine();
   const analysisService = new AnalysisService(
     db,

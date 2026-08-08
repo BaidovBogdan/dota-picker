@@ -96,6 +96,7 @@ const bridge: DesktopBridge = {
   app: {
     openExternal: (url) => invoke(IPC.appOpenExternal, url),
     getInfo: () => invoke(IPC.appInfo),
+    reportStartup: (input) => invoke(IPC.appStartupDiagnostic, input),
   },
 };
 

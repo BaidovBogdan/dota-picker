@@ -20,6 +20,7 @@ import type {
 
 const DETAIL_CACHE_FRESH_MS = 4 * 60 * 60 * 1_000;
 const DETAIL_CACHE_COLLECTING_MS = 60 * 60 * 1_000;
+const DETAIL_CACHE_BOOTSTRAP_MS = 3_000;
 const DETAIL_CACHE_RETRY_MS = 5 * 60 * 1_000;
 const DETAIL_CACHE_STALE_MS = 24 * 60 * 60 * 1_000;
 const ITEMS_CACHE_FRESH_MS = 24 * 60 * 60 * 1_000;
@@ -154,6 +155,11 @@ type BuildGroup = {
 
 type BuildSection = Pick<HeroDetail, 'builds' | 'buildSampleSize' | 'availability'>;
 
+type HeroDetailLoad = {
+  value: HeroDetail;
+  failureReason?: string;
+};
+
 type HeroDetailCacheEntry = {
   value: HeroDetail;
   freshUntil: number;
@@ -178,6 +184,16 @@ type DraftPairCacheEntry = {
   staleUntil: number;
 };
 
+export type OpenDotaDiagnostic = {
+  operation: 'hero-detail-refresh';
+  heroId: number;
+  patch: string;
+  durationMs: number;
+  outcome: 'success' | 'fallback';
+  availability: HeroDetail['availability']['builds'];
+  reason?: string;
+};
+
 export class OpenDotaAdapter {
   private readonly heroesCache: TtlCache<RawHero[]>;
   private readonly patchCache: TtlCache<PatchMeta>;
@@ -189,7 +205,10 @@ export class OpenDotaAdapter {
   private readonly pairCache = new Map<string, DraftPairCacheEntry>();
   private readonly pairPending = new Map<string, Promise<DraftPairSnapshot>>();
 
-  public constructor(private readonly config: AppConfig['openDota']) {
+  public constructor(
+    private readonly config: AppConfig['openDota'],
+    private readonly reportDiagnostic?: (diagnostic: OpenDotaDiagnostic) => void,
+  ) {
     this.heroesCache = new TtlCache(config.cacheTtlMs, config.cacheStaleMs);
     this.patchCache = new TtlCache(config.cacheTtlMs, config.cacheStaleMs);
     this.itemsCache = new TtlCache(
@@ -243,24 +262,53 @@ export class OpenDotaAdapter {
 
     const pending = this.detailPending.get(key);
     if (pending) {
-      return pending;
+      return cached?.value ?? this.createCollectingHeroDetail(hero, patch);
     }
 
+    const fallback = cached && cached.staleUntil > now
+      ? { ...cached.value, isStale: true }
+      : this.createCollectingHeroDetail(hero, patch);
+    this.detailCache.set(key, {
+      value: fallback,
+      freshUntil: now + DETAIL_CACHE_BOOTSTRAP_MS,
+      staleUntil: cached && cached.staleUntil > now
+        ? cached.staleUntil
+        : now + DETAIL_CACHE_STALE_MS,
+    });
+    this.refreshHeroDetail(key, hero, patch, cached);
+    return fallback;
+  }
+
+  private refreshHeroDetail(
+    key: string,
+    hero: RawHero,
+    patch: PatchMeta,
+    previous: HeroDetailCacheEntry | undefined,
+  ): void {
+    const startedAt = performance.now();
     const request = this.loadHeroDetail(hero, patch)
-      .then((value) => {
+      .then(({ value, failureReason }) => {
         const loadedAt = Date.now();
         if (
           value.availability.builds === 'unavailable'
-          && cached
-          && cached.value.builds.length > 0
-          && cached.staleUntil > loadedAt
+          && previous
+          && previous.value.builds.length > 0
+          && previous.staleUntil > loadedAt
         ) {
-          const staleValue = { ...cached.value, isStale: true };
+          const staleValue = { ...previous.value, isStale: true };
           this.detailCache.set(key, {
             value: staleValue,
             freshUntil: loadedAt + DETAIL_CACHE_RETRY_MS,
-            staleUntil: cached.staleUntil,
+            staleUntil: previous.staleUntil,
           });
+          this.emitHeroDetailDiagnostic(
+            hero.id,
+            patch.name,
+            startedAt,
+            'fallback',
+            staleValue.availability.builds,
+            failureReason,
+          );
           return staleValue;
         }
         const freshMs = value.availability.builds === 'ready'
@@ -273,27 +321,90 @@ export class OpenDotaAdapter {
           freshUntil: loadedAt + freshMs,
           staleUntil: loadedAt + DETAIL_CACHE_STALE_MS,
         });
+        this.emitHeroDetailDiagnostic(
+          hero.id,
+          patch.name,
+          startedAt,
+          value.availability.builds === 'unavailable' ? 'fallback' : 'success',
+          value.availability.builds,
+          failureReason,
+        );
         return value;
       })
       .catch((error: unknown) => {
         const failedAt = Date.now();
-        if (cached && cached.staleUntil > failedAt) {
-          const staleValue = { ...cached.value, isStale: true };
+        if (previous && previous.staleUntil > failedAt) {
+          const staleValue = { ...previous.value, isStale: true };
           this.detailCache.set(key, {
             value: staleValue,
             freshUntil: failedAt + DETAIL_CACHE_RETRY_MS,
-            staleUntil: cached.staleUntil,
+            staleUntil: previous.staleUntil,
           });
+          this.emitHeroDetailDiagnostic(
+            hero.id,
+            patch.name,
+            startedAt,
+            'fallback',
+            staleValue.availability.builds,
+            error,
+          );
           return staleValue;
         }
-        throw error;
+        const unavailable = {
+          ...this.createCollectingHeroDetail(hero, patch),
+          availability: { builds: 'unavailable' as const },
+        };
+        this.detailCache.set(key, {
+          value: unavailable,
+          freshUntil: failedAt + DETAIL_CACHE_RETRY_MS,
+          staleUntil: failedAt + DETAIL_CACHE_STALE_MS,
+        });
+        this.emitHeroDetailDiagnostic(
+          hero.id,
+          patch.name,
+          startedAt,
+          'fallback',
+          unavailable.availability.builds,
+          error,
+        );
+        return unavailable;
       })
       .finally(() => {
         this.detailPending.delete(key);
       });
 
     this.detailPending.set(key, request);
-    return request;
+  }
+
+  private emitHeroDetailDiagnostic(
+    heroId: number,
+    patch: string,
+    startedAt: number,
+    outcome: OpenDotaDiagnostic['outcome'],
+    availability: OpenDotaDiagnostic['availability'],
+    error?: unknown,
+  ): void {
+    try {
+      this.reportDiagnostic?.({
+        operation: 'hero-detail-refresh',
+        heroId,
+        patch,
+        durationMs: Math.round((performance.now() - startedAt) * 10) / 10,
+        outcome,
+        availability,
+        ...(error
+          ? {
+              reason: error instanceof Error
+                ? error.message
+                : typeof error === 'string'
+                  ? error
+                  : 'Unknown error',
+            }
+          : {}),
+      });
+    } catch {
+      return;
+    }
   }
 
   public async getMetaPositionSnapshot(rank?: RankBracket): Promise<MetaPositionSnapshot> {
@@ -620,37 +731,67 @@ export class OpenDotaAdapter {
     };
   }
 
-  private async loadHeroDetail(hero: RawHero, patch: PatchMeta): Promise<HeroDetail> {
-    const buildSection = await this.loadBuildSection(hero.id, patch.name);
+  private async loadHeroDetail(hero: RawHero, patch: PatchMeta): Promise<HeroDetailLoad> {
+    const { section, failureReason } = await this.loadBuildSection(hero.id, patch.name);
+    return {
+      value: {
+        hero: this.toHeroMeta(hero),
+        patch,
+        generatedAt: new Date().toISOString(),
+        isStale: false,
+        rankWinRates: this.toRankWinRates(hero),
+        ...section,
+      },
+      ...(failureReason ? { failureReason } : {}),
+    };
+  }
+
+  private createCollectingHeroDetail(hero: RawHero, patch: PatchMeta): HeroDetail {
     return {
       hero: this.toHeroMeta(hero),
       patch,
       generatedAt: new Date().toISOString(),
       isStale: false,
       rankWinRates: this.toRankWinRates(hero),
-      ...buildSection,
+      builds: [],
+      buildSampleSize: 0,
+      availability: { builds: 'collecting' },
     };
   }
 
-  private async loadBuildSection(heroId: number, patch: string): Promise<BuildSection> {
+  private async loadBuildSection(
+    heroId: number,
+    patch: string,
+  ): Promise<{ section: BuildSection; failureReason?: string }> {
     const [itemsResult, rowsResult] = await Promise.allSettled([
       this.getItems(),
       this.getBuildRows(heroId, patch),
     ]);
     if (itemsResult.status === 'rejected' || rowsResult.status === 'rejected') {
+      const failures: string[] = [];
+      for (const result of [itemsResult, rowsResult]) {
+        if (result.status !== 'rejected') continue;
+        const reason: unknown = result.reason;
+        failures.push(reason instanceof Error ? reason.message : 'Unknown error');
+      }
       return {
-        builds: [],
-        buildSampleSize: 0,
-        availability: { builds: 'unavailable' },
+        section: {
+          builds: [],
+          buildSampleSize: 0,
+          availability: { builds: 'unavailable' },
+        },
+        failureReason: failures.join('; '),
       };
     }
 
     const { builds, sampleSize } = this.createBuildVariants(rowsResult.value, itemsResult.value);
     return {
-      builds,
-      buildSampleSize: sampleSize,
-      availability: {
-        builds: builds.length >= 2 ? 'ready' : 'collecting',
+      section: {
+        builds,
+        buildSampleSize: sampleSize,
+        availability: {
+          builds: builds.length >= 2 ? 'ready' : 'collecting',
+        },
       },
     };
   }

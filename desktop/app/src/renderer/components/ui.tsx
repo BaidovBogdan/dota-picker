@@ -18,6 +18,7 @@ import { Link } from 'react-router';
 import { heroName } from '../format';
 import { useI18n } from '../i18n';
 import type { Hero } from '../types';
+import { BrandMark } from './brand-mark';
 import { PageReveal } from './motion';
 
 export function Page({
@@ -176,7 +177,12 @@ export function AsyncState({
   const { text } = useI18n();
   const content = {
     loading: {
-      icon: <CircleNotchIcon className="spin" size={24} weight="bold" />,
+      icon: (
+        <span className="async-state__loader">
+          <span className="async-state__loader-orbit" />
+          <BrandMark />
+        </span>
+      ),
       title: title ?? text('Загружаем данные', 'Loading data'),
       description: description ?? text('Это займёт всего несколько секунд.', 'This will only take a few seconds.'),
     },
@@ -194,7 +200,7 @@ export function AsyncState({
 
   return (
     <div className={`async-state async-state--${status}`} role={status === 'error' ? 'alert' : 'status'}>
-      <span className="async-state__icon" aria-hidden>
+      <span className={`async-state__icon ${status === 'loading' ? 'async-state__icon--loading' : ''}`} aria-hidden>
         {content.icon}
       </span>
       <strong>{content.title}</strong>

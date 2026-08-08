@@ -44,6 +44,12 @@ type RequestOptions = {
 
 type AuthPayload = z.infer<typeof authResponseSchema>;
 export type DesktopAnalysisResponse = z.infer<typeof desktopAnalysisResponseSchema>;
+export type ApiClientDiagnostic = {
+  operation: 'token-vault-read' | 'refresh' | 'bootstrap';
+  durationMs: number;
+  outcome: 'success' | 'error';
+  result?: 'authenticated' | 'guest' | 'expired';
+};
 
 export class ApiClient {
   private accessToken: string | null = null;
@@ -57,7 +63,11 @@ export class ApiClient {
   private readonly authenticatedRequests = new Set<AbortController>();
   private readonly baseUrl: URL;
 
-  constructor(baseUrl: string, private readonly tokenVault: TokenVault) {
+  constructor(
+    baseUrl: string,
+    private readonly tokenVault: TokenVault,
+    private readonly reportDiagnostic?: (diagnostic: ApiClientDiagnostic) => void,
+  ) {
     this.baseUrl = new URL(baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`);
     if (this.baseUrl.protocol !== 'https:' && this.baseUrl.hostname !== 'localhost' && this.baseUrl.hostname !== '127.0.0.1') {
       throw new Error('API URL must use HTTPS outside localhost');
@@ -75,22 +85,59 @@ export class ApiClient {
   }
 
   async bootstrap(): Promise<SessionState> {
+    const startedAt = performance.now();
     const generation = this.authGeneration;
-    const refreshToken = await this.tokenVault.read();
-    if (!refreshToken) return { authenticated: false, account: null };
+    let refreshToken: string | null;
+    const tokenStartedAt = performance.now();
+    try {
+      refreshToken = await this.tokenVault.read();
+      this.emitDiagnostic('token-vault-read', tokenStartedAt, 'success');
+    } catch (error) {
+      this.emitDiagnostic('token-vault-read', tokenStartedAt, 'error');
+      this.emitDiagnostic('bootstrap', startedAt, 'error');
+      throw error;
+    }
+    if (!refreshToken) {
+      this.emitDiagnostic('bootstrap', startedAt, 'success', 'guest');
+      return { authenticated: false, account: null };
+    }
+    const refreshStartedAt = performance.now();
     try {
       const auth = await this.refresh(refreshToken);
+      this.emitDiagnostic('refresh', refreshStartedAt, 'success');
+      this.emitDiagnostic('bootstrap', startedAt, 'success', 'authenticated');
       return { authenticated: true, account: auth.account };
     } catch (error) {
+      this.emitDiagnostic('refresh', refreshStartedAt, 'error');
       if (
         error instanceof DesktopError
         && (error.status === 401 || error.status === 403)
         && generation === this.authGeneration
       ) {
         await this.clearSession();
+        this.emitDiagnostic('bootstrap', startedAt, 'success', 'expired');
         return { authenticated: false, account: null };
       }
+      this.emitDiagnostic('bootstrap', startedAt, 'error');
       throw error;
+    }
+  }
+
+  private emitDiagnostic(
+    operation: ApiClientDiagnostic['operation'],
+    startedAt: number,
+    outcome: ApiClientDiagnostic['outcome'],
+    result?: ApiClientDiagnostic['result'],
+  ): void {
+    try {
+      this.reportDiagnostic?.({
+        operation,
+        durationMs: Math.round((performance.now() - startedAt) * 10) / 10,
+        outcome,
+        ...(result ? { result } : {}),
+      });
+    } catch {
+      return;
     }
   }
 

@@ -1,6 +1,6 @@
 # Counterpick capture probe
 
-This Windows-only C++20 proof of concept captures one frame from the running Dota 2 window and exits. It tests a safe pixel-based input path for the future desktop client without reading or modifying the game process.
+This Windows-only C++20 proof of concept captures one frame from the running Dota 2 window and exits. It tests the safe pixel-based input path used by the desktop client without reading or modifying the game process.
 
 The preferred path is Windows Graphics Capture for the Dota window handle. Desktop Duplication is used as a fallback when the window-capture path is unavailable.
 

@@ -1,4 +1,5 @@
 import { CheckIcon } from '@phosphor-icons/react';
+import { useEffect, useState } from 'react';
 
 import { useI18n } from '../i18n';
 import { BrandMark } from './brand-mark';
@@ -9,6 +10,7 @@ const phaseOrder: StartupPhase[] = ['preferences', 'session', 'route'];
 
 export function StartupLoader({ phase }: { phase: StartupPhase }) {
   const { text } = useI18n();
+  const [takingLonger, setTakingLonger] = useState(false);
   const activeIndex = phaseOrder.indexOf(phase);
   const stages = [
     {
@@ -41,6 +43,12 @@ export function StartupLoader({ phase }: { phase: StartupPhase }) {
   ];
   const activeStage = stages[activeIndex] ?? stages[0];
 
+  useEffect(() => {
+    setTakingLonger(false);
+    const timeout = window.setTimeout(() => setTakingLonger(true), 7_000);
+    return () => window.clearTimeout(timeout);
+  }, [phase]);
+
   return (
     <section
       className="startup-loader"
@@ -51,6 +59,7 @@ export function StartupLoader({ phase }: { phase: StartupPhase }) {
       aria-describedby="startup-loader-description"
     >
       <div className="startup-loader__visual" aria-hidden>
+        <span className="startup-loader__halo" />
         <span className="startup-loader__orbit" />
         <span className="startup-loader__mark">
           <BrandMark />
@@ -60,6 +69,14 @@ export function StartupLoader({ phase }: { phase: StartupPhase }) {
         <span>COUNTERPICK</span>
         <h1 id="startup-loader-title">{activeStage.title}</h1>
         <p id="startup-loader-description">{activeStage.description}</p>
+        {takingLonger ? (
+          <small className="startup-loader__delay">
+            {text(
+              'Этот этап отвечает дольше обычного. Counterpick продолжает безопасную попытку.',
+              'This step is taking longer than usual. Counterpick is continuing safely.',
+            )}
+          </small>
+        ) : null}
       </div>
       <ol
         className="startup-loader__stages"

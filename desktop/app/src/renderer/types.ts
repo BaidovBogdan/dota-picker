@@ -1,4 +1,4 @@
-import type { UpdateState } from '../shared/contracts';
+import type { StartupDiagnostic, UpdateState } from '../shared/contracts';
 
 export type { UpdateProgress, UpdateState, UpdateStatus } from '../shared/contracts';
 
@@ -463,5 +463,6 @@ export type NativeBridge = {
   app: {
     openExternal: (url: string) => Promise<void> | void;
     getInfo: () => Promise<AppInfo>;
+    reportStartup: (input: StartupDiagnostic) => Promise<void> | void;
   };
 };

@@ -29,6 +29,10 @@ import {
   type HeroDetail,
   type HeroRankWinRate,
 } from '@/services/api/dota';
+import {
+  heroDetailNeedsRefresh,
+  heroDetailRefreshInterval,
+} from '@/services/hero-detail-refresh';
 import { getSessionScope, useAppStore } from '@/store/app-store';
 import { layout, shape } from '@/theme/tokens';
 import { useAppTheme } from '@/theme/use-app-theme';
@@ -59,6 +63,15 @@ export default function HeroDetailScreen() {
     queryFn: () => getHeroDetail(heroId),
     enabled: Boolean(session && validHeroId),
     staleTime: (cachedQuery) => heroDetailStaleTime(cachedQuery.state.data),
+    refetchInterval: (currentQuery) => heroDetailRefreshInterval(
+      currentQuery.state.data?.availability.builds,
+      currentQuery.state.data?.isStale,
+      currentQuery.state.dataUpdateCount + currentQuery.state.errorUpdateCount,
+    ),
+    refetchOnMount: (currentQuery) => heroDetailNeedsRefresh(
+      currentQuery.state.data?.availability.builds,
+      currentQuery.state.data?.isStale,
+    ) ? 'always' : true,
   });
   const { colors, alpha, isDark } = useAppTheme();
   const { t } = useTranslation();
@@ -701,7 +714,7 @@ function heroDetailStaleTime(detail: HeroDetail | undefined) {
     return 5 * 60 * 1000;
   }
   if (detail.availability.builds === 'collecting') {
-    return 60 * 60 * 1000;
+    return 0;
   }
   return 4 * 60 * 60 * 1000;
 }

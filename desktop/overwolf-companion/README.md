@@ -21,6 +21,7 @@ Useful official QA references:
 - [Load an unpacked extension](https://dev.overwolf.com/ow-native/getting-started/onboarding-resources/basic-sample-app/)
 - [Dota 2 GEP events and launch option](https://dev.overwolf.com/ow-native/live-game-data-gep/supported-games/dota-2/)
 - [Release and OPK requirements](https://dev.overwolf.com/ow-native/getting-started/release-your-app/)
+- [Overwolf installer and Developer Console requirements](https://dev.overwolf.com/ow-electron/guides/dev-tools/overwolf-installer/)
 
 ## Production release
 
@@ -30,6 +31,6 @@ A production build requires an approved Overwolf app proposal, Developer Console
 MAIN_VITE_OVERWOLF_STORE_URL=https://www.overwolf.com/app/...
 ```
 
-Until this value is configured, Counterpick keeps the install action unavailable and explains why. Production installation must open the official Overwolf listing or approved installer and show Overwolf's terms, privacy, and consent flow. Hidden or silent third-party installation is intentionally unsupported.
+Until this value is configured, Counterpick keeps the in-app companion install action unavailable and explains why. The Counterpick Windows NSIS installer may separately offer the base Overwolf platform when it is absent, but only through an unchecked opt-in, an official HTTPS download, a valid Overwolf Authenticode signature, and the interactive Overwolf installer. This generic platform flow does not install the unpublished Counterpick Live companion and does not enable Live mode. A production companion installation still requires an approved Appstore listing or installer that shows Overwolf's terms, privacy, and consent flow. Hidden or silent third-party installation is intentionally unsupported.
 
 The pairing URL protocol is fixed to `counterpick-overwolf-live` in both packages so a build-time override cannot create an incompatible desktop/companion pair.

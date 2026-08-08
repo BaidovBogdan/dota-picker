@@ -1,4 +1,5 @@
 import { app, dialog, ipcMain, shell, type BrowserWindow, type IpcMainInvokeEvent } from 'electron';
+import log from 'electron-log/main';
 import { z } from 'zod';
 import {
   externalUrlSchema,
@@ -12,6 +13,7 @@ import {
   preferencesPatchSchema,
   reviewInputSchema,
   reviewsQuerySchema,
+  startupDiagnosticSchema,
   verifiedCredentialsSchema,
   type IpcResult,
   type OverlayShortcutStatus,
@@ -25,6 +27,8 @@ import type { OverwolfBridge } from './overwolf-bridge.js';
 import type { PreferencesStore } from './preferences-store.js';
 import { updatePreferences } from './preferences-update.js';
 import type { UpdateManager } from './update-manager.js';
+
+const startupLog = log.scope('startup');
 
 type Dependencies = {
   getWindow: () => BrowserWindow | null;
@@ -289,4 +293,15 @@ export function registerIpc(dependencies: Dependencies): void {
     version: app.getVersion(),
     platform: process.platform,
   }));
+  register(
+    IPC.appStartupDiagnostic,
+    z.tuple([startupDiagnosticSchema]),
+    dependencies.getWindow,
+    ([diagnostic]) => {
+      startupLog.info('Renderer phase completed', {
+        ...diagnostic,
+        durationMs: Math.round(diagnostic.durationMs * 10) / 10,
+      });
+    },
+  );
 }

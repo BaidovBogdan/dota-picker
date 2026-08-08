@@ -114,7 +114,7 @@ assets/              Brand, role, state, and Lottie assets
 - Native targets store access and refresh credentials through Secure Store. The web development target uses `localStorage` with an in-memory fallback and should not be treated as equivalent secure storage.
 - Guest history remains usable without registration and can be associated with an upgraded account.
 - API data is cached through TanStack Query, while durable user preferences use local storage.
-- Photo analysis requires the backend and Gemini vision. Manual recommendations retain a deterministic backend fallback when AI reranking is unavailable.
+- Photo analysis requires the backend. The server tries its bounded local portrait matcher first and uses configured Gemini vision only when local recognition is not decisive. Manual recommendations retain a deterministic backend fallback when AI reranking is unavailable.
 
 ## Billing
 

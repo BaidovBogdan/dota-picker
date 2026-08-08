@@ -171,6 +171,15 @@ export const preferencesSchema = z.object({
 
 export const preferencesPatchSchema = preferencesSchema.omit({ overlayShortcut: true }).partial();
 
+export const startupDiagnosticSchema = z.object({
+  phase: z.enum(['preferences', 'session', 'route', 'hero']),
+  detail: z.string().trim().min(1).max(80).optional(),
+  durationMs: z.number().finite().nonnegative().max(120_000),
+  outcome: z.enum(['success', 'error']),
+});
+
+export type StartupDiagnostic = z.infer<typeof startupDiagnosticSchema>;
+
 export const otpRequestSchema = z.discriminatedUnion('purpose', [
   z.object({
     purpose: z.literal('register'),
@@ -522,6 +531,7 @@ export type DesktopBridge = {
   app: {
     openExternal: (url: string) => Promise<void>;
     getInfo: () => Promise<AppInfo>;
+    reportStartup: (input: StartupDiagnostic) => Promise<void>;
   };
 };
 

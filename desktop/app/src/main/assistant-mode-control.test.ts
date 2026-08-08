@@ -57,6 +57,12 @@ describe('assistant mode segmented control accessibility', () => {
 
     assert.equal(dashboard.includes('aria-busy={modeMutation.isPending}'), true);
     assert.equal(dashboard.includes('assistantModeOptionA11y('), true);
-    assert.equal(dashboard.includes('disabled={modeMutation.isPending || !preferences}'), false);
+    const radioOpeningTags = dashboard.match(
+      /<button\b[^>]*data-assistant-mode="(?:vision|overwolf)"[^>]*>/g,
+    ) ?? [];
+    assert.equal(radioOpeningTags.length, 2);
+    for (const openingTag of radioOpeningTags) {
+      assert.equal(/\bdisabled\s*=/.test(openingTag), false);
+    }
   });
 });

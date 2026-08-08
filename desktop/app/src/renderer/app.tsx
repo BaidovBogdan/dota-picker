@@ -16,40 +16,52 @@ import { StartupLoader } from './components/startup-loader';
 import { AsyncState } from './components/ui';
 import { WindowControls } from './components/window-controls';
 import { useI18n } from './i18n';
+import { measureStartup } from './startup-diagnostics';
 import { useAppStore } from './store';
 
 const AccountPage = lazy(() =>
-  import('./pages/account').then((module) => ({ default: module.AccountPage })),
+  measureStartup('route', 'account', () => import('./pages/account'))
+    .then((module) => ({ default: module.AccountPage })),
 );
 const AnalysisPage = lazy(() =>
-  import('./pages/analysis').then((module) => ({ default: module.AnalysisPage })),
+  measureStartup('route', 'analysis', () => import('./pages/analysis'))
+    .then((module) => ({ default: module.AnalysisPage })),
 );
 const AuthPage = lazy(() =>
-  import('./pages/auth').then((module) => ({ default: module.AuthPage })),
+  measureStartup('route', 'auth', () => import('./pages/auth'))
+    .then((module) => ({ default: module.AuthPage })),
 );
 const DashboardPage = lazy(() =>
-  import('./pages/dashboard').then((module) => ({ default: module.DashboardPage })),
+  measureStartup('route', 'dashboard', () => import('./pages/dashboard'))
+    .then((module) => ({ default: module.DashboardPage })),
 );
 const HeroPage = lazy(() =>
-  import('./pages/hero').then((module) => ({ default: module.HeroPage })),
+  measureStartup('route', 'hero', () => import('./pages/hero'))
+    .then((module) => ({ default: module.HeroPage })),
 );
 const HistoryPage = lazy(() =>
-  import('./pages/history').then((module) => ({ default: module.HistoryPage })),
+  measureStartup('route', 'history', () => import('./pages/history'))
+    .then((module) => ({ default: module.HistoryPage })),
 );
 const MetaPage = lazy(() =>
-  import('./pages/meta').then((module) => ({ default: module.MetaPage })),
+  measureStartup('route', 'meta', () => import('./pages/meta'))
+    .then((module) => ({ default: module.MetaPage })),
 );
 const NotFoundPage = lazy(() =>
-  import('./pages/not-found').then((module) => ({ default: module.NotFoundPage })),
+  measureStartup('route', 'not-found', () => import('./pages/not-found'))
+    .then((module) => ({ default: module.NotFoundPage })),
 );
 const ReviewsPage = lazy(() =>
-  import('./pages/reviews').then((module) => ({ default: module.ReviewsPage })),
+  measureStartup('route', 'reviews', () => import('./pages/reviews'))
+    .then((module) => ({ default: module.ReviewsPage })),
 );
 const SettingsPage = lazy(() =>
-  import('./pages/settings').then((module) => ({ default: module.SettingsPage })),
+  measureStartup('route', 'settings', () => import('./pages/settings'))
+    .then((module) => ({ default: module.SettingsPage })),
 );
 const WishlistPage = lazy(() =>
-  import('./pages/wishlist').then((module) => ({ default: module.WishlistPage })),
+  measureStartup('route', 'wishlist', () => import('./pages/wishlist'))
+    .then((module) => ({ default: module.WishlistPage })),
 );
 
 function Bootstrap() {
@@ -65,14 +77,13 @@ function Bootstrap() {
 
   const preferencesQuery = useQuery({
     queryKey: ['preferences'],
-    queryFn: desktop.preferences.get,
+    queryFn: () => measureStartup('preferences', undefined, desktop.preferences.get),
     retry: 1,
     staleTime: Infinity,
   });
   const sessionQuery = useQuery({
     queryKey: ['session'],
-    queryFn: desktop.session.bootstrap,
-    enabled: preferences !== null,
+    queryFn: () => measureStartup('session', undefined, desktop.session.bootstrap),
     retry: 1,
     staleTime: Infinity,
   });

@@ -13,23 +13,24 @@
 
 Токен нужен только GitHub Actions для загрузки трёх файлов релиза. В приложение и установщик он не попадает.
 
-## Первый релиз
+## Текущий подготовленный релиз
 
-Старая сборка `0.1.0` ещё не содержит updater и не сможет обновить себя. В `desktop/app/package.json` для первого нового установщика уже указана версия `0.1.1`. После проверки и коммита изменений создайте и отправьте тег той же версии:
+В `desktop/app/package.json` и `package-lock.json` указана версия `0.1.9`. Локальная Windows-сборка выполняет typecheck, тесты, production build, проверку packaging-контракта, NSIS-сборку и проверку готовых артефактов:
 
 ```powershell
-git tag v0.1.1
-git push origin main
-git push origin v0.1.1
+cd desktop/app
+npm ci
+npm run dist:win
 ```
 
-Workflow соберёт Windows-установщик и опубликует в публичном release-репозитории:
+Для `0.1.9` ожидаются:
 
-- `Counterpick-0.1.1-x64.exe`
-- `Counterpick-0.1.1-x64.exe.blockmap`
-- `latest.yml`
+- `release/Counterpick-0.1.9-x64.exe`
+- `release/Counterpick-0.1.9-x64.exe.blockmap`
+- `release/latest.yml`
+- `release/win-unpacked/` с Electron-локалями только `en-US.pak` и `ru.pak`
 
-Скачайте `.exe` из GitHub Release и установите его вручную поверх старой версии. Если Windows не разрешит установку поверх тестовой сборки, удалите старую `0.1.0`, не очищая пользовательские данные, и установите `0.1.1`.
+`npm run verify:dist` повторно проверяет совпадение версии и имён, SHA-512 в `latest.yml`, ненулевые артефакты, структуру `app.asar` и точный набор локалей.
 
 ## Следующее обновление
 
@@ -39,11 +40,12 @@ Workflow соберёт Windows-установщик и опубликует в 
 cd desktop/app
 npm version patch --no-git-tag-version
 cd ../..
+$desktopVersion = (Get-Content desktop/app/package.json -Raw | ConvertFrom-Json).version
 git add desktop/app/package.json desktop/app/package-lock.json
-git commit -m "release: desktop v0.1.2"
-git tag v0.1.2
+git commit -m "release: desktop v$desktopVersion"
+git tag "v$desktopVersion"
 git push origin main
-git push origin v0.1.2
+git push origin "v$desktopVersion"
 ```
 
 Тег и версия в `package.json` должны совпадать. После публикации установленный Counterpick сам проверит GitHub Release, покажет плитку над настройками и профилем и начнёт скачивание только после подтверждения пользователя.
@@ -53,5 +55,7 @@ git push origin v0.1.2
 ## Что отправлять другому человеку
 
 Передайте только файл `Counterpick-<version>-x64.exe`. Это обычный Windows-установщик. Файлы `.blockmap` и `latest.yml` нужны механизму автообновления на GitHub и вручную пользователю не отправляются.
+
+При новой интерактивной установке NSIS может предложить базовую платформу Overwolf только отдельным, изначально выключенным checkbox. Загрузка идёт с точного официального HTTPS endpoint, бинарник запускается только после валидной Authenticode-подписи разрешённого издателя и всегда открывает собственный интерактивный установщик Overwolf. Silent-установка Counterpick и автообновление этот flow не запускают. Базовая платформа не содержит Counterpick Live: companion пока не опубликован в Overwolf Appstore, поэтому не обещайте пользователю готовый Live-режим до одобрения listing/installer.
 
 Пока приложение не подписано, Windows SmartScreen может показать предупреждение о неизвестном издателе. Для личного тестирования это ожидаемо; перед публичным распространением установщик и приложение нужно подписать.

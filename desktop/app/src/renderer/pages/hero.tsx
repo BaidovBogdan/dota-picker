@@ -14,6 +14,8 @@ import { FavoriteButton } from '../components/favorite-button';
 import { RankLabel } from '../components/dota-taxonomy';
 import { formatDateTime, formatPercent, heroName, roleName } from '../format';
 import { useI18n } from '../i18n';
+import { measureStartup } from '../startup-diagnostics';
+import { heroDetailRefreshInterval } from '../../shared/hero-detail-refresh';
 import { AsyncState, Badge, HeroArtwork, Page, Panel, Stat } from '../components/ui';
 import type { HeroDetail } from '../types';
 
@@ -48,14 +50,26 @@ export function HeroPage() {
   const id = Number(params.id);
   const query = useQuery({
     queryKey: ['hero', id],
-    queryFn: () => desktop.data.hero(id),
+    queryFn: () => measureStartup('hero', String(id), () => desktop.data.hero(id)),
     enabled: Number.isInteger(id) && id > 0,
+    refetchInterval: (currentQuery) => heroDetailRefreshInterval(
+      currentQuery.state.data?.availability.builds,
+      currentQuery.state.data?.isStale,
+      currentQuery.state.dataUpdateCount + currentQuery.state.errorUpdateCount,
+    ),
   });
 
   if (query.isPending) {
     return (
       <main className="page" id="main-content">
-        <AsyncState status="loading" title={text('Загружаем статистику героя', 'Loading hero statistics')} />
+        <AsyncState
+          status="loading"
+          title={text('Собираем данные героя', 'Gathering hero data')}
+          description={text(
+            'Сверяем текущий патч, статистику по рангам и популярные сборки.',
+            'Checking the current patch, rank statistics, and popular builds.',
+          )}
+        />
       </main>
     );
   }

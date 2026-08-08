@@ -1,6 +1,6 @@
 # Counterpick API
 
-The Counterpick API provides guest and account authentication, quota management, Dota 2 hero data, image recognition, counterpick recommendations, analysis history, feedback, and billing synchronization for the mobile application.
+The Counterpick API provides guest and account authentication, quota management, Dota 2 hero data, image recognition, counterpick recommendations, analysis history, feedback, and billing synchronization for the mobile and desktop applications.
 
 Recommendations use a hybrid pipeline:
 
@@ -130,7 +130,8 @@ Meta responses use a fresh cache and may use a bounded stale snapshot when OpenD
 | --- | --- | --- |
 | `POST` | `/v1/analyses/manual` | Create recommendations from a structured draft |
 | `POST` | `/v1/analyses/photo/recognize` | Recognize heroes from one image |
-| `POST` | `/v1/analyses/desktop` | Recognize a desktop draft frame and create at most one result per draft session |
+| `POST` | `/v1/analyses/desktop` | Recognize an initial desktop frame and create the live analysis |
+| `PUT` | `/v1/analyses/desktop/:id` | Recognize a later frame and revise the same authorized live result |
 | `GET` | `/v1/analyses/history` | Read paginated account history |
 | `GET` | `/v1/analyses/history/:id` | Read one saved analysis |
 
@@ -138,7 +139,7 @@ Analysis POST routes require `Authorization: Bearer <token>` and a unique `Idemp
 
 Photo recognition accepts one multipart field named `image`. Supported types are JPEG, PNG, and WebP. The default maximum size is 5 MiB. The image is validated, EXIF-oriented, bounded, and processed in memory rather than stored as an analysis attachment. A direct narrow pick bar stays intact; full screenshots, letterboxed captures, and portrait or landscape monitor photos use bounded horizontal candidate extraction so the central hero grid is not submitted as a pick list. Recognized identities remain review-required because provider confidence is not independent visual proof.
 
-Desktop analysis accepts the same in-memory image formats plus `sessionId`, `revision`, `position`, and optional `rank` query parameters. It returns `waiting` until at least two enemy picks are recognized confidently, then reserves one quota attempt and returns `completed`. Frame and session idempotency prevent duplicate recognition and duplicate quota charges.
+Desktop analysis accepts the same in-memory image formats plus `sessionId`, `revision`, `position`, and optional `rank` query parameters. The initial `POST` returns `waiting` until at least two enemy picks are recognized confidently, then reserves one quota attempt and returns `completed` with a short-lived, account-scoped live-session capability. Later changed frames use `PUT /v1/analyses/desktop/:id` with that capability and compare-and-swap revision checks to update the same analysis. Identical or unresolved frames do not rotate the capability or consume the eight-change revision limit; a separate 24-frame analysis budget and per-user/IP rate limits bound recognition work. Frame and session idempotency prevent duplicate recognition and duplicate quota charges.
 
 ### Reviews
 

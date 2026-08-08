@@ -1,6 +1,6 @@
 {
   "name": "@counterpick/desktop",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "private": true,
   "author": "Counterpick",
   "description": "Counterpick desktop companion for Dota 2",
@@ -13,9 +13,11 @@
     "typecheck:shell": "tsc --noEmit -p tsconfig.shell.json",
     "typecheck": "tsc --noEmit",
     "build": "npm run typecheck && npm test && electron-vite build",
-    "package": "npm run build && electron-builder --dir",
-    "dist": "npm run build && electron-builder --publish never",
-    "dist:win": "npm run build && electron-builder --win nsis --x64 --publish never"
+    "verify:packaging": "node scripts/verify-packaging.mjs",
+    "verify:dist": "node scripts/verify-packaging.mjs --dist",
+    "package": "npm run build && npm run verify:packaging && electron-builder --dir",
+    "dist": "npm run build && npm run verify:packaging && electron-builder --publish never",
+    "dist:win": "npm run build && npm run verify:packaging && electron-builder --win nsis --x64 --publish never && npm run verify:dist"
   },
   "dependencies": {
     "@fontsource-variable/outfit": "^5.2.8",

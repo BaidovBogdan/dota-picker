@@ -24,6 +24,37 @@ const authPayload = (accessToken: string) => ({
 });
 
 describe('ApiClient secondary authorization', () => {
+  it('reports measurable guest bootstrap phases without exposing session material', async () => {
+    const diagnostics: Record<string, unknown>[] = [];
+    const tokenVault = {
+      read: async () => null,
+      write: async () => undefined,
+      clear: async () => undefined,
+    } as unknown as TokenVault;
+    const api = new ApiClient(
+      'https://api.example.test/v1',
+      tokenVault,
+      (diagnostic) => diagnostics.push(diagnostic),
+    );
+
+    const session = await api.bootstrap();
+
+    assert.deepEqual(session, { authenticated: false, account: null });
+    assert.deepEqual(
+      diagnostics.map(({ operation, outcome, result }) => ({ operation, outcome, result })),
+      [{
+        operation: 'token-vault-read',
+        outcome: 'success',
+        result: undefined,
+      }, {
+        operation: 'bootstrap',
+        outcome: 'success',
+        result: 'guest',
+      }],
+    );
+    assert.equal(diagnostics.every((diagnostic) => typeof diagnostic.durationMs === 'number'), true);
+  });
+
   it('refreshes access once but preserves the global session after a repeated live-capability 401', async () => {
     let clears = 0;
     let refreshes = 0;
