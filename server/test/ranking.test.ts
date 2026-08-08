@@ -9,7 +9,10 @@ import {
   draftSchema,
   recommendationResultSchema,
 } from '../src/modules/recommendation/recommendation.schemas.js';
-import { rankRecommendations } from '../src/modules/recommendation/ranking.js';
+import {
+  rankRecommendationPool,
+  rankRecommendations,
+} from '../src/modules/recommendation/ranking.js';
 import type { DraftInput } from '../src/modules/recommendation/recommendation.types.js';
 
 function hero(
@@ -174,6 +177,85 @@ describe('recommendation ranking', () => {
       expect(partial.metrics.coverage).toBe(0.2);
       expect(partial.confidence).toBe('low');
     }
+  });
+
+  it('prefers a stable counter over a volatile average across the enemy draft', () => {
+    const enemies = [101, 102, 103, 104].map(id => hero(id, ['Carry']));
+    const candidates = [2, 3, 4, 5, 6].map(id => hero(id, ['Carry']));
+    const matchupEntries: [number, DraftPairStat[]][] = enemies.map((enemy, index) => [
+      enemy.id,
+      [
+        matchup(2, 1_000, index === 3 ? 800 : 300),
+        matchup(3, 1_000, 440),
+        matchup(4, 1_000, 500),
+        matchup(5, 1_000, 510),
+        matchup(6, 1_000, 520),
+      ],
+    ]);
+    const snapshot = createSnapshot([...enemies, ...candidates], matchupEntries);
+    const draft = {
+      ...defaultDraft,
+      enemyHeroIds: enemies.map(enemy => enemy.id),
+    };
+
+    const result = rankRecommendations({ draft, snapshot });
+    const volatile = rankRecommendationPool({ draft, snapshot })
+      .find(entry => entry.heroMeta.id === 2)?.recommendation;
+
+    expect(result.recommendations[0]?.hero.id).toBe(3);
+    expect(result.recommendations[0]?.metrics.worstMatchup).toBeGreaterThan(
+      volatile?.metrics.worstMatchup ?? 1,
+    );
+  });
+
+  it('is invariant to ally and enemy input order', () => {
+    const enemies = [101, 102, 103].map(id => hero(id, ['Carry']));
+    const allies = [201, 202].map(id => hero(id, ['Support']));
+    const candidates = [2, 3, 4, 5, 6].map(id => hero(id, ['Carry']));
+    const matchupEntries: [number, DraftPairStat[]][] = enemies.map((enemy, enemyIndex) => [
+      enemy.id,
+      candidates.map((candidate, candidateIndex) => (
+        matchup(candidate.id, 1_000, 430 + enemyIndex * 10 + candidateIndex * 5)
+      )),
+    ]);
+    const synergyEntries: [number, DraftPairStat[]][] = allies.map((ally, allyIndex) => [
+      ally.id,
+      candidates.map((candidate, candidateIndex) => ({
+        heroId: candidate.id,
+        patchGames: 800,
+        patchWins: 440 + allyIndex * 5 - candidateIndex * 4,
+        rankGames: 400,
+        rankWins: 220 + allyIndex * 3 - candidateIndex * 2,
+      })),
+    ]);
+    const snapshot = createSnapshot(
+      [...enemies, ...allies, ...candidates],
+      matchupEntries,
+      [],
+      synergyEntries,
+    );
+    const forward = rankRecommendations({
+      draft: {
+        source: 'manual',
+        position: 1,
+        allyHeroIds: allies.map(entry => entry.id),
+        enemyHeroIds: enemies.map(entry => entry.id),
+        rank: 7,
+      },
+      snapshot,
+    });
+    const reversed = rankRecommendations({
+      draft: {
+        source: 'manual',
+        position: 1,
+        allyHeroIds: allies.map(entry => entry.id).reverse(),
+        enemyHeroIds: enemies.map(entry => entry.id).reverse(),
+        rank: 7,
+      },
+      snapshot,
+    });
+
+    expect(reversed.recommendations).toEqual(forward.recommendations);
   });
 
   it('uses allies only for evidence-backed team composition fit', () => {

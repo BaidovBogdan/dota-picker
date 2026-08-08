@@ -9,7 +9,7 @@ const adminContentSecurityPolicy = [
   "connect-src 'self'",
   "font-src 'self'",
   "frame-ancestors 'none'",
-  "img-src 'self' data:",
+  "img-src 'self' data: https://cdn.cloudflare.steamstatic.com",
   "object-src 'none'",
   "script-src 'self'",
   "style-src 'self' 'unsafe-inline'",

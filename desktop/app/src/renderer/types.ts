@@ -6,8 +6,9 @@ export type ThemeMode = 'system' | 'light' | 'dark';
 export type Language = 'ru' | 'en';
 export type Position = 1 | 2 | 3 | 4 | 5;
 export type Plan = 'free' | 'pro';
-export type AnalysisSource = 'desktop' | 'manual' | 'photo';
+export type AnalysisSource = 'desktop' | 'manual' | 'photo' | 'overwolf';
 export type Confidence = 'low' | 'medium' | 'high';
+export type AssistantMode = 'vision' | 'overwolf';
 
 export type Quota = {
   plan: Plan;
@@ -66,6 +67,7 @@ export type EngineState = {
     detectedPosition: Position | null;
     recognized: {
       side: 'ally' | 'enemy' | 'unknown';
+      visualGroup?: 'left' | 'right';
       slot: number;
       heroId: number | null;
       heroName: string;
@@ -86,10 +88,37 @@ export type Preferences = {
   overlayShortcut: string;
   wishlist: number[];
   assistantEnabled: boolean;
+  assistantMode: AssistantMode;
+  radiantDraftSide: 'left' | 'right' | null;
   captureConsent: {
     accepted: boolean;
     acceptedAt: string | null;
   };
+  overwolfConsent: {
+    accepted: boolean;
+    acceptedAt: string | null;
+  };
+};
+
+export type OverwolfBridgePhase =
+  | 'stopped'
+  | 'listening'
+  | 'pairing'
+  | 'connected'
+  | 'stale'
+  | 'error';
+
+export type OverwolfBridgeState = {
+  phase: OverwolfBridgePhase;
+  configured: boolean;
+  protocolVersion: number;
+  port: number | null;
+  connectedAt: string | null;
+  lastMessageAt: string | null;
+  lastError: string | null;
+  companionVersion: string | null;
+  gameDetected: boolean;
+  draftActive: boolean;
 };
 
 export type OverlayShortcutStatus = {
@@ -424,6 +453,12 @@ export type NativeBridge = {
     check: () => Promise<UpdateState>;
     downloadAndInstall: () => Promise<UpdateState>;
     onState: (listener: (state: UpdateState) => void) => (() => void) | void;
+  };
+  overwolf: {
+    getState: () => Promise<OverwolfBridgeState>;
+    connect: () => Promise<OverwolfBridgeState>;
+    openInstaller: () => Promise<void>;
+    onState: (listener: (state: OverwolfBridgeState) => void) => (() => void) | void;
   };
   app: {
     openExternal: (url: string) => Promise<void> | void;

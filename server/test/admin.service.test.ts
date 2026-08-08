@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { loadConfig } from '../src/config/env.js';
 import type { Database } from '../src/db/client.js';
-import { AdminService } from '../src/modules/admin/admin.service.js';
+import type { OpenDotaAdapter } from '../src/modules/heroes/opendota.adapter.js';
+import { AdminService, analysisSourceLabel } from '../src/modules/admin/admin.service.js';
 
 const config = loadConfig({
   NODE_ENV: 'test',
@@ -26,6 +27,22 @@ function queryResult<T>(value: T) {
   return builder;
 }
 
+const metaAdapter = {
+  getHeroes: vi.fn(),
+  getMetaPositionSnapshot: vi.fn(),
+  getPatch: vi.fn(),
+} as unknown as Pick<OpenDotaAdapter, 'getHeroes' | 'getMetaPositionSnapshot' | 'getPatch'>;
+
+describe('AdminService analysis provenance', () => {
+  it('keeps every source distinguishable in activity and table labels', () => {
+    expect([
+      analysisSourceLabel('manual'),
+      analysisSourceLabel('photo'),
+      analysisSourceLabel('overwolf'),
+    ]).toEqual(['Вручную', 'Фото', 'Overwolf Live']);
+  });
+});
+
 describe('AdminService Pro grants', () => {
   it('updates only the free-account selection and records a durable marker', async () => {
     const appliedAt = new Date('2026-08-02T12:00:00.000Z');
@@ -48,7 +65,7 @@ describe('AdminService Pro grants', () => {
     const db = {
       transaction: vi.fn(async (operation: (transaction: typeof tx) => unknown) => operation(tx)),
     } as unknown as Database;
-    const service = new AdminService(db, config);
+    const service = new AdminService(db, config, metaAdapter);
 
     const result = await service.grantProToAllFreeAccounts('admin-session');
 
@@ -98,7 +115,7 @@ describe('AdminService Pro grants', () => {
     const db = {
       transaction: vi.fn(async (operation: (transaction: typeof tx) => unknown) => operation(tx)),
     } as unknown as Database;
-    const service = new AdminService(db, config);
+    const service = new AdminService(db, config, metaAdapter);
 
     const result = await service.grantProToAllFreeAccounts('admin-session');
 
@@ -113,5 +130,85 @@ describe('AdminService Pro grants', () => {
     });
     expect(tx.update).not.toHaveBeenCalled();
     expect(tx.insert).not.toHaveBeenCalled();
+  });
+});
+
+describe('AdminService meta', () => {
+  it('returns one coherent rank snapshot from the shared OpenDota adapter', async () => {
+    const heroes = [{ id: 1, localizedName: 'Anti-Mage' }];
+    const snapshot = {
+      patch: '7.39e',
+      rank: 6,
+      rankFilter: 'average_match_rank',
+      window: 'current_patch_30d',
+      minimumGames: 25,
+      fetchedAt: '2026-08-08T10:00:00.000Z',
+      isStale: false,
+      availability: 'ready',
+      positionStats: [],
+    };
+    const adapter = {
+      getHeroes: vi.fn(async () => heroes),
+      getMetaPositionSnapshot: vi.fn(async () => snapshot),
+      getPatch: vi.fn(async () => snapshot.patch),
+    } as unknown as Pick<OpenDotaAdapter, 'getHeroes' | 'getMetaPositionSnapshot' | 'getPatch'>;
+    const service = new AdminService({} as Database, config, adapter);
+
+    const result = await service.meta({ rank: 6 });
+
+    expect(result).toEqual({ heroes, ...snapshot });
+    expect(adapter.getHeroes).toHaveBeenCalledWith(6);
+    expect(adapter.getMetaPositionSnapshot).toHaveBeenCalledWith(6);
+  });
+
+  it('reports a service-unavailable contract when metadata is not configured', async () => {
+    const service = new AdminService({} as Database, config);
+
+    await expect(service.meta({})).rejects.toMatchObject({
+      statusCode: 503,
+      code: 'EXTERNAL_SERVICE_UNAVAILABLE',
+    });
+  });
+});
+
+describe('AdminService system audit', () => {
+  it('reports runtime probes instead of configuration-only assumptions', async () => {
+    const db = { execute: vi.fn(async () => undefined) } as unknown as Database;
+    const adapter = {
+      getHeroes: vi.fn(),
+      getMetaPositionSnapshot: vi.fn(),
+      getPatch: vi.fn(async () => '7.41'),
+    } as unknown as Pick<OpenDotaAdapter, 'getHeroes' | 'getMetaPositionSnapshot' | 'getPatch'>;
+    const service = new AdminService(db, config, adapter);
+
+    const result = await service.system();
+
+    expect(result.summary.database.status).toBe('connected');
+    expect(result.summary.database.latencyMs).toBeGreaterThanOrEqual(0);
+    expect(result.groups.connected).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'postgresql', status: 'connected' }),
+      expect.objectContaining({ id: 'opendota', status: 'connected' }),
+    ]));
+    expect(result.groups.connected.find((item) => item.id === 'opendota')?.detail).toContain('7.41');
+    expect(db.execute).toHaveBeenCalledOnce();
+    expect(adapter.getPatch).toHaveBeenCalledOnce();
+  });
+
+  it('marks failed runtime dependencies as blocked', async () => {
+    const db = { execute: vi.fn(async () => Promise.reject(new Error('database unavailable'))) } as unknown as Database;
+    const adapter = {
+      getHeroes: vi.fn(),
+      getMetaPositionSnapshot: vi.fn(),
+      getPatch: vi.fn(async () => Promise.reject(new Error('OpenDota unavailable'))),
+    } as unknown as Pick<OpenDotaAdapter, 'getHeroes' | 'getMetaPositionSnapshot' | 'getPatch'>;
+    const service = new AdminService(db, config, adapter);
+
+    const result = await service.system();
+
+    expect(result.summary.database.status).toBe('blocked');
+    expect(result.groups.blocked).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'postgresql', status: 'blocked' }),
+      expect.objectContaining({ id: 'opendota', status: 'blocked' }),
+    ]));
   });
 });

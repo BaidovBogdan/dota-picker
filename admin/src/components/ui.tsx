@@ -33,7 +33,10 @@ export function Button({
   ...props
 }: ButtonProps) {
   return (
-    <button className={`button button--${variant} button--${size} ${className}`} {...props}>
+    <button
+      className={`button button--${variant} button--${size} ${className}`}
+      {...props}
+    >
       {icon}
       {children}
     </button>
@@ -49,7 +52,7 @@ export function IconButton({
   return (
     <button
       className={`icon-button ${className}`}
-      type="button"
+      type='button'
       aria-label={label}
       title={label}
       {...props}
@@ -82,7 +85,9 @@ export function StatusBadge({
   tone: 'neutral' | 'positive' | 'warning' | 'negative' | 'info';
   children: ReactNode;
 }) {
-  return <span className={`status-badge status-badge--${tone}`}>{children}</span>;
+  return (
+    <span className={`status-badge status-badge--${tone}`}>{children}</span>
+  );
 }
 
 export function SearchInput({
@@ -97,16 +102,20 @@ export function SearchInput({
   ariaLabel: string;
 }) {
   return (
-    <label className="search-input">
-      <Search size={17} aria-hidden="true" />
+    <label className='search-input'>
+      <Search size={17} aria-hidden='true' />
       <input
         value={value}
-        onChange={(event) => onChange(event.target.value)}
+        onChange={event => onChange(event.target.value)}
         placeholder={placeholder}
         aria-label={ariaLabel}
       />
       {value ? (
-        <button type="button" onClick={() => onChange('')} aria-label="Очистить поиск">
+        <button
+          type='button'
+          onClick={() => onChange('')}
+          aria-label='Очистить поиск'
+        >
           <X size={15} />
         </button>
       ) : null}
@@ -127,8 +136,15 @@ export function SegmentedControl<T extends string>({
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const buttonRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const activeIndex = Math.max(0, options.findIndex((option) => option.value === value));
-  const [indicator, setIndicator] = useState({ left: 0, width: 0, ready: false });
+  const activeIndex = Math.max(
+    0,
+    options.findIndex(option => option.value === value)
+  );
+  const [indicator, setIndicator] = useState({
+    left: 0,
+    width: 0,
+    ready: false,
+  });
 
   useLayoutEffect(() => {
     const root = rootRef.current;
@@ -141,13 +157,13 @@ export function SegmentedControl<T extends string>({
         width: activeButton.offsetWidth,
         ready: true,
       };
-      setIndicator((current) => (
-        current.left === nextIndicator.left
-        && current.width === nextIndicator.width
-        && current.ready
+      setIndicator(current =>
+        current.left === nextIndicator.left &&
+        current.width === nextIndicator.width &&
+        current.ready
           ? current
           : nextIndicator
-      ));
+      );
     };
 
     updateIndicator();
@@ -182,8 +198,8 @@ export function SegmentedControl<T extends string>({
   return (
     <div
       ref={rootRef}
-      className="segmented"
-      role="radiogroup"
+      className='segmented'
+      role='radiogroup'
       aria-label={ariaLabel}
       onKeyDown={handleKeyDown}
     >
@@ -193,17 +209,17 @@ export function SegmentedControl<T extends string>({
           width: indicator.width,
           transform: `translateX(${indicator.left}px)`,
         }}
-        aria-hidden="true"
+        aria-hidden='true'
       />
       {options.map((option, index) => (
         <button
-          ref={(node) => {
+          ref={node => {
             buttonRefs.current[index] = node;
           }}
-          type="button"
+          type='button'
           className={value === option.value ? 'is-active' : ''}
           onClick={() => onChange(option.value)}
-          role="radio"
+          role='radio'
           aria-checked={value === option.value}
           tabIndex={value === option.value ? 0 : -1}
           key={option.value}
@@ -243,7 +259,10 @@ export function CustomSelect<T extends string>({
   const typeaheadTimer = useRef<number | null>(null);
   const typeaheadQuery = useRef('');
   const [open, setOpen] = useState(false);
-  const selectedIndex = Math.max(0, options.findIndex((option) => option.value === value));
+  const selectedIndex = Math.max(
+    0,
+    options.findIndex(option => option.value === value)
+  );
   const [activeIndex, setActiveIndex] = useState(selectedIndex);
   const selectedOption = options[selectedIndex];
 
@@ -263,9 +282,12 @@ export function CustomSelect<T extends string>({
     };
   }, [open]);
 
-  useEffect(() => () => {
-    if (typeaheadTimer.current) window.clearTimeout(typeaheadTimer.current);
-  }, []);
+  useEffect(
+    () => () => {
+      if (typeaheadTimer.current) window.clearTimeout(typeaheadTimer.current);
+    },
+    []
+  );
 
   const openMenu = () => {
     setActiveIndex(selectedIndex);
@@ -300,7 +322,9 @@ export function CustomSelect<T extends string>({
         return;
       }
       const direction = event.key === 'ArrowDown' ? 1 : -1;
-      setActiveIndex((current) => (current + direction + options.length) % options.length);
+      setActiveIndex(
+        current => (current + direction + options.length) % options.length
+      );
       return;
     }
     if (event.key === 'Home' || event.key === 'End') {
@@ -315,14 +339,26 @@ export function CustomSelect<T extends string>({
       else openMenu();
       return;
     }
-    if (event.key.length !== 1 || event.altKey || event.ctrlKey || event.metaKey) return;
+    if (
+      event.key.length !== 1 ||
+      event.altKey ||
+      event.ctrlKey ||
+      event.metaKey
+    )
+      return;
 
     const query = `${typeaheadQuery.current}${event.key.toLocaleLowerCase()}`;
-    const matchIndex = options.findIndex((option) => option.label.toLocaleLowerCase().startsWith(query));
-    typeaheadQuery.current = matchIndex === -1 ? event.key.toLocaleLowerCase() : query;
-    const resolvedIndex = matchIndex === -1
-      ? options.findIndex((option) => option.label.toLocaleLowerCase().startsWith(typeaheadQuery.current))
-      : matchIndex;
+    const matchIndex = options.findIndex(option =>
+      option.label.toLocaleLowerCase().startsWith(query)
+    );
+    typeaheadQuery.current =
+      matchIndex === -1 ? event.key.toLocaleLowerCase() : query;
+    const resolvedIndex =
+      matchIndex === -1
+        ? options.findIndex(option =>
+            option.label.toLocaleLowerCase().startsWith(typeaheadQuery.current)
+          )
+        : matchIndex;
     if (resolvedIndex === -1) return;
     event.preventDefault();
     setActiveIndex(resolvedIndex);
@@ -335,14 +371,17 @@ export function CustomSelect<T extends string>({
   };
 
   return (
-    <div ref={rootRef} className={`custom-select ${open ? 'is-open' : ''} ${className}`}>
+    <div
+      ref={rootRef}
+      className={`custom-select ${open ? 'is-open' : ''} ${className}`}
+    >
       <button
         ref={triggerRef}
-        type="button"
-        className="custom-select__trigger"
-        role="combobox"
+        type='button'
+        className='custom-select__trigger'
+        role='combobox'
         aria-label={ariaLabel}
-        aria-haspopup="listbox"
+        aria-haspopup='listbox'
         aria-expanded={open}
         aria-controls={listboxId}
         aria-activedescendant={open ? `${listboxId}-${activeIndex}` : undefined}
@@ -352,32 +391,38 @@ export function CustomSelect<T extends string>({
         }}
         onKeyDown={handleKeyDown}
       >
-        {icon ? <span className="custom-select__icon">{icon}</span> : null}
-        {label ? <span className="custom-select__label">{label}</span> : null}
-        <span className="custom-select__value">{selectedOption?.label}</span>
-        <ChevronDown className="custom-select__chevron" size={14} aria-hidden="true" />
+        {icon ? <span className='custom-select__icon'>{icon}</span> : null}
+        {label ? <span className='custom-select__label'>{label}</span> : null}
+        <span className='custom-select__value'>{selectedOption?.label}</span>
+        <ChevronDown
+          className='custom-select__chevron'
+          size={14}
+          aria-hidden='true'
+        />
       </button>
       <div
         id={listboxId}
-        className="custom-select__menu"
-        role="listbox"
+        className='custom-select__menu'
+        role='listbox'
         aria-label={ariaLabel}
       >
         {options.map((option, index) => (
           <button
             id={`${listboxId}-${index}`}
-            type="button"
-            role="option"
+            type='button'
+            role='option'
             aria-selected={option.value === value}
             className={index === activeIndex ? 'is-active' : ''}
             tabIndex={-1}
             onMouseEnter={() => setActiveIndex(index)}
-            onMouseDown={(event) => event.preventDefault()}
+            onMouseDown={event => event.preventDefault()}
             onClick={() => selectOption(index)}
             key={option.value}
           >
             <span>{option.label}</span>
-            {option.value === value ? <Check size={14} aria-hidden="true" /> : null}
+            {option.value === value ? (
+              <Check size={14} aria-hidden='true' />
+            ) : null}
           </button>
         ))}
       </div>
@@ -399,7 +444,11 @@ export function ChartTooltip({
   style?: CSSProperties;
 }) {
   return (
-    <span className={`chart-tooltip ${className}`} style={style} aria-hidden="true">
+    <span
+      className={`chart-tooltip ${className}`}
+      style={style}
+      aria-hidden='true'
+    >
       <span>{title}</span>
       <strong>{value}</strong>
       {detail ? <small>{detail}</small> : null}
@@ -417,19 +466,119 @@ export function UserAvatar({
   const initials = name
     .split(' ')
     .slice(0, 2)
-    .map((part) => part[0])
+    .map(part => part[0])
     .join('')
     .toUpperCase();
-  const hue = [...name].reduce((sum, char) => sum + char.charCodeAt(0), 0) % 360;
+  const hue =
+    [...name].reduce((sum, char) => sum + char.charCodeAt(0), 0) % 360;
   return (
     <span
       className={`user-avatar user-avatar--${size}`}
       style={{ '--avatar-hue': hue } as React.CSSProperties}
-      aria-hidden="true"
+      aria-hidden='true'
     >
       {initials}
     </span>
   );
+}
+
+const dialogFocusableSelector = [
+  'a[href]',
+  'button:not([disabled])',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(',');
+const activeDialogLayers: HTMLElement[] = [];
+
+function useDialogFocus<T extends HTMLElement>(
+  open: boolean,
+  onClose: () => void
+) {
+  const containerRef = useRef<T>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    if (!open || !container) return;
+    activeDialogLayers.push(container);
+
+    const previousFocus =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    const inertEntries: Array<{ element: HTMLElement; previous: boolean }> = [];
+    let branch: HTMLElement = container;
+    while (branch.parentElement) {
+      const parent = branch.parentElement;
+      Array.from(parent.children).forEach(element => {
+        if (element instanceof HTMLElement && element !== branch) {
+          inertEntries.push({ element, previous: element.inert });
+          element.inert = true;
+        }
+      });
+      if (parent === document.body) break;
+      branch = parent;
+    }
+
+    const focusable = () =>
+      Array.from(
+        container.querySelectorAll<HTMLElement>(dialogFocusableSelector)
+      ).filter(element => element.getClientRects().length > 0);
+    const focusTimer = window.setTimeout(() => {
+      if (!container.isConnected) return;
+      const first = focusable()[0];
+      if (first) first.focus();
+      else {
+        container.tabIndex = -1;
+        container.focus();
+      }
+    }, 0);
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (activeDialogLayers.at(-1) !== container) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const elements = focusable();
+      if (elements.length === 0) {
+        event.preventDefault();
+        container.focus();
+        return;
+      }
+      const first = elements[0];
+      const last = elements.at(-1) ?? first;
+      if (
+        event.shiftKey &&
+        (document.activeElement === first ||
+          !container.contains(document.activeElement))
+      ) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.clearTimeout(focusTimer);
+      document.removeEventListener('keydown', handleKeyDown);
+      const layerIndex = activeDialogLayers.lastIndexOf(container);
+      if (layerIndex >= 0) activeDialogLayers.splice(layerIndex, 1);
+      inertEntries.forEach(({ element, previous }) => {
+        element.inert = previous;
+      });
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, [open]);
+
+  return containerRef;
 }
 
 export function Drawer({
@@ -445,34 +594,33 @@ export function Drawer({
   onClose: () => void;
   children: ReactNode;
 }) {
+  const layerRef = useDialogFocus<HTMLDivElement>(open, onClose);
   return (
-    <>
-      <button
-        type="button"
+    <div ref={layerRef} className='drawer-layer' inert={!open}>
+      <div
         className={`drawer-backdrop ${open ? 'is-open' : ''}`}
         onClick={onClose}
-        aria-label="Закрыть панель"
-        tabIndex={open ? 0 : -1}
+        aria-hidden='true'
       />
       <aside
         className={`drawer ${open ? 'is-open' : ''}`}
-        role="dialog"
-        aria-modal="true"
+        role='dialog'
+        aria-modal='true'
         aria-hidden={!open}
         aria-label={title}
       >
-        <header className="drawer__header">
+        <header className='drawer__header'>
           <div>
-            {eyebrow ? <span className="eyebrow">{eyebrow}</span> : null}
+            {eyebrow ? <span className='eyebrow'>{eyebrow}</span> : null}
             <h2>{title}</h2>
           </div>
-          <IconButton label="Закрыть" onClick={onClose}>
+          <IconButton label='Закрыть' onClick={onClose}>
             <X size={19} />
           </IconButton>
         </header>
-        <div className="drawer__body">{children}</div>
+        <div className='drawer__body'>{children}</div>
       </aside>
-    </>
+    </div>
   );
 }
 
@@ -491,26 +639,33 @@ export function ConfirmDialog({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  const titleId = useId();
+  const layerRef = useDialogFocus<HTMLDivElement>(open, onCancel);
   if (!open) return null;
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={onCancel}>
+    <div
+      ref={layerRef}
+      className='modal-backdrop'
+      role='presentation'
+      onMouseDown={onCancel}
+    >
       <div
-        className="confirm-dialog"
-        role="alertdialog"
-        aria-modal="true"
-        aria-labelledby="confirm-title"
-        onMouseDown={(event) => event.stopPropagation()}
+        className='confirm-dialog'
+        role='alertdialog'
+        aria-modal='true'
+        aria-labelledby={titleId}
+        onMouseDown={event => event.stopPropagation()}
       >
-        <div className="confirm-dialog__icon">
+        <div className='confirm-dialog__icon'>
           <AlertTriangle size={21} />
         </div>
         <div>
-          <h2 id="confirm-title">{title}</h2>
+          <h2 id={titleId}>{title}</h2>
           <p>{description}</p>
         </div>
-        <div className="confirm-dialog__actions">
+        <div className='confirm-dialog__actions'>
           <Button onClick={onCancel}>Отмена</Button>
-          <Button variant="danger" onClick={onConfirm}>
+          <Button variant='danger' onClick={onConfirm}>
             {confirmLabel}
           </Button>
         </div>
@@ -527,7 +682,11 @@ export function Toast({
   visible: boolean;
 }) {
   return (
-    <div className={`toast ${visible ? 'is-visible' : ''}`} role="status" aria-live="polite">
+    <div
+      className={`toast ${visible ? 'is-visible' : ''}`}
+      role='status'
+      aria-live='polite'
+    >
       <span>
         <Check size={15} />
       </span>
@@ -546,8 +705,8 @@ export function EmptyState({
   action?: ReactNode;
 }) {
   return (
-    <div className="empty-state">
-      <div className="empty-state__mark">
+    <div className='empty-state'>
+      <div className='empty-state__mark'>
         <Search size={21} />
       </div>
       <h3>{title}</h3>
@@ -565,7 +724,7 @@ export function TableRowButton({
   onClick: () => void;
 }) {
   return (
-    <IconButton label={label} onClick={onClick} className="table-row-button">
+    <IconButton label={label} onClick={onClick} className='table-row-button'>
       <ChevronRight size={17} />
     </IconButton>
   );

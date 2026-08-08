@@ -1,7 +1,7 @@
 export type HeroAttribute = 'strength' | 'agility' | 'intelligence' | 'universal';
 export type Position = 1 | 2 | 3 | 4 | 5;
 export type DraftTeam = 'allies' | 'enemies';
-export type DraftSource = 'manual' | 'photo';
+export type DraftSource = 'manual' | 'photo' | 'overwolf';
 export type PlanId = 'free' | 'pro';
 
 export type Hero = {
@@ -189,6 +189,7 @@ export type Attempts = {
 export type NeutralRecognizedPick = {
   heroId: number | null;
   name: string;
+  visualGroup?: 'left' | 'right';
   slot: number;
   confidence: number;
   needsReview: boolean;

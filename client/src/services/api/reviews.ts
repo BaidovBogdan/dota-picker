@@ -13,7 +13,7 @@ const reviewSchema = z.object({
   updatedAt: z.string().min(1),
   analysis: z
     .object({
-      source: z.enum(['manual', 'photo']),
+      source: z.enum(['manual', 'photo', 'overwolf']),
       patch: z.string(),
       recommendations: z.array(
         z.object({

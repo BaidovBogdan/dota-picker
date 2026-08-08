@@ -18,9 +18,15 @@ const preferences: Preferences = {
   overlayShortcut: 'PageUp',
   wishlist: [],
   assistantEnabled: true,
+  assistantMode: 'vision',
+  radiantDraftSide: null,
   captureConsent: {
     accepted: true,
     acceptedAt: '2026-08-02T00:00:00.000Z',
+  },
+  overwolfConsent: {
+    accepted: false,
+    acceptedAt: null,
   },
 };
 

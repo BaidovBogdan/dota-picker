@@ -5,14 +5,18 @@ declare module '@fastify/jwt' {
     payload: {
       sub: string;
       kind: 'guest' | 'user';
-      type: 'access' | 'admin';
+      type: 'access' | 'admin' | 'overwolf-live-session' | 'desktop-live-session';
       ver: number;
+      analysisId?: string;
+      revision?: number;
     };
     user: {
       sub: string;
       kind: 'guest' | 'user';
-      type: 'access' | 'admin';
+      type: 'access' | 'admin' | 'overwolf-live-session' | 'desktop-live-session';
       ver: number;
+      analysisId?: string;
+      revision?: number;
     };
   }
 }

@@ -1,5 +1,4 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { InteractionManager } from 'react-native';
 import { create } from 'zustand';
 import { persist, type PersistStorage, type StorageValue } from 'zustand/middleware';
 
@@ -157,7 +156,7 @@ type PendingPersistenceWrite = {
 
 let persistenceTail: Promise<void> = Promise.resolve();
 let latestPersistenceOperation: Promise<void> = persistenceTail;
-let persistenceSchedule: ReturnType<typeof InteractionManager.runAfterInteractions> | null = null;
+let persistenceSchedule: ReturnType<typeof requestIdleCallback> | null = null;
 const pendingPersistenceWrites = new Map<string, PendingPersistenceWrite>();
 
 const enqueuePersistenceOperation = (operation: () => Promise<void>) => {
@@ -188,11 +187,14 @@ const flushPendingPersistenceBatch = () => {
 };
 
 const schedulePersistenceBatch = () => {
-  if (persistenceSchedule || pendingPersistenceWrites.size === 0) return;
-  persistenceSchedule = InteractionManager.runAfterInteractions(() => {
-    persistenceSchedule = null;
-    void flushPendingPersistenceBatch();
-  });
+  if (persistenceSchedule !== null || pendingPersistenceWrites.size === 0) return;
+  persistenceSchedule = requestIdleCallback(
+    () => {
+      persistenceSchedule = null;
+      void flushPendingPersistenceBatch();
+    },
+    { timeout: 500 },
+  );
 };
 
 const appStorage: PersistStorage<PersistedAppState> = {
@@ -223,7 +225,7 @@ const appStorage: PersistStorage<PersistedAppState> = {
       pending.resolve.forEach((resolve) => resolve());
     }
     if (pendingPersistenceWrites.size === 0) {
-      persistenceSchedule?.cancel();
+      if (persistenceSchedule !== null) cancelIdleCallback(persistenceSchedule);
       persistenceSchedule = null;
     }
     return enqueuePersistenceOperation(() => AsyncStorage.removeItem(name));
@@ -231,7 +233,7 @@ const appStorage: PersistStorage<PersistedAppState> = {
 };
 
 export const flushAppPersistence = () => {
-  persistenceSchedule?.cancel();
+  if (persistenceSchedule !== null) cancelIdleCallback(persistenceSchedule);
   persistenceSchedule = null;
   return flushPendingPersistenceBatch();
 };
@@ -273,7 +275,10 @@ const normalizeDraft = (value: unknown, fallback: Draft, resetPhoto = false): Dr
       ? Number(value.rank)
       : null;
   const source =
-    resetPhoto || (value.source !== 'manual' && value.source !== 'photo') ? 'manual' : value.source;
+    resetPhoto ||
+    (value.source !== 'manual' && value.source !== 'photo' && value.source !== 'overwolf')
+      ? 'manual'
+      : value.source;
   return {
     allies,
     enemies,
@@ -1055,7 +1060,6 @@ export const useAppStore = create<AppState>()(
             ...draft,
             photoUri,
             source,
-            ...(photoUri ? { allies: [], enemies: [] } : {}),
           }),
         }));
       },

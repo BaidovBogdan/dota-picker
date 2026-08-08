@@ -7,7 +7,7 @@ import { draftSchema, recommendationResultSchema } from '../recommendation/recom
 export const analysisSchema = z.object({
   id: z.uuid(),
   status: z.literal('completed'),
-  source: z.enum(['manual', 'photo']),
+  source: z.enum(['manual', 'photo', 'overwolf']),
   input: draftSchema,
   result: recommendationResultSchema,
   createdAt: z.iso.datetime(),
@@ -16,6 +16,16 @@ export const analysisSchema = z.object({
 export const analysisResponseSchema = z.object({
   analysis: analysisSchema,
   quota: quotaSchema,
+});
+
+export const liveAnalysisSessionSchema = z.object({
+  token: z.string().min(32),
+  revision: z.number().int().min(0).max(8),
+  expiresAt: z.iso.datetime(),
+});
+
+export const overwolfAnalysisResponseSchema = analysisResponseSchema.extend({
+  liveSession: liveAnalysisSessionSchema,
 });
 
 export const historyItemSchema = analysisSchema.pick({
@@ -47,6 +57,8 @@ export const desktopAnalysisQuerySchema = z.object({
   autoPosition: z.enum(['true', 'false'])
     .transform((value) => value === 'true')
     .default(false),
+  allyGroup: z.enum(['left', 'right']).optional(),
+  orientationSource: z.enum(['gsi_layout_heuristic', 'manual_confirmation']).optional(),
   rank: z.coerce.number().pipe(rankBracketSchema).optional(),
   revision: z.coerce.number().int().nonnegative(),
 });
@@ -67,11 +79,13 @@ export const desktopAnalysisResponseSchema = z.discriminatedUnion('status', [
     ]),
     recognition: recognitionResponseSchema,
     quota: quotaSchema,
+    liveSession: liveAnalysisSessionSchema.optional(),
   }),
   desktopFrameSchema.extend({
     status: z.literal('completed'),
     recognition: recognitionResponseSchema,
     analysis: analysisSchema,
     quota: quotaSchema,
+    liveSession: liveAnalysisSessionSchema.optional(),
   }),
 ]);

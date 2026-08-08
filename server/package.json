@@ -16,6 +16,8 @@
     "test:watch": "vitest",
     "admin:grant-pro-all": "tsx scripts/grant-pro-all.ts",
     "eval:photo": "tsx scripts/eval-photo-pipeline.ts",
+    "eval:local-portraits": "tsx scripts/eval-local-portrait-index.ts",
+    "index:portraits": "tsx scripts/generate-portrait-index.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts"
   },

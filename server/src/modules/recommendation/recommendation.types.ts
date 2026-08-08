@@ -3,7 +3,7 @@ import type { HeroMeta, MetaSnapshot, RankBracket } from '../heroes/heroes.types
 export type Position = 1 | 2 | 3 | 4 | 5;
 
 export type DraftInput = {
-  source: 'manual' | 'photo';
+  source: 'manual' | 'photo' | 'overwolf';
   position: Position;
   allyHeroIds: number[];
   enemyHeroIds: number[];

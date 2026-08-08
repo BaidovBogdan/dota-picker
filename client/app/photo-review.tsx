@@ -22,11 +22,31 @@ import { useTranslation } from '@/i18n';
 import { nativeHeaderOptions } from '@/navigation/native-header';
 import { recognizePhoto } from '@/services/api/dota';
 import { deleteDraftPhoto } from '@/services/image';
+import {
+  activeOrientedPicks,
+  canRestorePhotoDraft,
+  orientRecognizedPicks,
+  type PhotoOrientationError,
+  type VisualGroup,
+  withoutOrientedPicks,
+} from '@/services/photo-orientation';
 import { useAppStore } from '@/store/app-store';
 import { layout, shape } from '@/theme/tokens';
 import { useAppTheme } from '@/theme/use-app-theme';
 import type { DraftTeam, NeutralRecognizedPick } from '@/types/domain';
 import { createId } from '@/utils/id';
+
+type OrientationAssignment = {
+  allyGroup: VisualGroup;
+  picks: NeutralRecognizedPick[];
+};
+
+const orientationErrorKeys: Record<PhotoOrientationError, string> = {
+  missing_groups: 'photo.orientationMissingGroups',
+  duplicate_hero: 'photo.duplicateHero',
+  too_many_allies: 'photo.orientationTooManyAllies',
+  too_many_enemies: 'photo.orientationTooManyEnemies',
+};
 
 function AssignmentButton({
   label,
@@ -173,6 +193,10 @@ export default function PhotoReviewScreen() {
   const setPhoto = useAppStore((state) => state.setPhoto);
   const clearPhotoUri = useAppStore((state) => state.clearPhotoUri);
   const [neutralPicks, setNeutralPicks] = useState<NeutralRecognizedPick[]>([]);
+  const [orientationAssignment, setOrientationAssignment] = useState<OrientationAssignment | null>(
+    null,
+  );
+  const [orientationMessageKey, setOrientationMessageKey] = useState<string | null>(null);
   const [reviewMessageKey, setReviewMessageKey] = useState<string | null>(null);
   const [analysisStarting, setAnalysisStarting] = useState(false);
   const started = useRef(false);
@@ -182,6 +206,15 @@ export default function PhotoReviewScreen() {
   const recognitionController = useRef(new AbortController());
   const recognitionKey = useRef(createId('photo'));
   const launchUserId = useRef(useAppStore.getState().session?.userId);
+  const launchContext = useRef({
+    userId: useAppStore.getState().session?.userId,
+    guestId: useAppStore.getState().guestId,
+    photoUri,
+  });
+  const launchTeams = useRef({
+    allies: [...useAppStore.getState().draft.allies],
+    enemies: [...useAppStore.getState().draft.enemies],
+  });
   const waitNoticeShown = useRef(false);
   const draftAccess = useDraftAccessGuard();
   const { colors, alpha } = useAppTheme();
@@ -192,6 +225,8 @@ export default function PhotoReviewScreen() {
       if (!mounted.current) return;
       replaceTeams(result.allies, result.enemies);
       setNeutralPicks(result.neutralPicks);
+      setOrientationAssignment(null);
+      setOrientationMessageKey(null);
       setReviewMessageKey(null);
     },
   });
@@ -254,14 +289,30 @@ export default function PhotoReviewScreen() {
 
   useEffect(() => {
     const controller = recognitionController.current;
+    const initialTeams = launchTeams.current;
+    const initialContext = launchContext.current;
     return () => {
       mounted.current = false;
       controller.abort();
       deleteDraftPhoto(photoUri);
+      const currentState = useAppStore.getState();
+      if (
+        !canRestorePhotoDraft(initialContext, {
+          userId: currentState.session?.userId,
+          guestId: currentState.guestId,
+          photoUri: currentState.draft.photoUri,
+        })
+      ) {
+        if (currentState.draft.photoUri === photoUri) clearPhotoUri();
+        return;
+      }
       if (confirmed.current) clearPhotoUri();
-      else setPhoto(null);
+      else {
+        replaceTeams(initialTeams.allies, initialTeams.enemies);
+        setPhoto(null);
+      }
     };
-  }, [clearPhotoUri, photoUri, setPhoto]);
+  }, [clearPhotoUri, photoUri, replaceTeams, setPhoto]);
 
   if (!photoUri) {
     return (
@@ -331,11 +382,48 @@ export default function PhotoReviewScreen() {
     }
     addHero(team, pick.heroId);
     setNeutralPicks((current) => current.filter((candidate) => candidate !== pick));
+    setOrientationMessageKey(null);
+    setReviewMessageKey(null);
+  };
+
+  const applyOrientation = (allyGroup: VisualGroup) => {
+    const sourcePicks = orientationAssignment
+      ? activeOrientedPicks(
+          orientationAssignment.picks,
+          orientationAssignment.allyGroup,
+          draft.allies,
+          draft.enemies,
+        )
+      : neutralPicks;
+    if (orientationAssignment && sourcePicks.length === 0) {
+      setOrientationMessageKey('photo.orientationManualChanges');
+      return;
+    }
+    const base = withoutOrientedPicks(
+      orientationAssignment ? sourcePicks : [],
+      draft.allies,
+      draft.enemies,
+    );
+    const result = orientRecognizedPicks(sourcePicks, allyGroup, base.allies, base.enemies);
+    if (!result.ok) {
+      setOrientationMessageKey(orientationErrorKeys[result.error]);
+      return;
+    }
+    replaceTeams(result.allies, result.enemies);
+    if (!orientationAssignment) setNeutralPicks(result.remaining);
+    setOrientationAssignment({
+      allyGroup,
+      picks: result.resolved,
+    });
+    setOrientationMessageKey(null);
     setReviewMessageKey(null);
   };
 
   const coreDraftReady = Boolean(draft.position && draft.enemies.length > 0);
   const hasUnresolvedPicks = neutralPicks.length > 0;
+  const hasVisualGroupPicks = neutralPicks.some(
+    (pick) => pick.heroId !== null && pick.visualGroup !== undefined,
+  );
   const canAnalyze = coreDraftReady && !hasUnresolvedPicks;
   const analyze = () => {
     if (analysisLock.current) return;
@@ -531,6 +619,59 @@ export default function PhotoReviewScreen() {
           </View>
         ) : null}
 
+        {hasVisualGroupPicks || orientationAssignment ? (
+          <Panel style={{ marginBottom: 14 }}>
+            <AppText variant="data" color={colors.cobalt}>
+              {t('photo.orientationEyebrow')}
+            </AppText>
+            <AppText
+              variant="inscription"
+              numberOfLines={2}
+              adjustsFontSizeToFit
+              minimumFontScale={0.72}
+              style={{ marginTop: 4, fontSize: 22, lineHeight: 25 }}
+            >
+              {t('photo.orientationTitle')}
+            </AppText>
+            <AppText variant="caption" color={colors.textMuted} style={{ marginTop: 5 }}>
+              {t('photo.orientationBody')}
+            </AppText>
+            <View style={{ marginTop: 12, flexDirection: 'row', gap: 8 }}>
+              <Button
+                label={t('photo.orientationLeft')}
+                tone={orientationAssignment?.allyGroup === 'left' ? 'primary' : 'secondary'}
+                style={{ flex: 1 }}
+                onPress={() => applyOrientation('left')}
+              />
+              <Button
+                label={t('photo.orientationRight')}
+                tone={orientationAssignment?.allyGroup === 'right' ? 'primary' : 'secondary'}
+                style={{ flex: 1 }}
+                onPress={() => applyOrientation('right')}
+              />
+            </View>
+            {orientationAssignment ? (
+              <AppText variant="caption" color={colors.success} style={{ marginTop: 10 }}>
+                {t(
+                  orientationAssignment.allyGroup === 'left'
+                    ? 'photo.orientationAppliedLeft'
+                    : 'photo.orientationAppliedRight',
+                )}
+              </AppText>
+            ) : null}
+            {orientationMessageKey ? (
+              <AppText
+                accessibilityRole="alert"
+                variant="caption"
+                color={colors.live}
+                style={{ marginTop: 10 }}
+              >
+                {t(orientationMessageKey)}
+              </AppText>
+            ) : null}
+          </Panel>
+        ) : null}
+
         {neutralPicks.length > 0 ? (
           <View style={{ marginBottom: 14 }}>
             <View
@@ -564,11 +705,12 @@ export default function PhotoReviewScreen() {
             <View style={{ gap: 8, marginTop: 8 }}>
               {neutralPicks.map((pick) => (
                 <NeutralPickCard
-                  key={`${pick.slot}-${pick.heroId ?? 'unknown'}-${pick.name}`}
+                  key={`${pick.visualGroup ?? 'unknown'}-${pick.slot}-${pick.heroId ?? 'unknown'}-${pick.name}`}
                   pick={pick}
                   onAssign={(team) => assignNeutralPick(pick, team)}
                   onDelete={() => {
                     setNeutralPicks((current) => current.filter((candidate) => candidate !== pick));
+                    setOrientationMessageKey(null);
                     setReviewMessageKey(null);
                   }}
                 />

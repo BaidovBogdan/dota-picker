@@ -46,6 +46,21 @@ function createOverview() {
   };
 }
 
+function createMeta() {
+  return {
+    heroes: [],
+    patch: '7.39e',
+    rank: null,
+    rankFilter: 'all_ranks' as const,
+    window: 'current_patch_30d' as const,
+    minimumGames: 25,
+    fetchedAt: new Date().toISOString(),
+    isStale: false,
+    availability: 'collecting' as const,
+    positionStats: [],
+  };
+}
+
 async function createApp() {
   const app = Fastify({ logger: false }).withTypeProvider<ZodTypeProvider>();
   openApps.push(app);
@@ -55,8 +70,10 @@ async function createApp() {
   await app.register(authPlugin, { config, db: {} as Database });
   await app.register(errorPlugin);
   const overview = vi.fn(async () => createOverview());
+  const meta = vi.fn(async () => createMeta());
   const adminService = {
     overview,
+    meta,
     listUsers: vi.fn(),
     listAnalyses: vi.fn(),
     system: vi.fn(),
@@ -64,7 +81,7 @@ async function createApp() {
   } as unknown as AdminService;
   await app.register(adminRoutes({ config, adminService }), { prefix: '/v1/admin' });
   await app.ready();
-  return { app, overview };
+  return { app, meta, overview };
 }
 
 afterEach(async () => {
@@ -135,5 +152,31 @@ describe('admin API authentication', () => {
 
     expect(response.statusCode).toBe(401);
     expect(response.json()).toMatchObject({ error: { code: 'ADMIN_AUTH_REQUIRED' } });
+  });
+
+  it('serves the authenticated meta contract and validates rank filters', async () => {
+    const { app, meta } = await createApp();
+    const session = await app.inject({
+      method: 'POST',
+      url: '/v1/admin/session',
+      payload: { key: adminKey },
+    });
+    const token = session.json<{ token: string }>().token;
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/admin/meta?rank=7',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const invalid = await app.inject({
+      method: 'GET',
+      url: '/v1/admin/meta?rank=9',
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ patch: '7.39e', rankFilter: 'all_ranks' });
+    expect(meta).toHaveBeenCalledWith({ rank: 7 });
+    expect(invalid.statusCode).toBe(400);
   });
 });

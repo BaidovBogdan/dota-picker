@@ -1,7 +1,8 @@
 import { AlertTriangle, CheckCircle2, MessageSquareText, ScanLine, Users } from 'lucide-react';
 import type { PageResource } from '../App';
-import { Button, EmptyState, Panel, SegmentedControl, StatusBadge } from '../components/ui';
-import { formatNumber, formatPercent, formatRelativeTime, formatShortDate } from '../lib/format';
+import { ActivityChart } from '../components/charts';
+import { Button, EmptyState, Panel, SegmentedControl } from '../components/ui';
+import { formatCount, formatNumber, formatPercent, formatRelativeTime } from '../lib/format';
 import type { AdminOverview } from '../types';
 
 function MetricCard({
@@ -55,10 +56,11 @@ export function OverviewPage({
   const overview = resource.data;
   if (!overview) return <EmptyState title="Нет данных" text="API не вернул обзор продукта." action={<Button onClick={onRetry}>Обновить</Button>} />;
 
-  const successRate = overview.totals.analyses
-    ? (overview.totals.completed / overview.totals.analyses) * 100
+  const terminalAnalyses = overview.totals.completed + overview.totals.failed;
+  const successRate = terminalAnalyses
+    ? (overview.totals.completed / terminalAnalyses) * 100
     : 0;
-  const maxDaily = Math.max(1, ...overview.daily.map((item) => item.analyses));
+  const periodAnalyses = overview.daily.reduce((sum, item) => sum + item.analyses, 0);
 
   return (
     <div className="page-stack">
@@ -66,7 +68,7 @@ export function OverviewPage({
         <div>
           <span className="eyebrow">Обновлено {formatRelativeTime(overview.generatedAt)}</span>
           <h1>Обзор</h1>
-          <p>Только показатели, рассчитанные по данным production-базы.</p>
+          <p>Только показатели, рассчитанные по данным серверной базы.</p>
         </div>
         <SegmentedControl
           value={`${days}d` as '7d' | '30d'}
@@ -79,28 +81,20 @@ export function OverviewPage({
       {resource.error ? <div className="inline-error" role="status"><AlertTriangle size={16} /><span>{resource.error}</span><button type="button" onClick={onRetry}>Повторить</button></div> : null}
 
       <div className="metric-grid">
-        <MetricCard label="Проверки" value={formatNumber(overview.totals.analyses)} hint={`${overview.totals.processing} сейчас в обработке`} icon={<ScanLine size={18} />} featured />
-        <MetricCard label="Пользователи" value={formatNumber(overview.totals.users)} hint={`${overview.totals.registered} аккаунтов · ${overview.totals.guests} гостей`} icon={<Users size={18} />} />
-        <MetricCard label="Успешно" value={formatPercent(successRate, 1)} hint={`${overview.totals.failed} ошибок в выбранном периоде`} icon={<CheckCircle2 size={18} />} />
-        <MetricCard label="Отзывы" value={formatNumber(overview.totals.reviews)} hint={`${overview.totals.pro} пользователей с Pro`} icon={<MessageSquareText size={18} />} />
+        <MetricCard label="Проверки" value={formatNumber(overview.totals.analyses)} hint={`${formatCount(overview.totals.processing, ['проверка', 'проверки', 'проверок'])} сейчас в обработке`} icon={<ScanLine size={18} />} featured />
+        <MetricCard label="Пользователи" value={formatNumber(overview.totals.users)} hint={`${formatCount(overview.totals.registered, ['аккаунт', 'аккаунта', 'аккаунтов'])} · ${formatCount(overview.totals.guests, ['гость', 'гостя', 'гостей'])}`} icon={<Users size={18} />} />
+        <MetricCard label="Успешно" value={formatPercent(successRate, 1)} hint={`${formatCount(overview.totals.failed, ['ошибка', 'ошибки', 'ошибок'])} за всё время`} icon={<CheckCircle2 size={18} />} />
+        <MetricCard label="Отзывы" value={formatNumber(overview.totals.reviews)} hint={`${formatCount(overview.totals.pro, ['пользователь', 'пользователя', 'пользователей'])} с Pro`} icon={<MessageSquareText size={18} />} />
       </div>
 
       <div className="overview-grid overview-grid--production">
-        <Panel className="production-chart-panel" ariaLabel="Проверки по дням">
+        <Panel className="chart-panel production-chart-panel" ariaLabel="Динамика проверок, пользователей и ошибок">
           <div className="panel-heading">
-            <div><h2>Проверки по дням</h2><p>Активность за {overview.range.days} дней, UTC.</p></div>
-            <StatusBadge tone="info">{overview.range.days} дней</StatusBadge>
+            <div><h2>Динамика продукта</h2><p>Проверки, активные пользователи и ошибки по дням, UTC.</p></div>
+            <div className="chart-total"><strong>{formatNumber(periodAnalyses)}</strong><span>за {overview.range.days} дней</span></div>
           </div>
-          {overview.daily.length ? (
-            <div className="production-bars">
-              {overview.daily.map((item) => (
-                <div className="production-bar" key={item.date} title={`${formatShortDate(item.date)}: ${item.analyses} проверок`}>
-                  <div><i style={{ height: `${Math.max(4, (item.analyses / maxDaily) * 100)}%` }} /></div>
-                  <span>{formatShortDate(item.date)}</span>
-                  <strong>{item.analyses}</strong>
-                </div>
-              ))}
-            </div>
+          {periodAnalyses ? (
+            <ActivityChart metrics={overview.daily} />
           ) : <EmptyState title="Проверок пока нет" text="За выбранный период в базе нет анализов." />}
         </Panel>
 
@@ -118,7 +112,7 @@ export function OverviewPage({
                 </article>
               ))}
             </div>
-          ) : <p className="muted-message">Событий за период пока нет.</p>}
+          ) : <p className="muted-message">В базе пока нет событий.</p>}
         </Panel>
       </div>
     </div>

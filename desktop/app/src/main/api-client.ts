@@ -30,7 +30,7 @@ import type { TokenVault } from './token-vault.js';
 const emptyResponseSchema = z.object({ success: z.literal(true) });
 
 type RequestOptions = {
-  method?: 'GET' | 'POST' | 'DELETE';
+  method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
   body?: BodyInit;
   headers?: Record<string, string>;
   authenticated?: boolean;
@@ -38,6 +38,8 @@ type RequestOptions = {
   retryAuthentication?: boolean;
   allowDuringAuthenticationBlock?: boolean;
   allowDuringAuthenticatedAuth?: boolean;
+  secondaryAuthorization?: boolean;
+  secondaryAuthorizationErrorCode?: string;
 };
 
 type AuthPayload = z.infer<typeof authResponseSchema>;
@@ -273,6 +275,8 @@ export class ApiClient {
     revision: number,
     idempotencyKey: string,
     autoPosition: boolean,
+    allyGroup: 'left' | 'right' | null,
+    orientationSource: 'gsi_layout_heuristic' | 'manual_confirmation' | null,
   ): Promise<DesktopAnalysisResponse> {
     const query = new URLSearchParams({
       autoPosition: String(autoPosition),
@@ -281,6 +285,8 @@ export class ApiClient {
       sessionId,
     });
     if (rank) query.set('rank', String(rank));
+    if (allyGroup) query.set('allyGroup', allyGroup);
+    if (orientationSource) query.set('orientationSource', orientationSource);
     const form = new FormData();
     form.append('image', new Blob([new Uint8Array(image)], { type: 'image/png' }), 'draft.png');
     return this.request(`analyses/desktop?${query}`, desktopAnalysisResponseSchema, {
@@ -288,6 +294,132 @@ export class ApiClient {
       body: form,
       headers: { 'idempotency-key': idempotencyKey },
       timeoutMs: 45_000,
+    });
+  }
+
+  async reviseDesktop(
+    analysisId: string,
+    image: Buffer,
+    position: Position,
+    rank: Rank | null,
+    sessionId: string,
+    revision: number,
+    idempotencyKey: string,
+    autoPosition: boolean,
+    allyGroup: 'left' | 'right' | null,
+    orientationSource: 'gsi_layout_heuristic' | 'manual_confirmation' | null,
+    liveSessionToken: string,
+  ): Promise<DesktopAnalysisResponse> {
+    const query = new URLSearchParams({
+      autoPosition: String(autoPosition),
+      position: String(position),
+      revision: String(revision),
+      sessionId,
+    });
+    if (rank) query.set('rank', String(rank));
+    if (allyGroup) query.set('allyGroup', allyGroup);
+    if (orientationSource) query.set('orientationSource', orientationSource);
+    const form = new FormData();
+    form.append('image', new Blob([new Uint8Array(image)], { type: 'image/png' }), 'draft.png');
+    return this.request(
+      `analyses/desktop/${encodeURIComponent(analysisId)}?${query}`,
+      desktopAnalysisResponseSchema,
+      {
+        method: 'PUT',
+        body: form,
+        headers: {
+          'idempotency-key': idempotencyKey,
+          'x-live-session-token': liveSessionToken,
+        },
+        timeoutMs: 45_000,
+        secondaryAuthorization: true,
+        secondaryAuthorizationErrorCode: 'DESKTOP_LIVE_SESSION_INVALID',
+      },
+    );
+  }
+
+  async analyzeOverwolf(
+    input: {
+      position: Position;
+      allyHeroIds: number[];
+      enemyHeroIds: number[];
+      bannedHeroIds: number[];
+      rank: Rank | null;
+    },
+    idempotencyKey: string,
+  ): Promise<{
+    analysis: Analysis;
+    quota: Quota;
+    liveSession: { token: string; revision: number; expiresAt: string };
+  }> {
+    return this.request('analyses/overwolf', z.object({
+      analysis: analysisSchema,
+      quota: quotaSchema,
+      liveSession: z.object({
+        token: z.string().min(32),
+        revision: z.number().int().min(0).max(8),
+        expiresAt: z.string().datetime(),
+      }),
+    }), {
+      method: 'POST',
+      body: JSON.stringify({
+        source: 'overwolf',
+        position: input.position,
+        allyHeroIds: input.allyHeroIds,
+        enemyHeroIds: input.enemyHeroIds,
+        bannedHeroIds: input.bannedHeroIds,
+        ...(input.rank ? { rank: input.rank } : {}),
+      }),
+      headers: {
+        'content-type': 'application/json',
+        'idempotency-key': idempotencyKey,
+      },
+      timeoutMs: 35_000,
+    });
+  }
+
+  async reviseOverwolf(
+    analysisId: string,
+    input: {
+      position: Position;
+      allyHeroIds: number[];
+      enemyHeroIds: number[];
+      bannedHeroIds: number[];
+      rank: Rank | null;
+    },
+    idempotencyKey: string,
+    liveSessionToken: string,
+  ): Promise<{
+    analysis: Analysis;
+    quota: Quota;
+    liveSession: { token: string; revision: number; expiresAt: string };
+  }> {
+    return this.request(`analyses/overwolf/${encodeURIComponent(analysisId)}`, z.object({
+      analysis: analysisSchema,
+      quota: quotaSchema,
+      liveSession: z.object({
+        token: z.string().min(32),
+        revision: z.number().int().min(0).max(8),
+        expiresAt: z.string().datetime(),
+      }),
+    }), {
+      method: 'PUT',
+      body: JSON.stringify({
+        source: 'overwolf',
+        position: input.position,
+        allyHeroIds: input.allyHeroIds,
+        enemyHeroIds: input.enemyHeroIds,
+        bannedHeroIds: input.bannedHeroIds,
+        ...(input.rank ? { rank: input.rank } : {}),
+      }),
+      headers: {
+        'content-type': 'application/json',
+        'idempotency-key': idempotencyKey,
+        'x-live-session-token': liveSessionToken,
+      },
+      timeoutMs: 35_000,
+      secondaryAuthorization: true,
+      secondaryAuthorizationErrorCode: 'OVERWOLF_LIVE_SESSION_INVALID',
     });
   }
 
@@ -463,11 +595,18 @@ export class ApiClient {
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
       const parsed = apiErrorSchema.safeParse(payload);
-      if (response.status === 401 && requestGeneration === this.authGeneration) {
+      if (
+        response.status === 401
+        && requestGeneration === this.authGeneration
+        && !options.secondaryAuthorization
+      ) {
         await this.clearSession();
       }
+      const scopedAuthorizationFailure = response.status === 401 && options.secondaryAuthorization;
       throw new DesktopError(
-        parsed.success ? parsed.data.error.code : 'HTTP_ERROR',
+        scopedAuthorizationFailure
+          ? options.secondaryAuthorizationErrorCode ?? 'OVERWOLF_LIVE_SESSION_INVALID'
+          : parsed.success ? parsed.data.error.code : 'HTTP_ERROR',
         parsed.success ? parsed.data.error.message : `HTTP ${response.status}`,
         response.status,
         parsed.success ? parsed.data.error.details : undefined,

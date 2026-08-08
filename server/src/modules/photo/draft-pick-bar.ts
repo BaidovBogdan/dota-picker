@@ -32,6 +32,12 @@ export type DraftVisionCandidate = {
   strategy: 'whole_pick_bar' | 'screen_top' | 'content_top' | 'salient_band';
   reliability: 'high' | 'medium' | 'low';
   enhanced: boolean;
+  localSource?: {
+    data: Buffer;
+    width: number;
+    height: number;
+    channels: number;
+  };
 };
 
 export type DraftVisionInput = {
@@ -45,7 +51,7 @@ type Permit = () => void;
 type PermitWaiter = (permit: Permit) => void;
 type CropPlan = Omit<
   DraftVisionCandidate,
-  'id' | 'image' | 'mimeType' | 'width' | 'height' | 'enhanced'
+  'id' | 'image' | 'mimeType' | 'width' | 'height' | 'enhanced' | 'localSource'
 > & {
   top: number;
   height: number;
@@ -202,6 +208,7 @@ function planCandidateCrops(
   width: number,
   height: number,
   activity: number[],
+  means: number[],
   analysisHeight: number,
   sourceKind: DraftVisionInput['sourceKind'],
 ) {
@@ -241,11 +248,26 @@ function planCandidateCrops(
     }))
     .filter(({ top }) => top <= searchBottom)
     .sort((left, right) => right.score - left.score);
-  const contentTop = clamp(
-    Math.round(estimateContentTop(activity) * scaleY),
+  const estimatedAnalysisTop = estimateContentTop(activity);
+  const estimatedContentTop = clamp(
+    Math.round(estimatedAnalysisTop * scaleY),
     0,
     height - cropHeight,
   );
+  const leadingMeans = means.slice(0, estimatedAnalysisTop);
+  const followingMeans = means.slice(
+    estimatedAnalysisTop,
+    estimatedAnalysisTop + analysisWindowHeight,
+  );
+  const leadingLuma = leadingMeans.reduce((sum, value) => sum + value, 0)
+    / Math.max(1, leadingMeans.length);
+  const followingLuma = followingMeans.reduce((sum, value) => sum + value, 0)
+    / Math.max(1, followingMeans.length);
+  const hasDarkLetterbox = leadingMeans.length > 0
+    && leadingLuma <= Math.max(24, followingLuma * 0.55);
+  const contentTop = estimatedContentTop <= cropHeight * 0.12 || !hasDarkLetterbox
+    ? 0
+    : estimatedContentTop;
   const primaryAnalysisTop = clamp(
     Math.round(contentTop / scaleY),
     0,
@@ -332,9 +354,8 @@ function inferSourceKind(
   return 'unknown';
 }
 
-export async function prepareDraftVisionInput(image: Buffer): Promise<DraftVisionInput> {
-  return pickBarJobs.run(async () => {
-    try {
+async function prepareDraftVisionInputCore(image: Buffer): Promise<DraftVisionInput> {
+  try {
       const input = sharp(image, {
         failOn: 'error',
         limitInputPixels: MAX_INPUT_PIXELS,
@@ -360,10 +381,8 @@ export async function prepareDraftVisionInput(image: Buffer): Promise<DraftVisio
           kernel: sharp.kernel.lanczos3,
         })
         .toColourspace('srgb')
-        .jpeg({
-          quality: 92,
-          chromaSubsampling: '4:4:4',
-        })
+        .removeAlpha()
+        .raw()
         .toBuffer({ resolveWithObject: true });
       const width = normalized.info.width;
       const height = normalized.info.height;
@@ -372,7 +391,14 @@ export async function prepareDraftVisionInput(image: Buffer): Promise<DraftVisio
         throw invalidDraftImage();
       }
 
-      const analysis = await sharp(normalized.data)
+      const normalizedInput = {
+        raw: {
+          width,
+          height,
+          channels: normalized.info.channels,
+        },
+      } as const;
+      const analysis = await sharp(normalized.data, normalizedInput)
         .resize({
           width: Math.min(ANALYSIS_WIDTH, width),
           withoutEnlargement: true,
@@ -396,6 +422,7 @@ export async function prepareDraftVisionInput(image: Buffer): Promise<DraftVisio
         width,
         height,
         metrics.activity,
+        metrics.means,
         analysis.info.height,
         sourceKind,
       );
@@ -425,15 +452,20 @@ export async function prepareDraftVisionInput(image: Buffer): Promise<DraftVisio
         const candidateMeanLuma = candidateMeans.reduce((sum, value) => sum + value, 0)
           / Math.max(1, candidateMeans.length);
         const shouldEnhance = candidateMeanLuma < LOW_LIGHT_LUMA;
-        let pipeline = sharp(normalized.data, {
-          sequentialRead: true,
-        })
+        const extracted = sharp(normalized.data, normalizedInput)
           .extract({
             left: 0,
             top: plan.top,
             width,
             height: plan.height,
-          })
+          });
+        const localSource = index === 0
+          ? await extracted
+            .clone()
+            .raw()
+            .toBuffer({ resolveWithObject: true })
+          : null;
+        let pipeline = extracted
           .resize({
             width: targetWidth,
             withoutEnlargement: false,
@@ -460,22 +492,42 @@ export async function prepareDraftVisionInput(image: Buffer): Promise<DraftVisio
           width: output.info.width,
           height: output.info.height,
           enhanced: shouldEnhance,
+          ...(localSource
+            ? {
+              localSource: {
+                data: localSource.data,
+                width: localSource.info.width,
+                height: localSource.info.height,
+                channels: localSource.info.channels,
+              },
+            }
+            : {}),
         });
       }
 
       if (candidates.length === 0) throw invalidDraftImage();
 
-      return {
-        candidates,
-        sourceWidth: width,
-        sourceHeight: height,
-        sourceKind,
-      };
-    } catch (error) {
-      if (error instanceof AppError) throw error;
-      throw invalidDraftImage();
-    }
-  });
+    return {
+      candidates,
+      sourceWidth: width,
+      sourceHeight: height,
+      sourceKind,
+    };
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    throw invalidDraftImage();
+  }
+}
+
+export async function processDraftVisionImage<T>(
+  image: Buffer,
+  consume: (input: DraftVisionInput) => Promise<T>,
+): Promise<T> {
+  return pickBarJobs.run(async () => consume(await prepareDraftVisionInputCore(image)));
+}
+
+export async function prepareDraftVisionInput(image: Buffer): Promise<DraftVisionInput> {
+  return processDraftVisionImage(image, async (input) => input);
 }
 
 export async function prepareDraftPickBar(image: Buffer) {

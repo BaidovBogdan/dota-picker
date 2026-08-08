@@ -7,6 +7,8 @@ import {
   adminAnalysesQuerySchema,
   adminAnalysesResponseSchema,
   adminHeadersSchema,
+  adminMetaQuerySchema,
+  adminMetaResponseSchema,
   adminSessionInputSchema,
   adminSessionResponseSchema,
   adminSystemResponseSchema,
@@ -99,6 +101,23 @@ export function adminRoutes(dependencies: Dependencies): FastifyPluginAsyncZod {
         },
       },
     }, async (request) => dependencies.adminService.listAnalyses(request.query));
+
+    app.get('/meta', {
+      preHandler: app.authenticateAdmin,
+      config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+      schema: {
+        tags: ['Admin'],
+        security: [{ adminBearerAuth: [] }, { adminApiKey: [] }],
+        headers: adminHeadersSchema,
+        querystring: adminMetaQuerySchema,
+        response: {
+          200: adminMetaResponseSchema,
+          401: errorResponseSchema,
+          429: errorResponseSchema,
+          503: errorResponseSchema,
+        },
+      },
+    }, async (request) => dependencies.adminService.meta(request.query));
 
     app.get('/system', {
       preHandler: app.authenticateAdmin,

@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>Counterpick Live</title>
+    <link rel="stylesheet" href="main.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="titlebar" data-drag>
+        <div class="brand">
+          <img src="assets/icon.png" alt="" />
+          <div>
+            <strong>Counterpick Live</strong>
+            <span>Overwolf companion</span>
+          </div>
+        </div>
+        <div class="window-actions">
+          <button type="button" data-minimize aria-label="Minimize">−</button>
+          <button type="button" data-close aria-label="Close">×</button>
+        </div>
+      </header>
+
+      <section class="signal" aria-labelledby="signal-title">
+        <div class="signal-orb" aria-hidden="true"><i></i><i></i><i></i></div>
+        <p>Live draft relay</p>
+        <h1 id="signal-title">Exact picks.<br />No screen capture.</h1>
+        <span>Structured Dota 2 events travel only through an authenticated connection on your computer.</span>
+      </section>
+
+      <section class="status-panel" aria-label="Connection status">
+        <div class="status-row" data-status-row>
+          <i></i>
+          <div>
+            <span>Counterpick</span>
+            <strong data-connection>Waiting for Counterpick</strong>
+            <small data-connection-detail>Choose Overwolf Live in the desktop app and press Connect.</small>
+          </div>
+        </div>
+        <div class="status-grid">
+          <div class="status-row status-row--compact" data-status-row>
+            <i></i>
+            <div><span>Dota 2</span><strong data-game>Not running</strong></div>
+          </div>
+          <div class="status-row status-row--compact" data-status-row>
+            <i></i>
+            <div><span>Draft</span><strong data-draft>Waiting</strong></div>
+          </div>
+          <div class="status-row status-row--compact" data-status-row>
+            <i></i>
+            <div><span>Known picks</span><strong data-picks>0 / 10</strong></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="privacy-note">
+        <strong>Local by design</strong>
+        <p>The companion never receives your Counterpick account token, screenshots, or browser data. Disable Overwolf Live in Counterpick to stop the link.</p>
+      </section>
+
+      <button class="reconnect" type="button" data-retry>Retry connection &amp; live data</button>
+    </main>
+    <script type="module" src="main.js"></script>
+  </body>
+</html>

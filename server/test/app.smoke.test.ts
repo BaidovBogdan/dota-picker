@@ -41,6 +41,10 @@ describe('application composition', () => {
     expect(document.paths).toHaveProperty('/v1/heroes/meta-positions');
     expect(document.paths).toHaveProperty('/v1/heroes/{heroId}/detail');
     expect(document.paths).toHaveProperty('/v1/analyses/desktop');
+    expect(document.paths).toHaveProperty('/v1/analyses/desktop/{id}');
+    expect(document.paths).toHaveProperty('/v1/analyses/manual');
+    expect(document.paths).toHaveProperty('/v1/analyses/overwolf');
+    expect(document.paths).toHaveProperty('/v1/analyses/overwolf/{id}');
     expect(document.paths).toHaveProperty('/v1/analyses/{id}/review');
     expect(document.paths).toHaveProperty('/v1/account/reviews');
     expect(document.paths).toHaveProperty('/v1/account/reviews/{id}');
@@ -50,6 +54,7 @@ describe('application composition', () => {
     expect(document.paths).toHaveProperty('/v1/admin/overview');
     expect(document.paths).toHaveProperty('/v1/admin/users');
     expect(document.paths).toHaveProperty('/v1/admin/analyses');
+    expect(document.paths).toHaveProperty('/v1/admin/meta');
     expect(document.paths).toHaveProperty('/v1/admin/system');
     expect(document.paths).toHaveProperty('/v1/admin/grants/pro-all');
     expect(document.paths).not.toHaveProperty('/v1/v1/auth/guest');

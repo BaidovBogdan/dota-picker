@@ -54,9 +54,9 @@ const recommendationSchema = z.object({
 
 export const analysisSchema = z.object({
   id: z.string().uuid(),
-  source: z.enum(['desktop', 'manual', 'photo']),
+  source: z.enum(['desktop', 'manual', 'photo', 'overwolf']),
   input: z.object({
-    source: z.enum(['desktop', 'manual', 'photo']),
+    source: z.enum(['desktop', 'manual', 'photo', 'overwolf']),
     position: positionSchema,
     allyHeroIds: z.array(z.number().int().positive()).max(4),
     enemyHeroIds: z.array(z.number().int().positive()).min(1).max(5),
@@ -82,6 +82,7 @@ export const recognitionSchema = z.object({
   detectedPosition: positionSchema.nullable().optional().default(null),
   recognized: z.array(z.object({
     side: z.enum(['ally', 'enemy', 'unknown']),
+    visualGroup: z.enum(['left', 'right']).optional(),
     slot: z.number().int().min(0).max(4),
     heroId: z.number().int().positive().nullable(),
     heroName: z.string(),
@@ -98,6 +99,12 @@ const desktopFrameSchema = z.object({
   quota: quotaSchema,
 });
 
+const liveAnalysisSessionSchema = z.object({
+  token: z.string().min(32),
+  revision: z.number().int().min(0).max(8),
+  expiresAt: z.string().datetime(),
+});
+
 export const desktopAnalysisResponseSchema = z.discriminatedUnion('status', [
   z.object({
     status: z.literal('waiting'),
@@ -112,6 +119,7 @@ export const desktopAnalysisResponseSchema = z.discriminatedUnion('status', [
     frameHash: desktopFrameSchema.shape.frameHash,
     quota: desktopFrameSchema.shape.quota,
     recognition: recognitionSchema,
+    liveSession: liveAnalysisSessionSchema.optional(),
   }),
   z.object({
     status: z.literal('completed'),
@@ -120,6 +128,7 @@ export const desktopAnalysisResponseSchema = z.discriminatedUnion('status', [
     quota: desktopFrameSchema.shape.quota,
     recognition: recognitionSchema,
     analysis: analysisSchema,
+    liveSession: liveAnalysisSessionSchema.optional(),
   }),
 ]);
 

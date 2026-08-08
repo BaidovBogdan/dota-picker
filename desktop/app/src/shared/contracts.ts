@@ -19,6 +19,8 @@ export const rankSchema = z.union([
   z.literal(8),
 ]);
 
+export const assistantModeSchema = z.enum(['vision', 'overwolf']);
+
 const acceleratorModifiers = new Map<string, string>([
   ['command', 'Command'],
   ['cmd', 'Command'],
@@ -155,10 +157,16 @@ export const preferencesSchema = z.object({
   overlayShortcut: overlayShortcutSchema.catch('PageUp').default('PageUp'),
   wishlist: z.array(z.number().int().positive()).max(200),
   assistantEnabled: z.boolean(),
+  assistantMode: assistantModeSchema.default('vision'),
+  radiantDraftSide: z.enum(['left', 'right']).nullable().default(null),
   captureConsent: z.object({
     accepted: z.boolean(),
     acceptedAt: z.string().datetime().nullable(),
   }),
+  overwolfConsent: z.object({
+    accepted: z.boolean(),
+    acceptedAt: z.string().datetime().nullable(),
+  }).default({ accepted: false, acceptedAt: null }),
 });
 
 export const preferencesPatchSchema = preferencesSchema.omit({ overlayShortcut: true }).partial();
@@ -247,6 +255,7 @@ export const enginePhaseSchema = z.enum([
 
 export type Position = z.infer<typeof positionSchema>;
 export type Rank = z.infer<typeof rankSchema>;
+export type AssistantMode = z.infer<typeof assistantModeSchema>;
 export type Preferences = z.infer<typeof preferencesSchema>;
 export type PreferencesPatch = z.infer<typeof preferencesPatchSchema>;
 export type EnginePhase = z.infer<typeof enginePhaseSchema>;
@@ -296,9 +305,9 @@ export type Hero = {
 
 export type Analysis = {
   id: string;
-  source: 'desktop' | 'manual' | 'photo';
+  source: 'desktop' | 'manual' | 'photo' | 'overwolf';
   input: {
-    source: 'desktop' | 'manual' | 'photo';
+    source: 'desktop' | 'manual' | 'photo' | 'overwolf';
     position: Position;
     allyHeroIds: number[];
     enemyHeroIds: number[];
@@ -339,6 +348,7 @@ export type EngineState = {
     detectedPosition: Position | null;
     recognized: Array<{
       side: 'ally' | 'enemy' | 'unknown';
+      visualGroup?: 'left' | 'right';
       slot: number;
       heroId: number | null;
       heroName: string;
@@ -429,6 +439,27 @@ export type BillingStatus = {
   expiresAt: string | null;
 };
 
+export type OverwolfBridgePhase =
+  | 'stopped'
+  | 'listening'
+  | 'pairing'
+  | 'connected'
+  | 'stale'
+  | 'error';
+
+export type OverwolfBridgeState = {
+  phase: OverwolfBridgePhase;
+  configured: boolean;
+  protocolVersion: number;
+  port: number | null;
+  connectedAt: string | null;
+  lastMessageAt: string | null;
+  lastError: string | null;
+  companionVersion: string | null;
+  gameDetected: boolean;
+  draftActive: boolean;
+};
+
 export type DesktopBridge = {
   session: {
     bootstrap: () => Promise<SessionState>;
@@ -481,6 +512,12 @@ export type DesktopBridge = {
     check: () => Promise<UpdateState>;
     downloadAndInstall: () => Promise<UpdateState>;
     onState: (listener: (state: UpdateState) => void) => () => void;
+  };
+  overwolf: {
+    getState: () => Promise<OverwolfBridgeState>;
+    connect: () => Promise<OverwolfBridgeState>;
+    openInstaller: () => Promise<void>;
+    onState: (listener: (state: OverwolfBridgeState) => void) => () => void;
   };
   app: {
     openExternal: (url: string) => Promise<void>;

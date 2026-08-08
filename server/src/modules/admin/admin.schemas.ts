@@ -1,4 +1,9 @@
 import { z } from 'zod';
+import {
+  heroSchema,
+  metaPositionResponseSchema,
+  rankBracketSchema,
+} from '../heroes/heroes.schemas.js';
 
 const paginationSchema = z.object({
   limit: z.number().int().positive(),
@@ -9,7 +14,7 @@ const paginationSchema = z.object({
 const accountKindSchema = z.enum(['guest', 'user']);
 const planSchema = z.enum(['free', 'pro']);
 const analysisStatusSchema = z.enum(['processing', 'completed', 'failed']);
-const analysisSourceSchema = z.enum(['manual', 'photo']);
+const analysisSourceSchema = z.enum(['manual', 'photo', 'overwolf']);
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 
 export const adminHeadersSchema = z.object({
@@ -64,6 +69,14 @@ export const overviewResponseSchema = z.object({
     failed: z.number().int().nonnegative(),
   })),
   recentActivity: z.array(activityEventSchema),
+});
+
+export const adminMetaQuerySchema = z.object({
+  rank: z.coerce.number().pipe(rankBracketSchema).optional(),
+});
+
+export const adminMetaResponseSchema = metaPositionResponseSchema.extend({
+  heroes: z.array(heroSchema),
 });
 
 export const adminUsersQuerySchema = z.object({
@@ -181,5 +194,6 @@ export const grantProAllResponseSchema = z.object({
 });
 
 export type OverviewQuery = z.infer<typeof overviewQuerySchema>;
+export type AdminMetaQuery = z.infer<typeof adminMetaQuerySchema>;
 export type AdminUsersQuery = z.infer<typeof adminUsersQuerySchema>;
 export type AdminAnalysesQuery = z.infer<typeof adminAnalysesQuerySchema>;

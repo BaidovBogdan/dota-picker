@@ -9,9 +9,12 @@ import {
   protocol,
   screen,
   session,
+  shell,
   Tray,
 } from 'electron';
+import log from 'electron-log/main';
 import { ApiClient } from './api-client.js';
+import { AssistantEngine } from './assistant-engine.js';
 import { DraftEngine } from './draft-engine.js';
 import { DesktopError } from './errors.js';
 import { GsiReceiver } from './gsi.js';
@@ -19,7 +22,10 @@ import { registerIpc } from './ipc.js';
 import { registerOverlayIpc } from './overlay-ipc.js';
 import { createOverlayState } from './overlay-state.js';
 import { OverlayShortcutManager } from './overlay-shortcut.js';
+import { normalizeOverwolfBridgePort, OverwolfBridge } from './overwolf-bridge.js';
+import { OverwolfDraftEngine } from './overwolf-draft-engine.js';
 import { PreferencesStore } from './preferences-store.js';
+import { applyPreferenceEngineChanges } from './preferences-update.js';
 import { TokenVault } from './token-vault.js';
 import { UpdateManager } from './update-manager.js';
 import type {
@@ -54,7 +60,8 @@ let mainWindow: BrowserWindow | null = null;
 let overlayWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let quitting = false;
-let engine: DraftEngine | null = null;
+let engine: AssistantEngine | null = null;
+let overwolfBridge: OverwolfBridge | null = null;
 let overlayShortcut: OverlayShortcutManager | null = null;
 let syncOverlayState: (() => Promise<void>) | null = null;
 let overlayAvailable = false;
@@ -67,6 +74,10 @@ let updateManager: UpdateManager | null = null;
 let resumeEngineAfterFailedUpdate = false;
 
 const apiUrl = process.env.MAIN_VITE_API_URL ?? 'https://dota-picker-api.onrender.com/v1';
+const overwolfBridgePort = normalizeOverwolfBridgePort(
+  process.env.MAIN_VITE_OVERWOLF_BRIDGE_PORT,
+);
+const overwolfStoreUrl = process.env.MAIN_VITE_OVERWOLF_STORE_URL?.trim() || null;
 const overlayPreview = process.env.COUNTERPICK_OVERLAY_PREVIEW === '1';
 const overlayAlwaysOnTopLevel = process.platform === 'win32' ? 'screen-saver' : 'floating';
 
@@ -77,7 +88,10 @@ function brandIconPath(): string {
 
 function disposeRuntime(): Promise<void> {
   if (shutdownComplete) return Promise.resolve();
-  shutdownPromise ??= Promise.resolve(engine?.dispose())
+  shutdownPromise ??= Promise.all([
+    Promise.resolve(engine?.dispose()),
+    Promise.resolve(overwolfBridge?.dispose()),
+  ])
     .catch(() => undefined)
     .then(() => {
       shutdownComplete = true;
@@ -87,7 +101,7 @@ function disposeRuntime(): Promise<void> {
 
 async function prepareForUpdateInstall(): Promise<void> {
   resumeEngineAfterFailedUpdate = engine?.getState().enabled ?? false;
-  await disposeRuntime();
+  await engine?.suspend();
 }
 
 function takeOverForUpdateInstall(): void {
@@ -305,7 +319,7 @@ type TrayController = {
 
 function createTray(
   preferences: PreferencesStore,
-  currentEngine: DraftEngine,
+  currentEngine: AssistantEngine,
   getOverlayShortcut: () => OverlayShortcutStatus,
   toggleAssistant: () => Promise<void>,
 ): TrayController {
@@ -397,6 +411,24 @@ async function bootstrap(): Promise<void> {
 
   mainWindow = createWindow(preferences);
   overlayWindow = createOverlayWindow();
+  const overwolfLog = log.scope('overwolf');
+  overwolfBridge = new OverwolfBridge({
+    port: overwolfBridgePort,
+    storeUrl: overwolfStoreUrl,
+    openExternal: (url) => shell.openExternal(url),
+    onState: (state) => {
+      const window = mainWindow;
+      if (
+        window
+        && !window.isDestroyed()
+        && !window.webContents.isDestroyed()
+        && !window.webContents.isLoading()
+      ) {
+        window.webContents.send(IPC.overwolfChanged, state);
+      }
+    },
+    logger: overwolfLog,
+  });
   const heroImages = new Map<number, string>();
   const heroImagesRetryBaseMs = 15_000;
   const heroImagesRetryMaxMs = 5 * 60_000;
@@ -537,7 +569,20 @@ async function bootstrap(): Promise<void> {
       void loadHeroImages();
     }
   };
-  engine = new DraftEngine(api, preferences, gsi, emitEngine);
+  const visionEngine = new DraftEngine(api, preferences, gsi, emitEngine);
+  const overwolfEngine = new OverwolfDraftEngine(
+    api,
+    preferences,
+    overwolfBridge,
+    emitEngine,
+    overwolfLog,
+  );
+  engine = new AssistantEngine(
+    preferences,
+    visionEngine,
+    overwolfEngine,
+    emitEngine,
+  );
   const updates = new UpdateManager({
     getWindow: () => mainWindow,
     prepareForInstall: prepareForUpdateInstall,
@@ -567,7 +612,10 @@ async function bootstrap(): Promise<void> {
         return;
       }
       const currentPreferences = await preferences.get();
-      if (!api.isAuthenticated() || !currentPreferences.captureConsent.accepted) {
+      const hasConsent = currentPreferences.assistantMode === 'overwolf'
+        ? currentPreferences.overwolfConsent.accepted
+        : currentPreferences.captureConsent.accepted;
+      if (!api.isAuthenticated() || !hasConsent) {
         showWindow();
         return;
       }
@@ -580,15 +628,11 @@ async function bootstrap(): Promise<void> {
     getWindow: () => mainWindow,
     api,
     engine,
+    overwolf: overwolfBridge,
     preferences,
     updates,
     onPreferencesChanged: async (previous, current) => {
-      if (previous.position !== current.position || previous.rank !== current.rank) {
-        if (previous.position !== current.position) {
-          engine?.useManualPositionForCurrentDraft();
-        }
-        await engine?.refresh(true);
-      }
+      if (engine) await applyPreferenceEngineChanges(previous, current, engine);
       if (engine) trayController?.refresh(engine.getState());
       await broadcastVisibleOverlayState();
     },

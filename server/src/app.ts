@@ -46,6 +46,7 @@ export function buildApp(config: AppConfig = loadConfig()) {
         'req.headers.authorization',
         'req.headers.cookie',
         'req.headers.x-admin-key',
+        'req.headers.x-live-session-token',
         'req.body.key',
         'res.headers.set-cookie',
       ],
@@ -75,7 +76,7 @@ export function buildApp(config: AppConfig = loadConfig()) {
   const photoAdapter = new GeminiPhotoAdapter(config.gemini);
   const billingService = new BillingService(db, config, quotaService);
   const reviewService = new ReviewService(db);
-  const adminService = new AdminService(db, config);
+  const adminService = new AdminService(db, config, metaAdapter);
 
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);

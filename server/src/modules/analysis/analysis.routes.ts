@@ -1,7 +1,7 @@
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import type { AppConfig } from '../../config/env.js';
-import { AppError, RateLimitError } from '../../lib/errors.js';
+import { AppError, RateLimitError, UnauthorizedError } from '../../lib/errors.js';
 import { errorResponseSchema, idempotencyHeadersSchema, paginationQuerySchema } from '../../lib/schemas.js';
 import type { OpenDotaAdapter } from '../heroes/opendota.adapter.js';
 import type { IdempotencyService } from '../idempotency/idempotency.service.js';
@@ -19,6 +19,7 @@ import {
   desktopAnalysisResponseSchema,
   historyDetailResponseSchema,
   historyResponseSchema,
+  overwolfAnalysisResponseSchema,
 } from './analysis.schemas.js';
 import { AnalysisConsistencyError, type AnalysisService } from './analysis.service.js';
 import { createDesktopDraft, resolveDesktopPosition } from './desktop-analysis.js';
@@ -33,6 +34,28 @@ type Dependencies = {
 };
 
 const desktopRecognitionBudgetMultiplier = 4;
+const mobileDraftSchema = draftSchema.refine(
+  draft => draft.source !== 'overwolf',
+  { message: 'A mobile analysis must use the manual or photo source' }
+);
+const overwolfDraftSchema = draftSchema.refine(
+  draft => draft.source === 'overwolf',
+  { message: 'An Overwolf analysis must use the Overwolf source' }
+);
+const liveRevisionHeadersSchema = idempotencyHeadersSchema.extend({
+  'x-live-session-token': z.string().min(32).max(2048),
+});
+const liveSessionClaimsSchema = z.object({
+  type: z.enum(['overwolf-live-session', 'desktop-live-session']),
+  sub: z.uuid(),
+  kind: z.enum(['guest', 'user']),
+  ver: z.number().int().nonnegative(),
+  analysisId: z.uuid(),
+  revision: z.number().int().min(0).max(8),
+});
+const liveSessionTtlMs = 20 * 60 * 1000;
+const maximumLiveRevisions = 8;
+const maximumDesktopRevisionFrames = 24;
 
 export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZod {
   return async (app) => {
@@ -64,6 +87,86 @@ export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZo
         );
       }
     };
+    const overwolfUserRateLimit = app.createRateLimit({
+      max: 12,
+      timeWindow: '1 minute',
+      keyGenerator: request => `overwolf-user:${request.user.sub}`,
+    });
+    const overwolfIpRateLimit = app.createRateLimit({
+      max: 48,
+      timeWindow: '1 minute',
+      keyGenerator: request => `overwolf-ip:${request.ip}`,
+    });
+    const enforceOverwolfRateLimits = async (
+      request: Parameters<typeof overwolfUserRateLimit>[0]
+    ) => {
+      const userLimit = await overwolfUserRateLimit(request);
+      if (!userLimit.isAllowed && userLimit.isExceeded) {
+        throw new RateLimitError(
+          'Overwolf analysis user rate limit exceeded',
+          userLimit.ttlInSeconds
+        );
+      }
+      const ipLimit = await overwolfIpRateLimit(request);
+      if (!ipLimit.isAllowed && ipLimit.isExceeded) {
+        throw new RateLimitError(
+          'Overwolf analysis IP rate limit exceeded',
+          ipLimit.ttlInSeconds
+        );
+      }
+    };
+    const issueLiveSession = (
+      type: 'overwolf-live-session' | 'desktop-live-session',
+      accountId: string,
+      accountKind: 'guest' | 'user',
+      tokenVersion: number,
+      analysisId: string,
+      revision: number
+    ) => {
+      const expiresAt = new Date(Date.now() + liveSessionTtlMs);
+      return {
+        token: app.jwt.sign(
+          {
+            type,
+            sub: accountId,
+            kind: accountKind,
+            ver: tokenVersion,
+            analysisId,
+            revision,
+          },
+          { expiresIn: Math.floor(liveSessionTtlMs / 1000) }
+        ),
+        revision,
+        expiresAt: expiresAt.toISOString(),
+      };
+    };
+    const verifyLiveSession = (
+      token: string,
+      type: 'overwolf-live-session' | 'desktop-live-session',
+      accountId: string,
+      accountKind: 'guest' | 'user',
+      tokenVersion: number,
+      analysisId: string
+    ) => {
+      try {
+        const claims = liveSessionClaimsSchema.parse(app.jwt.verify(token));
+        if (
+          claims.sub !== accountId
+          || claims.type !== type
+          || claims.kind !== accountKind
+          || claims.ver !== tokenVersion
+          || claims.analysisId !== analysisId
+        ) {
+          throw new Error('Live session scope mismatch');
+        }
+        return claims;
+      } catch {
+        throw new UnauthorizedError(
+          'TOKEN_INVALID',
+          'The live analysis session is invalid or expired'
+        );
+      }
+    };
 
     app.post('/manual', {
       preHandler: app.authenticate,
@@ -71,7 +174,7 @@ export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZo
         tags: ['Analyses'],
         security: [{ bearerAuth: [] }],
         headers: idempotencyHeadersSchema,
-        body: draftSchema,
+        body: mobileDraftSchema,
         response: {
           200: analysisResponseSchema,
           402: errorResponseSchema,
@@ -101,6 +204,158 @@ export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZo
         throw error;
       }
       await dependencies.idempotencyService.complete(claim.id, claim.leaseToken, response);
+      return response;
+    });
+
+    app.post('/overwolf', {
+      preHandler: [app.authenticate, enforceOverwolfRateLimits],
+      config: {
+        rateLimit: false,
+      },
+      schema: {
+        tags: ['Analyses'],
+        security: [{ bearerAuth: [] }],
+        headers: idempotencyHeadersSchema,
+        body: overwolfDraftSchema,
+        response: {
+          200: overwolfAnalysisResponseSchema,
+          402: errorResponseSchema,
+          409: errorResponseSchema,
+          422: errorResponseSchema,
+          429: errorResponseSchema,
+          503: errorResponseSchema,
+        },
+      },
+    }, async (request) => {
+      const key = request.headers['idempotency-key'];
+      const claim = await dependencies.idempotencyService.claim(
+        request.user.sub,
+        'analyses.overwolf',
+        key,
+        request.body
+      );
+      if (claim.kind === 'completed') {
+        return overwolfAnalysisResponseSchema.parse(claim.response);
+      }
+
+      let response;
+      try {
+        const analysisResponse = await dependencies.analysisService.analyze(
+          request.user.sub,
+          request.body,
+          {
+            idempotencyRecordId: claim.id,
+            leaseToken: claim.leaseToken,
+            resourceId: claim.resourceId,
+          }
+        );
+        response = {
+          ...analysisResponse,
+          liveSession: issueLiveSession(
+            'overwolf-live-session',
+            request.user.sub,
+            request.user.kind,
+            request.user.ver,
+            analysisResponse.analysis.id,
+            0
+          ),
+        };
+      } catch (error) {
+        if (!(error instanceof AnalysisConsistencyError)) {
+          await dependencies.idempotencyService.abort(claim.id, claim.leaseToken);
+        }
+        throw error;
+      }
+      await dependencies.idempotencyService.complete(
+        claim.id,
+        claim.leaseToken,
+        response
+      );
+      return response;
+    });
+
+    app.put('/overwolf/:id', {
+      preHandler: [app.authenticate, enforceOverwolfRateLimits],
+      config: {
+        rateLimit: false,
+      },
+      schema: {
+        tags: ['Analyses'],
+        security: [{ bearerAuth: [] }],
+        headers: liveRevisionHeadersSchema,
+        params: z.object({ id: z.uuid() }),
+        body: overwolfDraftSchema,
+        response: {
+          200: overwolfAnalysisResponseSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+          409: errorResponseSchema,
+          422: errorResponseSchema,
+          429: errorResponseSchema,
+          503: errorResponseSchema,
+        },
+      },
+    }, async (request) => {
+      const claims = verifyLiveSession(
+        request.headers['x-live-session-token'],
+        'overwolf-live-session',
+        request.user.sub,
+        request.user.kind,
+        request.user.ver,
+        request.params.id
+      );
+      if (claims.revision >= maximumLiveRevisions) {
+        throw new RateLimitError('Overwolf live revision limit reached', 0);
+      }
+      const key = request.headers['idempotency-key'];
+      const claim = await dependencies.idempotencyService.claim(
+        request.user.sub,
+        'analyses.overwolf.revision',
+        key,
+        {
+          analysisId: request.params.id,
+          revision: claims.revision,
+          draft: request.body,
+        }
+      );
+      if (claim.kind === 'completed') {
+        return overwolfAnalysisResponseSchema.parse(claim.response);
+      }
+
+      let response;
+      try {
+        const revisionResponse = await dependencies.analysisService.reviseOverwolf(
+          request.user.sub,
+          request.params.id,
+          claims.revision,
+          request.body,
+          {
+            idempotencyRecordId: claim.id,
+            leaseToken: claim.leaseToken,
+            resourceId: claim.resourceId,
+          }
+        );
+        const { revision, ...analysisResponse } = revisionResponse;
+        response = {
+          ...analysisResponse,
+          liveSession: issueLiveSession(
+            'overwolf-live-session',
+            request.user.sub,
+            request.user.kind,
+            request.user.ver,
+            request.params.id,
+            revision
+          ),
+        };
+      } catch (error) {
+        await dependencies.idempotencyService.abort(claim.id, claim.leaseToken);
+        throw error;
+      }
+      await dependencies.idempotencyService.complete(
+        claim.id,
+        claim.leaseToken,
+        response
+      );
       return response;
     });
 
@@ -224,6 +479,8 @@ export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZo
           mimeType: upload.mimeType,
           position: request.query.position,
           autoPosition: request.query.autoPosition,
+          allyGroup: request.query.allyGroup ?? null,
+          orientationSource: request.query.orientationSource ?? null,
           rank: request.query.rank ?? null,
           revision: request.query.revision,
         },
@@ -246,6 +503,8 @@ export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZo
             sessionId: request.query.sessionId,
             position: request.query.position,
             autoPosition: request.query.autoPosition,
+            allyGroup: request.query.allyGroup ?? null,
+            orientationSource: request.query.orientationSource ?? null,
             rank: request.query.rank ?? null,
           },
         );
@@ -289,7 +548,17 @@ export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZo
           upload,
           dependencies.photoAdapter,
           dependencies.metaAdapter,
-          request.query.autoPosition ? { detectPosition: true } : undefined,
+          {
+            detectPosition: request.query.autoPosition,
+            ...(request.query.allyGroup
+              ? {
+                allyGroup: request.query.allyGroup,
+                ...(request.query.orientationSource
+                  ? { orientationSource: request.query.orientationSource }
+                  : {}),
+              }
+              : {}),
+          },
         );
         const decision = createDesktopDraft(
           recognition,
@@ -344,6 +613,14 @@ export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZo
             recognition: completedRecognition,
             analysis: analyzed.analysis,
             quota: analyzed.quota,
+            liveSession: issueLiveSession(
+              'desktop-live-session',
+              request.user.sub,
+              request.user.kind,
+              request.user.ver,
+              analyzed.analysis.id,
+              0,
+            ),
           };
           await dependencies.idempotencyService.complete(
             sessionClaim.id,
@@ -364,6 +641,188 @@ export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZo
             frameClaim.leaseToken,
           );
         }
+        throw error;
+      }
+
+      await dependencies.idempotencyService.complete(
+        frameClaim.id,
+        frameClaim.leaseToken,
+        response,
+      );
+      return desktopAnalysisResponseSchema.parse(response);
+    });
+
+    app.put('/desktop/:id', {
+      preHandler: [
+        app.authenticate,
+        enforceDesktopRateLimits,
+      ],
+      config: {
+        rateLimit: false,
+      },
+      schema: {
+        tags: ['Analyses'],
+        consumes: ['multipart/form-data'],
+        security: [{ bearerAuth: [] }],
+        headers: liveRevisionHeadersSchema,
+        params: z.object({ id: z.uuid() }),
+        querystring: desktopAnalysisQuerySchema,
+        response: {
+          200: desktopAnalysisResponseSchema,
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+          402: errorResponseSchema,
+          404: errorResponseSchema,
+          409: errorResponseSchema,
+          413: errorResponseSchema,
+          415: errorResponseSchema,
+          422: errorResponseSchema,
+          429: errorResponseSchema,
+          503: errorResponseSchema,
+        },
+      },
+    }, async (request) => {
+      const claims = verifyLiveSession(
+        request.headers['x-live-session-token'],
+        'desktop-live-session',
+        request.user.sub,
+        request.user.kind,
+        request.user.ver,
+        request.params.id,
+      );
+      const upload = await readDraftImageUpload(
+        request,
+        dependencies.config.maxImageBytes,
+      );
+      const key = request.headers['idempotency-key'];
+      const frameEndpoint = `analyses.desktop.revision.frame:${request.params.id}`;
+      const frameClaim = await dependencies.idempotencyService.claim(
+        request.user.sub,
+        frameEndpoint,
+        key,
+        {
+          analysisId: request.params.id,
+          liveRevision: claims.revision,
+          sessionId: request.query.sessionId,
+          frameHash: upload.frameHash,
+          mimeType: upload.mimeType,
+          position: request.query.position,
+          autoPosition: request.query.autoPosition,
+          allyGroup: request.query.allyGroup ?? null,
+          orientationSource: request.query.orientationSource ?? null,
+          rank: request.query.rank ?? null,
+          revision: request.query.revision,
+        },
+      );
+      if (frameClaim.kind === 'completed') {
+        return desktopAnalysisResponseSchema.parse(frameClaim.response);
+      }
+
+      const recognitionCount = await dependencies.idempotencyService.countActive(
+        request.user.sub,
+        frameEndpoint,
+      );
+      if (recognitionCount > maximumDesktopRevisionFrames) {
+        await dependencies.idempotencyService.abort(
+          frameClaim.id,
+          frameClaim.leaseToken,
+        );
+        throw new AppError(
+          429,
+          'RATE_LIMITED',
+          'Desktop live frame budget is exhausted',
+          { limit: maximumDesktopRevisionFrames },
+        );
+      }
+
+      let response;
+      try {
+        const recognition = await recognizeDraftImage(
+          upload,
+          dependencies.photoAdapter,
+          dependencies.metaAdapter,
+          {
+            detectPosition: request.query.autoPosition,
+            ...(request.query.allyGroup
+              ? {
+                  allyGroup: request.query.allyGroup,
+                  ...(request.query.orientationSource
+                    ? { orientationSource: request.query.orientationSource }
+                    : {}),
+                }
+              : {}),
+          },
+        );
+        const decision = createDesktopDraft(
+          recognition,
+          resolveDesktopPosition(
+            recognition,
+            request.query.position,
+            request.query.autoPosition,
+          ),
+          request.query.rank,
+        );
+        const revisionResponse = await dependencies.analysisService.reviseDesktop(
+          request.user.sub,
+          request.params.id,
+          claims.revision,
+          decision.status === 'ready' ? decision.draft : null,
+          {
+            idempotencyRecordId: frameClaim.id,
+            leaseToken: frameClaim.leaseToken,
+            resourceId: frameClaim.resourceId,
+          },
+          maximumLiveRevisions,
+        );
+
+        if (decision.status === 'waiting') {
+          response = {
+            status: 'waiting' as const,
+            reason: decision.reason,
+            revision: request.query.revision,
+            frameHash: upload.frameHash,
+            recognition,
+            quota: revisionResponse.quota,
+          };
+        } else {
+          const analysisPosition = revisionResponse.analysis.input.position;
+          const completedRecognition = request.query.autoPosition
+            ? {
+                ...recognition,
+                detectedPosition: (
+                  analysisPosition !== request.query.position
+                  || recognition.detectedPosition === analysisPosition
+                )
+                  ? analysisPosition
+                  : null,
+              }
+            : recognition;
+          response = {
+            status: 'completed' as const,
+            revision: request.query.revision,
+            frameHash: upload.frameHash,
+            recognition: completedRecognition,
+            analysis: revisionResponse.analysis,
+            quota: revisionResponse.quota,
+            ...(revisionResponse.changed
+              ? {
+                  liveSession: issueLiveSession(
+                    'desktop-live-session',
+                    request.user.sub,
+                    request.user.kind,
+                    request.user.ver,
+                    request.params.id,
+                    revisionResponse.revision,
+                  ),
+                }
+              : {}),
+          };
+        }
+      } catch (error) {
+        await dependencies.idempotencyService.abort(
+          frameClaim.id,
+          frameClaim.leaseToken,
+        );
         throw error;
       }
 

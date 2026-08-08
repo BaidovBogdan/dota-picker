@@ -7,15 +7,26 @@ import {
   CheckCircle,
   Clock,
   CrosshairSimple,
+  DownloadSimple,
+  Eye,
+  Info,
   Lightning,
   Monitor,
+  Plug,
   Power,
+  Radio,
   ShieldCheck,
   Sword,
   Target,
 } from '@phosphor-icons/react';
 import { Link, useNavigate } from 'react-router';
-import { useEffect, useRef, useState } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type RefObject,
+} from 'react';
 
 import { desktop } from '../bridge';
 import { AnimatedText } from '../components/animated-text';
@@ -26,7 +37,93 @@ import { useI18n } from '../i18n';
 import { StatusScrub } from '../components/motion';
 import { AsyncState, Button, HeroIcon, Panel, TextLink } from '../components/ui';
 import { useAppStore } from '../store';
-import type { EngineState } from '../types';
+import type { AssistantMode, EngineState, OverwolfBridgeState } from '../types';
+import {
+  assistantModeOptionA11y,
+  focusAssistantModeOption,
+  resolveAssistantModeNavigation,
+} from '../../shared/assistant-mode-control';
+import { activateOverwolfLive } from '../../shared/overwolf-connect-flow';
+
+const focusableSelector = [
+  'a[href]',
+  'button:not([disabled])',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(',');
+
+function focusableElements(container: HTMLElement) {
+  return [...container.querySelectorAll<HTMLElement>(focusableSelector)]
+    .filter((element) => !element.hasAttribute('hidden'));
+}
+
+function useDialogAccessibility(open: boolean, dialogRef: RefObject<HTMLElement | null>) {
+  useEffect(() => {
+    if (!open || !dialogRef.current) return;
+    const dialog = dialogRef.current;
+    const restoreFocus = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    const backdrop = dialog.closest<HTMLElement>('.modal-backdrop');
+    const hiddenSiblings = new Map<HTMLElement, { inert: boolean; ariaHidden: string | null }>();
+    let branch: HTMLElement | null = backdrop;
+    while (branch?.parentElement) {
+      for (const sibling of branch.parentElement.children) {
+        if (sibling === branch || !(sibling instanceof HTMLElement)) continue;
+        hiddenSiblings.set(sibling, {
+          inert: sibling.hasAttribute('inert'),
+          ariaHidden: sibling.getAttribute('aria-hidden'),
+        });
+        sibling.setAttribute('inert', '');
+        sibling.setAttribute('aria-hidden', 'true');
+      }
+      branch = branch.parentElement;
+    }
+    const frame = requestAnimationFrame(() => {
+      (focusableElements(dialog)[0] ?? dialog).focus();
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      for (const [element, previous] of hiddenSiblings) {
+        if (!previous.inert) element.removeAttribute('inert');
+        if (previous.ariaHidden === null) element.removeAttribute('aria-hidden');
+        else element.setAttribute('aria-hidden', previous.ariaHidden);
+      }
+      restoreFocus?.focus();
+    };
+  }, [dialogRef, open]);
+}
+
+function handleDialogKeyDown(
+  event: ReactKeyboardEvent<HTMLElement>,
+  pending: boolean,
+  close: () => void,
+) {
+  if (event.key === 'Escape' && !pending) {
+    event.preventDefault();
+    close();
+    return;
+  }
+  if (event.key !== 'Tab') return;
+  const focusable = focusableElements(event.currentTarget);
+  if (focusable.length === 0) {
+    event.preventDefault();
+    event.currentTarget.focus();
+    return;
+  }
+  const first = focusable[0]!;
+  const last = focusable.at(-1)!;
+  const active = document.activeElement;
+  if (event.shiftKey && (active === first || !event.currentTarget.contains(active))) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && active === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
 
 export function DashboardPage() {
   const account = useAppStore((state) => state.account);
@@ -34,10 +131,14 @@ export function DashboardPage() {
   const preferences = useAppStore((state) => state.preferences);
   const setPreferences = useAppStore((state) => state.setPreferences);
   const [consentOpen, setConsentOpen] = useState(false);
+  const [overwolfConsentOpen, setOverwolfConsentOpen] = useState(false);
   const consentRef = useRef<HTMLElement>(null);
+  const overwolfConsentRef = useRef<HTMLElement>(null);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { language, locale, text } = useI18n();
+  useDialogAccessibility(consentOpen, consentRef);
+  useDialogAccessibility(overwolfConsentOpen, overwolfConsentRef);
 
   const quotaQuery = useQuery({
     queryKey: ['quota'],
@@ -49,12 +150,37 @@ export function DashboardPage() {
     queryKey: ['history', 'dashboard'],
     queryFn: () => desktop.data.history({ limit: 6 }),
   });
+  const overwolfQuery = useQuery({
+    queryKey: ['overwolf-bridge'],
+    queryFn: desktop.overwolf.getState,
+    staleTime: Number.POSITIVE_INFINITY,
+  });
 
   const toggleMutation = useMutation({
     mutationFn: desktop.engine.setEnabled,
   });
   const retryMutation = useMutation({
     mutationFn: desktop.engine.retry,
+  });
+  const modeMutation = useMutation({
+    mutationFn: (assistantMode: AssistantMode) => desktop.preferences.update({ assistantMode }),
+    onSuccess: setPreferences,
+  });
+  const overwolfConnectMutation = useMutation({
+    mutationFn: async (consentAcceptedAt?: string) => activateOverwolfLive({
+      consentAcceptedAt,
+      updatePreferences: desktop.preferences.update,
+      setEnabled: desktop.engine.setEnabled,
+      connect: desktop.overwolf.connect,
+    }),
+    onSuccess: ({ preferences: nextPreferences, bridge }) => {
+      setPreferences(nextPreferences);
+      queryClient.setQueryData(['overwolf-bridge'], bridge);
+      setOverwolfConsentOpen(false);
+    },
+  });
+  const overwolfInstallMutation = useMutation({
+    mutationFn: desktop.overwolf.openInstaller,
   });
   const consentMutation = useMutation({
     mutationFn: async () => {
@@ -86,6 +212,20 @@ export function DashboardPage() {
     latestAnalysisId: null,
     lastSeenAt: null,
     dotaDetected: false,
+  };
+  const assistantMode = preferences?.assistantMode ?? 'vision';
+  const modeInteractionBlocked = modeMutation.isPending || !preferences;
+  const overwolfState: OverwolfBridgeState = overwolfQuery.data ?? {
+    phase: 'stopped',
+    configured: false,
+    protocolVersion: 1,
+    port: null,
+    connectedAt: null,
+    lastMessageAt: null,
+    lastError: null,
+    companionVersion: null,
+    gameDetected: false,
+    draftActive: false,
   };
   const status = phaseCopy(currentEngine.phase, language);
   const engineMessage = currentEngine.message
@@ -120,8 +260,12 @@ export function DashboardPage() {
       )
     : gameSignalMode === 'off'
       ? text(
-          'Включите ассистента, чтобы начать отслеживание окна игры',
-          'Turn on the assistant to start watching for the game window',
+          assistantMode === 'overwolf'
+            ? 'Включите ассистента, чтобы получать точные события драфта'
+            : 'Включите ассистента, чтобы начать отслеживание окна игры',
+          assistantMode === 'overwolf'
+            ? 'Turn on the assistant to receive exact draft events'
+            : 'Turn on the assistant to start watching for the game window',
         )
     : gameSignalMode === 'detected'
       ? text(
@@ -132,6 +276,22 @@ export function DashboardPage() {
           'Запустите игру — повторно включать ассистента не нужно',
           'Launch the game — you do not need to enable the assistant again',
         );
+  const overwolfPhaseCopy = (() => {
+    switch (overwolfState.phase) {
+      case 'connected':
+        return text('Подключён', 'Connected');
+      case 'pairing':
+        return text('Открываем companion', 'Opening companion');
+      case 'listening':
+        return text('Готов к подключению', 'Ready to connect');
+      case 'stale':
+        return text('Переподключаемся', 'Reconnecting');
+      case 'error':
+        return text('Нужна проверка', 'Needs attention');
+      default:
+        return text('Не подключён', 'Not connected');
+    }
+  })();
   const gameSignalCopy = (
     <>
       <strong>
@@ -150,28 +310,60 @@ export function DashboardPage() {
     </>
   );
 
-  useEffect(() => {
-    if (currentEngine.phase !== 'ready' || !currentEngine.latestAnalysisId) return;
-    void Promise.all([
-      queryClient.invalidateQueries({ queryKey: ['quota'] }),
-      queryClient.invalidateQueries({ queryKey: ['history'] }),
-    ]);
-  }, [currentEngine.latestAnalysisId, currentEngine.phase, queryClient]);
-
-  useEffect(() => {
-    if (consentOpen) consentRef.current?.focus();
-  }, [consentOpen]);
+  useEffect(() => desktop.overwolf.subscribe((state) => {
+    queryClient.setQueryData(['overwolf-bridge'], state);
+  }), [queryClient]);
 
   const onToggle = (enabled: boolean) => {
     if (quotaExhausted && enabled) {
       navigate('/profile?section=plan');
       return;
     }
-    if (enabled && !preferences?.captureConsent.accepted) {
+    if (
+      enabled
+      && assistantMode === 'vision'
+      && !preferences?.captureConsent.accepted
+    ) {
       setConsentOpen(true);
       return;
     }
+    if (
+      enabled
+      && assistantMode === 'overwolf'
+      && !preferences?.overwolfConsent.accepted
+    ) {
+      setOverwolfConsentOpen(true);
+      return;
+    }
     toggleMutation.mutate(enabled);
+  };
+
+  const selectAssistantMode = (mode: AssistantMode) => {
+    if (mode === assistantMode || modeInteractionBlocked) return;
+    modeMutation.mutate(mode, {
+      onSuccess: () => {
+        if (mode === 'overwolf' && currentEngine.enabled && !preferences?.overwolfConsent.accepted) {
+          setOverwolfConsentOpen(true);
+        }
+      },
+    });
+  };
+
+  const handleModeKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    const nextMode = resolveAssistantModeNavigation(event.key);
+    if (!nextMode) return;
+    event.preventDefault();
+    if (modeInteractionBlocked) return;
+    focusAssistantModeOption(event.currentTarget.parentElement, nextMode);
+    selectAssistantMode(nextMode);
+  };
+
+  const connectOverwolf = () => {
+    if (!preferences?.overwolfConsent.accepted) {
+      setOverwolfConsentOpen(true);
+      return;
+    }
+    overwolfConnectMutation.mutate(undefined);
   };
 
   if (quotaQuery.isError && historyQuery.isError) {
@@ -221,7 +413,9 @@ export function DashboardPage() {
             </div>
             <span className="controller-card__local">
               <ShieldCheck size={17} weight="duotone" aria-hidden />
-              {text('Только окно Dota 2', 'Dota 2 window only')}
+              {assistantMode === 'overwolf'
+                ? text('Точные события, локальный канал', 'Exact events, local channel')
+                : text('Кадр + локальный GSI', 'Frame + local GSI')}
             </span>
           </div>
           <div className="controller-card__content">
@@ -366,6 +560,40 @@ export function DashboardPage() {
             <span>{text('Сигнал игры', 'Game signal')}</span>
             <Broadcast size={21} weight="duotone" aria-hidden />
           </div>
+          <div
+            className="assistant-mode-switch"
+            role="radiogroup"
+            aria-label={text('Способ распознавания драфта', 'Draft detection method')}
+            aria-busy={modeMutation.isPending}
+            data-mode={assistantMode}
+          >
+            <span className="assistant-mode-switch__indicator" aria-hidden />
+            <button
+              type="button"
+              role="radio"
+              {...assistantModeOptionA11y('vision', assistantMode, modeInteractionBlocked)}
+              data-assistant-mode="vision"
+              className={assistantMode === 'vision' ? 'is-active' : ''}
+              onClick={() => selectAssistantMode('vision')}
+              onKeyDown={handleModeKeyDown}
+            >
+              <Eye size={15} weight="duotone" aria-hidden />
+              <span>Draft Vision</span>
+            </button>
+            <button
+              type="button"
+              role="radio"
+              {...assistantModeOptionA11y('overwolf', assistantMode, modeInteractionBlocked)}
+              data-assistant-mode="overwolf"
+              className={assistantMode === 'overwolf' ? 'is-active' : ''}
+              onClick={() => selectAssistantMode('overwolf')}
+              onKeyDown={handleModeKeyDown}
+            >
+              <Radio size={15} weight="duotone" aria-hidden />
+              <span>Overwolf Live</span>
+              <i data-state={overwolfState.phase} aria-hidden />
+            </button>
+          </div>
           {gameSignalMode === 'off' ? (
             <div
               className={`system-card__signal system-card__signal--compact ${gameSignalUnavailable ? 'system-card__signal--error' : ''}`}
@@ -387,8 +615,12 @@ export function DashboardPage() {
               <dd>{formatRelative(currentEngine.lastSeenAt, language)}</dd>
             </div>
             <div>
-              <dt>{text('Захват', 'Capture')}</dt>
-              <dd>{text('Только окно игры', 'Game window only')}</dd>
+              <dt>{assistantMode === 'overwolf' ? text('Канал', 'Channel') : text('Сигналы', 'Signals')}</dt>
+              <dd>
+                {assistantMode === 'overwolf'
+                  ? overwolfPhaseCopy
+                  : text('Кадр + фаза/команда', 'Frame + phase/team')}
+              </dd>
             </div>
           </dl>
         </Panel>
@@ -478,6 +710,125 @@ export function DashboardPage() {
             <ArrowSquareOut size={17} weight="duotone" aria-hidden />
           </Link>
         </Panel>
+
+        <Panel className="mode-comparison-card" data-reveal>
+          <div className="mode-comparison-card__heading">
+            <div>
+              <span>{text('Два способа видеть драфт', 'Two ways to read the draft')}</span>
+              <strong>{text('Выберите источник под свою игру', 'Choose the source that fits your setup')}</strong>
+            </div>
+            <small>{text('Оба режима обновляют расчёт автоматически', 'Both modes update the result automatically')}</small>
+          </div>
+          <div className="mode-comparison-grid">
+            <article data-active={assistantMode === 'vision'}>
+              <header>
+                <span className="mode-comparison-card__icon"><Eye size={20} weight="duotone" aria-hidden /></span>
+                <div>
+                  <strong>Draft Vision</strong>
+                  <small>{text('Встроено в Counterpick', 'Built into Counterpick')}</small>
+                </div>
+                <span className="mode-comparison-card__choice">
+                  {assistantMode === 'vision' ? text('Выбрано', 'Selected') : text('Доступно', 'Available')}
+                </span>
+              </header>
+              <p>
+                {text(
+                  'Автоматически проверяет новые пики по существенно изменившимся кадрам окна Dota 2, а локальный GSI сообщает фазу драфта и команду игрока. Работает без дополнительной платформы.',
+                  'Automatically checks for new picks when the Dota 2 window image changes substantially, while local GSI supplies the draft phase and player team. It needs no extra platform.',
+                )}
+              </p>
+              <div className="mode-comparison-card__terms">
+                <TermTooltip
+                  term={text('Распознавание кадра', 'Frame recognition')}
+                  explanation={text(
+                    'Кадр уходит в API, когда изображение окна существенно изменилось, чтобы проверить новые пики; одинаковые кадры не отправляются. Сервер обрабатывает кадр в памяти: сначала сопоставляет портреты локально, а при низкой уверенности может передать выделенную область драфта настроенному внешнему провайдеру распознавания. Исходник не сохраняется.',
+                    'A frame goes to the API when the window image changes substantially so it can check for new picks; identical frames are not sent. The server processes the frame in memory, first matching portraits locally and, when confidence is low, may send the extracted draft region to the configured external recognition provider. The source image is not stored.',
+                  )}
+                />
+                <span>{text('Без Overwolf', 'No Overwolf needed')}</span>
+              </div>
+            </article>
+            <article data-active={assistantMode === 'overwolf'}>
+              <header>
+                <span className="mode-comparison-card__icon"><Radio size={20} weight="duotone" aria-hidden /></span>
+                <div>
+                  <strong>Overwolf Live</strong>
+                  <small>{text('Точные игровые события', 'Exact game events')}</small>
+                </div>
+                <span className="mode-comparison-card__choice" data-state={overwolfState.phase}>
+                  {overwolfPhaseCopy}
+                </span>
+              </header>
+              <p>
+                {text(
+                  'Автоматически обновляет расчёт по точным событиям Overwolf без скриншотов. Локальный bridge передаёт ID героев в Counterpick, затем нормализованный драфт отправляется в Counterpick API.',
+                  'Automatically updates the result from exact Overwolf events without screenshots. A local bridge passes hero IDs to Counterpick, then the normalized draft is sent to the Counterpick API.',
+                )}
+              </p>
+              <div className="mode-comparison-card__terms">
+                <TermTooltip
+                  term="GEP"
+                  explanation={text(
+                    'Game Events Provider — официальный канал Overwolf для событий поддерживаемой игры.',
+                    'Game Events Provider is Overwolf’s official channel for supported-game events.',
+                  )}
+                />
+                <TermTooltip
+                  term={text('Локальный bridge', 'Local bridge')}
+                  explanation={text(
+                    'Защищённое соединение только через 127.0.0.1; данные не доступны другим устройствам.',
+                    'An authenticated 127.0.0.1-only connection that is unavailable to other devices.',
+                  )}
+                />
+                <span>{text('Без скриншотов', 'No screenshots')}</span>
+              </div>
+              <div className="mode-comparison-card__actions">
+                <Button
+                  variant="secondary"
+                  className="mode-comparison-card__button"
+                  loading={overwolfConnectMutation.isPending}
+                  disabled={overwolfState.phase === 'connected' || overwolfState.phase === 'pairing'}
+                  onClick={connectOverwolf}
+                >
+                  <Plug size={16} weight="duotone" aria-hidden />
+                  {overwolfState.phase === 'connected'
+                    ? text('Подключено', 'Connected')
+                    : text('Подключить', 'Connect')}
+                </Button>
+                <Button
+                  variant="quiet"
+                  className="mode-comparison-card__button"
+                  loading={overwolfInstallMutation.isPending}
+                  disabled={!overwolfState.configured}
+                  title={!overwolfState.configured
+                    ? text('Ссылка станет доступна после проверки Overwolf', 'Available after Overwolf review')
+                    : undefined}
+                  onClick={() => overwolfInstallMutation.mutate()}
+                >
+                  <DownloadSimple size={16} weight="duotone" aria-hidden />
+                  {text('Официальная установка', 'Official install')}
+                </Button>
+              </div>
+              {!overwolfState.configured ? (
+                <small className="mode-comparison-card__release-note">
+                  <Info size={14} weight="duotone" aria-hidden />
+                  {text(
+                    'Установка откроется после публикации companion в Overwolf Appstore.',
+                    'Installation becomes available after the companion is published in the Overwolf Appstore.',
+                  )}
+                </small>
+              ) : null}
+              {overwolfState.lastError || overwolfConnectMutation.isError || overwolfInstallMutation.isError ? (
+                <small className="mode-comparison-card__error" role="alert">
+                  {overwolfState.lastError ?? text(
+                    'Не удалось выполнить действие. Проверьте Overwolf и повторите.',
+                    'The action failed. Check Overwolf and try again.',
+                  )}
+                </small>
+              ) : null}
+            </article>
+          </div>
+        </Panel>
       </div>
 
       <section className="dashboard-section" data-reveal>
@@ -546,7 +897,7 @@ export function DashboardPage() {
             ref={consentRef}
             tabIndex={-1}
             onKeyDown={(event) => {
-              if (event.key === 'Escape' && !consentMutation.isPending) setConsentOpen(false);
+              handleDialogKeyDown(event, consentMutation.isPending, () => setConsentOpen(false));
             }}
           >
             <span className="consent-dialog__icon">
@@ -556,18 +907,25 @@ export function DashboardPage() {
               {text('Перед первым запуском', 'Before the first launch')}
             </p>
             <h2 id="capture-consent-title">
-              {text('Разрешить захват окна Dota 2?', 'Allow Dota 2 window capture?')}
+              {text('Разрешить Draft Vision?', 'Allow Draft Vision?')}
             </h2>
             <p>
               {text(
-                'Counterpick делает снимок только в момент драфта, отправляет его на распознавание и не сохраняет исходное изображение в истории.',
-                'Counterpick captures an image only during the draft, sends it for recognition, and does not save the source image to history.',
+                'Counterpick использует кадр окна Dota 2 и локальный GSI-сигнал фазы и команды. Кадр отправляется в API, когда изображение окна существенно изменилось, чтобы проверить новые пики; одинаковые кадры не отправляются, исходник не сохраняется.',
+                'Counterpick uses a Dota 2 window frame plus a local GSI phase/team signal. A frame goes to the API when the window image changes substantially so it can check for new picks; identical frames are not sent, and the source image is not stored.',
               )}
             </p>
             <ul>
               <li>
                 <CheckCircle size={17} weight="duotone" aria-hidden />
-                {text('Другие окна не анализируются', 'Other windows are not analyzed')}
+                {text(
+                  'Dota может включить Steam ID, имена и другие поля в локальный GSI; Counterpick извлекает фазу и команду, а остальное сразу отбрасывает, не отправляет и не сохраняет',
+                  'Dota may include Steam IDs, names, and other fields in local GSI; Counterpick extracts phase and team, then immediately discards the rest without sending or storing it',
+                )}
+              </li>
+              <li>
+                <CheckCircle size={17} weight="duotone" aria-hidden />
+                {text('Память игры и другие окна не анализируются', 'Game memory and other windows are not analyzed')}
               </li>
               <li>
                 <CheckCircle size={17} weight="duotone" aria-hidden />
@@ -579,8 +937,15 @@ export function DashboardPage() {
               <li>
                 <CheckCircle size={17} weight="duotone" aria-hidden />
                 {text(
-                  'В историю попадает только результат расчёта',
-                  'Only the calculated result is saved to history',
+                  'Сервер обрабатывает кадр в памяти; при низкой уверенности выделенная область драфта может уйти настроенному внешнему провайдеру распознавания',
+                  'The server processes the frame in memory; when confidence is low, the extracted draft region may go to the configured external recognition provider',
+                )}
+              </li>
+              <li>
+                <CheckCircle size={17} weight="duotone" aria-hidden />
+                {text(
+                  'Исходный кадр не хранится; в истории остаётся только результат расчёта',
+                  'The source frame is not stored; only the calculated result remains in history',
                 )}
               </li>
             </ul>
@@ -610,7 +975,105 @@ export function DashboardPage() {
           </section>
         </div>
       ) : null}
+
+      {overwolfConsentOpen ? (
+        <div className="modal-backdrop" role="presentation">
+          <section
+            className="consent-dialog consent-dialog--overwolf"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="overwolf-consent-title"
+            ref={overwolfConsentRef}
+            tabIndex={-1}
+            onKeyDown={(event) => {
+              handleDialogKeyDown(
+                event,
+                overwolfConnectMutation.isPending,
+                () => setOverwolfConsentOpen(false),
+              );
+            }}
+          >
+            <span className="consent-dialog__icon">
+              <Radio size={25} weight="duotone" aria-hidden />
+            </span>
+            <p className="consent-dialog__lead">
+              {text('Отдельный видимый companion', 'A separate visible companion')}
+            </p>
+            <h2 id="overwolf-consent-title">
+              {text('Подключить Overwolf Live?', 'Connect Overwolf Live?')}
+            </h2>
+            <p>
+              {text(
+                'Counterpick Live получает события выбора героев через Overwolf по защищённому локальному соединению. Steam ID и имена не отправляются; ID героев, стороны, позиция, баны и выбранный ранг передаются в Counterpick API для расчёта, а результат сохраняется в истории аккаунта.',
+                'Counterpick Live receives hero-selection events through an authenticated local connection. Steam IDs and names are not sent; hero IDs, sides, position, bans, and selected rank go to the Counterpick API for calculation, and the result is saved in account history.',
+              )}
+            </p>
+            <ul>
+              <li>
+                <CheckCircle size={17} weight="duotone" aria-hidden />
+                {text('Скриншоты и чтение памяти игры не используются', 'No screenshots or game-memory reading')}
+              </li>
+              <li>
+                <CheckCircle size={17} weight="duotone" aria-hidden />
+                {text(
+                  'Steam ID и имена остаются внутри companion; в API уходят только данные драфта',
+                  'Steam IDs and names stay inside the companion; only draft data goes to the API',
+                )}
+              </li>
+              <li>
+                <CheckCircle size={17} weight="duotone" aria-hidden />
+                {text(
+                  'Dota 2 требует параметр запуска -gamestateintegration',
+                  'Dota 2 requires the -gamestateintegration launch option',
+                )}
+              </li>
+              <li>
+                <CheckCircle size={17} weight="duotone" aria-hidden />
+                {text(
+                  'Установка Overwolf открывается отдельно и всегда требует вашего подтверждения условий',
+                  'Overwolf installation opens separately and always requires your agreement to its terms',
+                )}
+              </li>
+            </ul>
+            {overwolfConnectMutation.isError ? (
+              <p className="form-error" role="alert">
+                {text(
+                  'Не удалось сохранить разрешение. Попробуйте ещё раз.',
+                  'Could not save your permission. Try again.',
+                )}
+              </p>
+            ) : null}
+            <div className="consent-dialog__actions">
+              <Button
+                variant="secondary"
+                disabled={overwolfConnectMutation.isPending}
+                onClick={() => setOverwolfConsentOpen(false)}
+              >
+                {text('Не сейчас', 'Not now')}
+              </Button>
+              <Button
+                loading={overwolfConnectMutation.isPending}
+                onClick={() => overwolfConnectMutation.mutate(new Date().toISOString())}
+              >
+                {text('Разрешить и включить', 'Allow and enable')}
+              </Button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </main>
+  );
+}
+
+function TermTooltip({ term, explanation }: { term: string; explanation: string }) {
+  return (
+    <span className="term-tooltip" tabIndex={0} aria-label={`${term}: ${explanation}`}>
+      <span>
+        {term}
+        <Info size={12} weight="duotone" aria-hidden />
+      </span>
+      <span className="term-tooltip__bubble" role="tooltip">{explanation}</span>
+    </span>
   );
 }
 

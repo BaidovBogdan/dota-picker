@@ -14,7 +14,7 @@ function IntegrationList({ items, tone }: { items: AdminSystemItem[]; tone: 'pos
             {tone === 'positive' ? <CheckCircle2 size={18} /> : tone === 'warning' ? <CircleDashed size={18} /> : <LockKeyhole size={18} />}
           </span>
           <div><strong>{item.name}</strong><p>{item.detail}</p>{item.reason ? <small>{item.reason}</small> : null}</div>
-          <StatusBadge tone={tone}>{tone === 'positive' ? 'Подключено' : tone === 'warning' ? 'Можно подключить' : 'Нужны данные'}</StatusBadge>
+          <StatusBadge tone={tone}>{tone === 'positive' ? 'Подключено' : tone === 'warning' ? 'Можно подключить' : 'Не подключено'}</StatusBadge>
           {item.missing.length ? <ul>{item.missing.map((requirement) => <li key={requirement}>{requirement}</li>)}</ul> : null}
         </article>
       ))}
@@ -35,12 +35,12 @@ export function SystemPage({ resource, onRetry }: { resource: PageResource<Admin
 
       <div className="system-summary-grid">
         <Panel><span><Server size={18} /></span><div><small>API</small><strong>{system.summary.api.status === 'connected' ? 'Подключён' : system.summary.api.status}</strong></div></Panel>
-        <Panel><span><Database size={18} /></span><div><small>Database</small><strong>{system.summary.database.status === 'connected' ? `Подключена · ${system.summary.database.latencyMs} мс` : 'Недоступна'}</strong></div></Panel>
-        <Panel><span><Link2 size={18} /></span><div><small>Интеграции</small><strong>{system.summary.connected} подключено · {system.summary.connectable} готовы</strong></div></Panel>
+        <Panel><span><Database size={18} /></span><div><small>База данных</small><strong>{system.summary.database.status === 'connected' ? `Подключена · ${system.summary.database.latencyMs} мс` : 'Недоступна'}</strong></div></Panel>
+        <Panel><span><Link2 size={18} /></span><div><small>Интеграции</small><strong>Подключено: {system.summary.connected} · готовы: {system.summary.connectable}</strong></div></Panel>
       </div>
 
       <section className="system-audit-group">
-        <div className="system-audit-group__heading"><div><span className="system-audit-group__icon system-audit-group__icon--positive"><CheckCircle2 size={19} /></span><div><h2>Подключено</h2><p>Есть рабочий код, конфигурация и реальные данные.</p></div></div><strong>{system.groups.connected.length}</strong></div>
+        <div className="system-audit-group__heading"><div><span className="system-audit-group__icon system-audit-group__icon--positive"><CheckCircle2 size={19} /></span><div><h2>Подключено</h2><p>Есть рабочий код и конфигурация; runtime-проверки указаны в деталях.</p></div></div><strong>{system.groups.connected.length}</strong></div>
         <Panel><IntegrationList items={system.groups.connected} tone="positive" /></Panel>
       </section>
 

@@ -63,6 +63,7 @@ const backendQuotaSchema = z.object({
 
 const backendRecognizedPickSchema = z.object({
   side: z.enum(['ally', 'enemy', 'unknown']),
+  visualGroup: z.enum(['left', 'right']).optional(),
   slot: z.number().int().nonnegative(),
   heroId: z.number().int().positive().nullable(),
   heroName: z.string(),
@@ -180,9 +181,9 @@ const backendRecommendationSchema = z.object({
 
 const backendAnalysisSchema = z.object({
   id: z.uuid(),
-  source: z.enum(['manual', 'photo']),
+  source: z.enum(['manual', 'photo', 'overwolf']),
   input: z.object({
-    source: z.enum(['manual', 'photo']),
+    source: z.enum(['manual', 'photo', 'overwolf']),
     position: positionSchema,
     allyHeroIds: z.array(z.number().int().positive()).max(4),
     enemyHeroIds: z.array(z.number().int().positive()).min(1).max(5),
@@ -799,6 +800,7 @@ export async function recognizePhoto(input: {
     .map((item) => ({
       heroId: item.heroId,
       name: item.localizedName ?? item.heroName,
+      ...(item.visualGroup ? { visualGroup: item.visualGroup } : {}),
       slot: item.slot,
       confidence: item.confidence,
       needsReview: item.needsReview,

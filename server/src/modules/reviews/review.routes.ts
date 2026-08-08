@@ -21,91 +21,122 @@ const adminHeadersSchema = z.object({
   'x-admin-key': z.string().min(1).optional(),
 });
 
-export function reviewRoutes(dependencies: Dependencies): FastifyPluginAsyncZod {
-  return async (app) => {
-    app.post('/analyses/:id/review', {
-      preHandler: app.authenticate,
-      schema: {
-        tags: ['Reviews'],
-        security: [{ bearerAuth: [] }],
-        params: idParamsSchema,
-        body: upsertReviewSchema,
-        response: {
-          200: reviewResponseSchema,
-          404: errorResponseSchema,
-          422: errorResponseSchema,
+export function reviewRoutes(
+  dependencies: Dependencies
+): FastifyPluginAsyncZod {
+  return async app => {
+    app.post(
+      '/analyses/:id/review',
+      {
+        preHandler: app.authenticate,
+        schema: {
+          tags: ['Reviews'],
+          security: [{ bearerAuth: [] }],
+          params: idParamsSchema,
+          body: upsertReviewSchema,
+          response: {
+            200: reviewResponseSchema,
+            404: errorResponseSchema,
+            422: errorResponseSchema,
+          },
         },
       },
-    }, async (request) => ({
-      review: await dependencies.reviewService.upsert(
-        request.user.sub,
-        request.params.id,
-        request.body,
-      ),
-    }));
+      async request => ({
+        review: await dependencies.reviewService.upsert(
+          request.user.sub,
+          request.params.id,
+          request.body
+        ),
+      })
+    );
 
-    app.get('/account/reviews', {
-      preHandler: app.authenticate,
-      schema: {
-        tags: ['Reviews'],
-        security: [{ bearerAuth: [] }],
-        querystring: accountReviewsQuerySchema,
-        response: {
-          200: accountReviewsResponseSchema,
-          422: errorResponseSchema,
+    app.get(
+      '/account/reviews',
+      {
+        preHandler: app.authenticate,
+        schema: {
+          tags: ['Reviews'],
+          security: [{ bearerAuth: [] }],
+          querystring: accountReviewsQuerySchema,
+          response: {
+            200: accountReviewsResponseSchema,
+            422: errorResponseSchema,
+          },
         },
       },
-    }, async (request) => dependencies.reviewService.listForAccount(
-      request.user.sub,
-      request.query,
-    ));
+      async request =>
+        dependencies.reviewService.listForAccount(
+          request.user.sub,
+          request.query
+        )
+    );
 
-    app.delete('/account/reviews/:id', {
-      preHandler: app.authenticate,
-      schema: {
-        tags: ['Reviews'],
-        security: [{ bearerAuth: [] }],
-        params: idParamsSchema,
-        response: {
-          200: emptyResponseSchema,
-          404: errorResponseSchema,
+    app.delete(
+      '/account/reviews/:id',
+      {
+        preHandler: app.authenticate,
+        schema: {
+          tags: ['Reviews'],
+          security: [{ bearerAuth: [] }],
+          params: idParamsSchema,
+          response: {
+            200: emptyResponseSchema,
+            404: errorResponseSchema,
+          },
         },
       },
-    }, async (request) => {
-      await dependencies.reviewService.deleteForAccount(request.user.sub, request.params.id);
-      return { success: true as const };
-    });
+      async request => {
+        await dependencies.reviewService.deleteForAccount(
+          request.user.sub,
+          request.params.id
+        );
+        return { success: true as const };
+      }
+    );
 
-    app.get('/admin/reviews', {
-      preHandler: app.authenticateAdmin,
-      schema: {
-        tags: ['Admin'],
-        security: [{ adminBearerAuth: [] }, { adminApiKey: [] }],
-        headers: adminHeadersSchema,
-        querystring: adminReviewsQuerySchema,
-        response: {
-          200: adminReviewsResponseSchema,
-          401: errorResponseSchema,
+    app.get(
+      '/admin/reviews',
+      {
+        preHandler: app.authenticateAdmin,
+        schema: {
+          tags: ['Admin'],
+          security: [{ adminBearerAuth: [] }, { adminApiKey: [] }],
+          headers: adminHeadersSchema,
+          querystring: adminReviewsQuerySchema,
+          response: {
+            200: adminReviewsResponseSchema,
+            401: errorResponseSchema,
+          },
         },
       },
-    }, async (request) => dependencies.reviewService.listForAdmin(request.query));
+      async request => dependencies.reviewService.listForAdmin(request.query)
+    );
 
-    app.delete('/admin/reviews/:id', {
-      preHandler: app.authenticateAdmin,
-      schema: {
-        tags: ['Admin'],
-        security: [{ adminBearerAuth: [] }, { adminApiKey: [] }],
-        headers: adminHeadersSchema,
-        params: idParamsSchema,
-        response: {
-          200: emptyResponseSchema,
-          401: errorResponseSchema,
-          404: errorResponseSchema,
+    app.delete(
+      '/admin/reviews/:id',
+      {
+        preHandler: app.authenticateAdmin,
+        schema: {
+          tags: ['Admin'],
+          security: [{ adminBearerAuth: [] }, { adminApiKey: [] }],
+          headers: adminHeadersSchema,
+          params: idParamsSchema,
+          response: {
+            200: emptyResponseSchema,
+            401: errorResponseSchema,
+            404: errorResponseSchema,
+          },
         },
       },
-    }, async (request) => {
-      await dependencies.reviewService.deleteForAdmin(request.params.id);
-      return { success: true as const };
-    });
+      async request => {
+        await dependencies.reviewService.deleteForAdmin(
+          request.params.id,
+          request.headers.authorization?.startsWith('Bearer ')
+            ? 'admin-session'
+            : 'legacy-admin-key'
+        );
+        return { success: true as const };
+      }
+    );
   };
 }

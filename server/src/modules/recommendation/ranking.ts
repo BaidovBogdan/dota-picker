@@ -255,7 +255,7 @@ function aggregatePairEvidence(
   let worstAdvantage = Number.POSITIVE_INFINITY;
   const evidence: RecommendationPairEvidence[] = [];
 
-  for (const value of observed) {
+  for (const value of observed.toSorted((left, right) => left.heroId - right.heroId)) {
     const weight = Math.min(50, Math.sqrt(value.games));
     games += value.games;
     rankGames += value.stat.rankGames;

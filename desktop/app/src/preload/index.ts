@@ -3,6 +3,7 @@ import type {
   DesktopBridge,
   EngineState,
   IpcResult,
+  OverwolfBridgeState,
   UpdateState,
 } from '../shared/contracts.js';
 import { IPC } from '../shared/ipc-channels.js';
@@ -85,6 +86,12 @@ const bridge: DesktopBridge = {
     check: () => invoke(IPC.updateCheck),
     downloadAndInstall: () => invoke(IPC.updateDownloadAndInstall),
     onState: (listener) => subscribe<UpdateState>(IPC.updateChanged, listener),
+  },
+  overwolf: {
+    getState: () => invoke(IPC.overwolfGetState),
+    connect: () => invoke(IPC.overwolfConnect),
+    openInstaller: () => invoke(IPC.overwolfOpenInstaller),
+    onState: (listener) => subscribe<OverwolfBridgeState>(IPC.overwolfChanged, listener),
   },
   app: {
     openExternal: (url) => invoke(IPC.appOpenExternal, url),

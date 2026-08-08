@@ -6,6 +6,8 @@ export type PhotoRecognitionResult = z.infer<typeof recognitionResponseSchema>;
 
 export type PhotoRecognitionOptions = {
   detectPosition?: boolean;
+  allyGroup?: 'left' | 'right';
+  orientationSource?: 'gsi_layout_heuristic' | 'manual_confirmation';
 };
 
 export type PhotoRecognizer = {

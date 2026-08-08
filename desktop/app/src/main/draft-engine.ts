@@ -1,9 +1,17 @@
 import { randomUUID } from 'node:crypto';
-import { desktopCapturer, type NativeImage } from 'electron';
+import type { NativeImage } from 'electron';
 import type { Analysis, EngineState, Position, Preferences } from '../shared/contracts.js';
 import type { ApiClient } from './api-client.js';
+import { isRetryableAnalysisError } from './analysis-errors.js';
 import { DesktopError } from './errors.js';
-import { GsiReceiver, type GsiPayload } from './gsi.js';
+import {
+  GsiReceiver,
+  resolveConfiguredAllyGroup,
+  resolveGsiTeam,
+  type DraftAllyGroup,
+  type GsiPayload,
+  type GsiTeam,
+} from './gsi.js';
 import type { PreferencesStore } from './preferences-store.js';
 
 const captureIntervalMs = 5_000;
@@ -13,6 +21,12 @@ const lastSeenPublishIntervalMs = 10_000;
 const windowPollIntervalsMs = [10_000, 20_000, 30_000] as const;
 const hashWatchThumbnailSize = { width: 320, height: 180 };
 const uploadThumbnailSize = { width: 1600, height: 900 };
+
+type DraftEngineOptions = {
+  captureDotaWindow?: (thumbnailSize: { width: number; height: number }) => Promise<NativeImage | null>;
+  captureIntervalMs?: number;
+  captureDebounceMs?: number;
+};
 const waitingMessages = {
   not_dota_draft: 'Не вижу экран выбора героев. Включите режим «Окно без рамки»',
   image_unclear: 'Кадр нечёткий. Откройте Dota 2 и используйте режим «Окно без рамки»',
@@ -83,17 +97,6 @@ function analysisMatchesPreferences(
   );
 }
 
-function isRetryableAnalysisError(error: unknown): boolean {
-  if (!(error instanceof DesktopError)) return false;
-  if (error.code === 'TIMEOUT' || error.code === 'NETWORK_ERROR') return true;
-  if (error.status === 429 && error.code === 'RATE_LIMITED') return false;
-  return error.status === 408
-    || error.status === 409
-    || error.status === 425
-    || error.status === 429
-    || (error.status !== null && error.status >= 500);
-}
-
 function fitForUpload(image: NativeImage): NativeImage {
   const size = image.getSize();
   const scale = Math.min(1, 1600 / size.width, 900 / size.height);
@@ -129,7 +132,6 @@ export class DraftEngine {
   private lastGsiAt = 0;
   private lastSeenPublishedAt = 0;
   private inDraft = false;
-  private sessionCompleted = false;
   private busy = false;
   private lastHash: string | null = null;
   private lastCaptureAt = 0;
@@ -138,10 +140,13 @@ export class DraftEngine {
   private requestHash: string | null = null;
   private requestKey: string | null = null;
   private requestImage: Buffer | null = null;
+  private requestAllyGroup: DraftAllyGroup | null = null;
+  private liveAnalysisId: string | null = null;
+  private liveSessionToken: string | null = null;
+  private localTeam: GsiTeam | null = null;
   private refreshRequested = false;
   private retryRequested = false;
   private forceRefresh = false;
-  private refreshFromCompleted = false;
   private autoDetectPosition = true;
 
   constructor(
@@ -149,6 +154,7 @@ export class DraftEngine {
     private readonly preferences: PreferencesStore,
     private readonly gsi: GsiReceiver,
     private readonly emit: (state: EngineState) => void,
+    private readonly options: DraftEngineOptions = {},
   ) {}
 
   getState(): EngineState {
@@ -181,7 +187,6 @@ export class DraftEngine {
 
   async retry(): Promise<EngineState> {
     if (!this.state.enabled) return this.setEnabled(true);
-    if (this.sessionCompleted) return this.getState();
     if (this.state.phase === 'quota') return this.refresh(true);
     if (this.inDraft) {
       if (!this.requestKey || !this.requestImage) return this.refresh(true);
@@ -205,8 +210,6 @@ export class DraftEngine {
     return this.enqueueTransition(async () => {
       if (!this.state.enabled || !this.inDraft) return this.getState();
       const forceNextCapture = force || this.state.phase === 'quota';
-      this.refreshFromCompleted ||= this.sessionCompleted;
-      this.sessionCompleted = false;
       this.refreshRequested = true;
       this.retryRequested = false;
       this.forceRefresh ||= forceNextCapture;
@@ -288,15 +291,17 @@ export class DraftEngine {
     this.clearTimers();
     await this.gsi.stop();
     this.inDraft = false;
-    this.sessionCompleted = false;
     this.lastHash = null;
     this.requestHash = null;
     this.requestKey = null;
     this.requestImage = null;
+    this.requestAllyGroup = null;
+    this.liveAnalysisId = null;
+    this.liveSessionToken = null;
+    this.localTeam = null;
     this.refreshRequested = false;
     this.retryRequested = false;
     this.forceRefresh = false;
-    this.refreshFromCompleted = false;
     this.autoDetectPosition = true;
     this.lastGsiAt = 0;
     this.lastSeenPublishedAt = 0;
@@ -324,6 +329,7 @@ export class DraftEngine {
     if (publishLastSeen) this.lastSeenPublishedAt = now;
     const publishLiveness = publishLastSeen || !this.state.dotaDetected;
     const lastSeenAt = publishLastSeen ? new Date(now).toISOString() : this.state.lastSeenAt;
+    if (payload.player) this.localTeam = resolveGsiTeam(payload);
     const gameState = payload.map?.game_state;
     if (!gameState) {
       if (publishLiveness) {
@@ -374,18 +380,17 @@ export class DraftEngine {
       }
       return;
     }
-    if (this.sessionCompleted) {
-      if (publishLiveness) {
-        this.update({
-          ...this.state,
-          dotaDetected: true,
-          lastSeenAt,
-        });
-      }
-      return;
-    }
-    const phase = this.busy ? this.state.phase : 'watching_draft';
-    const message = this.busy ? this.state.message : 'Следим за изменениями драфта';
+    const hasCurrentAnalysis = this.state.latestAnalysis !== null;
+    const phase = this.busy
+      ? this.state.phase
+      : hasCurrentAnalysis
+        ? 'ready'
+        : 'watching_draft';
+    const message = this.busy
+      ? this.state.message
+      : hasCurrentAnalysis
+        ? 'Контрпики готовы — следим за новыми пиками'
+        : 'Следим за изменениями драфта';
     if (
       publishLiveness
       || startingDraft
@@ -409,7 +414,6 @@ export class DraftEngine {
   private startDraftSession(): void {
     this.invalidateCapture();
     this.inDraft = true;
-    this.sessionCompleted = false;
     this.lastHash = null;
     this.lastCaptureAt = 0;
     this.revision = 0;
@@ -417,31 +421,37 @@ export class DraftEngine {
     this.requestHash = null;
     this.requestKey = null;
     this.requestImage = null;
+    this.requestAllyGroup = null;
+    this.liveAnalysisId = null;
+    this.liveSessionToken = null;
     this.refreshRequested = false;
     this.retryRequested = false;
     this.forceRefresh = false;
-    this.refreshFromCompleted = false;
     this.autoDetectPosition = true;
   }
 
   private endDraftSession(): void {
     this.invalidateCapture();
     this.inDraft = false;
-    this.sessionCompleted = false;
     this.lastHash = null;
     this.requestHash = null;
     this.requestKey = null;
     this.requestImage = null;
+    this.requestAllyGroup = null;
+    this.liveAnalysisId = null;
+    this.liveSessionToken = null;
+    this.localTeam = null;
     this.refreshRequested = false;
     this.retryRequested = false;
     this.forceRefresh = false;
-    this.refreshFromCompleted = false;
   }
 
   private scheduleCapture(): void {
     if (!this.inDraft || this.busy || this.captureTimer) return;
-    const waitForRateLimit = Math.max(0, captureIntervalMs - (Date.now() - this.lastCaptureAt));
-    const delay = Math.max(captureDebounceMs, waitForRateLimit);
+    const intervalMs = this.options.captureIntervalMs ?? captureIntervalMs;
+    const debounceMs = this.options.captureDebounceMs ?? captureDebounceMs;
+    const waitForRateLimit = Math.max(0, intervalMs - (Date.now() - this.lastCaptureAt));
+    const delay = Math.max(debounceMs, waitForRateLimit);
     this.captureTimer = setTimeout(() => {
       this.captureTimer = null;
       void this.capture();
@@ -467,35 +477,36 @@ export class DraftEngine {
       }
       const nextHash = imageHash(hashImage);
       const unchanged = Boolean(this.lastHash && hashDistance(this.lastHash, nextHash) < 14);
+      const currentPreferences = await this.preferences.get();
+      if (!this.isCurrentCapture(generation)) return;
+      const configuredAllyGroup = resolveConfiguredAllyGroup(
+        this.localTeam,
+        currentPreferences.radiantDraftSide,
+      );
+      const orientationChanged = configuredAllyGroup !== this.requestAllyGroup;
       const retryingFailedFrame = unchanged
+        && !orientationChanged
         && this.requestHash !== null
         && hashDistance(this.requestHash, nextHash) < 14
         && this.requestKey !== null
         && !this.refreshRequested
         && !this.forceRefresh
         && this.retryRequested;
-      const currentPreferences = await this.preferences.get();
-      if (!this.isCurrentCapture(generation)) return;
       const previousDetectedPosition = this.autoDetectPosition
         ? this.state.recognition?.detectedPosition ?? null
         : null;
       const requestPosition = previousDetectedPosition ?? currentPreferences.position;
       const shouldDetectPosition = this.autoDetectPosition && previousDetectedPosition === null;
-      if (unchanged && !retryingFailedFrame && !this.forceRefresh) {
-        const restoreCompleted = (
-          this.sessionCompleted
-          || (this.refreshRequested && this.refreshFromCompleted)
-        ) && analysisMatchesPreferences(
+      if (unchanged && !orientationChanged && !retryingFailedFrame && !this.forceRefresh) {
+        const hasCurrentAnalysis = analysisMatchesPreferences(
           this.state.latestAnalysis,
           currentPreferences,
           this.state.recognition?.detectedPosition ?? null,
         );
         this.refreshRequested = false;
         this.retryRequested = false;
-        this.refreshFromCompleted = false;
-        this.sessionCompleted = restoreCompleted;
-        const phase = restoreCompleted ? 'ready' : 'watching_draft';
-        const message = restoreCompleted ? 'Новых пиков пока нет' : 'Драфт не изменился';
+        const phase = hasCurrentAnalysis ? 'ready' : 'watching_draft';
+        const message = hasCurrentAnalysis ? 'Новых пиков пока нет' : 'Драфт не изменился';
         if (
           phase !== this.state.phase
           || message !== this.state.message
@@ -523,17 +534,10 @@ export class DraftEngine {
           return;
         }
       }
-      if (this.refreshRequested || this.sessionCompleted) {
-        this.sessionId = randomUUID();
-        this.revision = 0;
-        this.requestHash = null;
-        this.requestKey = null;
-        this.requestImage = null;
+      if (this.refreshRequested) {
         this.refreshRequested = false;
         this.retryRequested = false;
         this.forceRefresh = false;
-        this.refreshFromCompleted = false;
-        this.sessionCompleted = false;
       }
       this.lastHash = nextHash;
       this.lastCaptureAt = Date.now();
@@ -545,14 +549,15 @@ export class DraftEngine {
         this.requestHash = nextHash;
         this.requestKey = randomUUID();
         this.requestImage = fitForUpload(uploadImage).toPNG();
+        this.requestAllyGroup = configuredAllyGroup;
         this.retryRequested = false;
       }
       this.update({
         ...this.state,
         phase: 'recognizing',
         message: 'Распознаём выбранных героев',
-        latestAnalysisId: retryingFailedFrame ? this.state.latestAnalysisId : null,
-        latestAnalysis: retryingFailedFrame ? this.state.latestAnalysis : null,
+        latestAnalysisId: this.state.latestAnalysisId,
+        latestAnalysis: this.state.latestAnalysis,
       });
       this.analyzingTimer = setTimeout(() => {
         if (
@@ -571,15 +576,31 @@ export class DraftEngine {
       if (!this.requestKey || !this.requestImage) {
         throw new DesktopError('CAPTURE_STATE_INVALID', 'Не удалось подготовить кадр для анализа');
       }
-      const response = await this.api.analyzeDesktop(
-        this.requestImage,
-        requestPosition,
-        currentPreferences.rank,
-        this.sessionId,
-        this.revision,
-        this.requestKey,
-        shouldDetectPosition,
-      );
+      const response = this.liveAnalysisId && this.liveSessionToken
+        ? await this.api.reviseDesktop(
+            this.liveAnalysisId,
+            this.requestImage,
+            requestPosition,
+            currentPreferences.rank,
+            this.sessionId,
+            this.revision,
+            this.requestKey,
+            shouldDetectPosition,
+            this.requestAllyGroup,
+            this.requestAllyGroup ? 'gsi_layout_heuristic' : null,
+            this.liveSessionToken,
+          )
+        : await this.api.analyzeDesktop(
+            this.requestImage,
+            requestPosition,
+            currentPreferences.rank,
+            this.sessionId,
+            this.revision,
+            this.requestKey,
+            shouldDetectPosition,
+            this.requestAllyGroup,
+            this.requestAllyGroup ? 'gsi_layout_heuristic' : null,
+          );
       if (!this.isCurrentCapture(generation)) return;
       if (this.analyzingTimer) clearTimeout(this.analyzingTimer);
       this.analyzingTimer = null;
@@ -589,7 +610,6 @@ export class DraftEngine {
         this.refreshRequested = true;
         this.retryRequested = false;
         this.forceRefresh = true;
-        this.refreshFromCompleted = false;
         this.update({
           ...this.state,
           phase: 'watching_draft',
@@ -607,19 +627,20 @@ export class DraftEngine {
         this.requestKey = null;
         this.requestImage = null;
         this.retryRequested = false;
+        const hasCurrentAnalysis = this.state.latestAnalysis !== null;
         this.update({
           ...this.state,
-          phase: 'watching_draft',
+          phase: hasCurrentAnalysis ? 'ready' : 'watching_draft',
           message: waitingMessages[response.reason],
-          latestAnalysisId: null,
-          latestAnalysis: null,
+          latestAnalysisId: this.state.latestAnalysisId,
+          latestAnalysis: this.state.latestAnalysis,
           recognition,
         });
         return;
       }
       const refreshQueuedDuringAnalysis = this.refreshRequested;
-      this.sessionCompleted = !refreshQueuedDuringAnalysis;
-      if (refreshQueuedDuringAnalysis) this.refreshFromCompleted = true;
+      this.liveAnalysisId = response.analysis.id;
+      if (response.liveSession) this.liveSessionToken = response.liveSession.token;
       this.requestKey = null;
       this.requestImage = null;
       this.retryRequested = false;
@@ -635,12 +656,30 @@ export class DraftEngine {
       if (!this.isCurrentCapture(generation)) return;
       if (this.analyzingTimer) clearTimeout(this.analyzingTimer);
       this.analyzingTimer = null;
+      const liveSessionInvalid = error instanceof DesktopError
+        && error.code === 'DESKTOP_LIVE_SESSION_INVALID';
+      if (liveSessionInvalid) {
+        this.liveAnalysisId = null;
+        this.liveSessionToken = null;
+        this.sessionId = randomUUID();
+        this.requestHash = null;
+        this.requestKey = null;
+        this.requestImage = null;
+        this.refreshRequested = true;
+        this.retryRequested = false;
+        this.forceRefresh = true;
+        this.update({
+          ...this.state,
+          phase: 'watching_draft',
+          message: 'Сессия Draft Vision обновляется',
+        });
+        return;
+      }
       const isQuota = error instanceof DesktopError
         && (error.code === 'QUOTA_EXHAUSTED' || error.status === 402);
       if (isQuota) {
         this.refreshRequested = false;
         this.forceRefresh = false;
-        this.refreshFromCompleted = false;
         this.requestKey = null;
         this.requestImage = null;
       }
@@ -675,6 +714,8 @@ export class DraftEngine {
   }
 
   private async captureDotaWindow(thumbnailSize: { width: number; height: number }): Promise<NativeImage | null> {
+    if (this.options.captureDotaWindow) return this.options.captureDotaWindow(thumbnailSize);
+    const { desktopCapturer } = await import('electron');
     const sources = await desktopCapturer.getSources({
       types: ['window'],
       thumbnailSize,
@@ -714,6 +755,7 @@ export class DraftEngine {
     this.windowPollInFlight = true;
     let nextDelay = windowPollIntervalsMs[this.windowPollIndex];
     try {
+      const { desktopCapturer } = await import('electron');
       const sources = await desktopCapturer.getSources({
         types: ['window'],
         thumbnailSize: { width: 0, height: 0 },

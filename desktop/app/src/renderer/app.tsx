@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { lazy, Suspense, useEffect, useLayoutEffect } from 'react';
 import {
   HashRouter,
@@ -53,6 +53,7 @@ const WishlistPage = lazy(() =>
 
 function Bootstrap() {
   const location = useLocation();
+  const queryClient = useQueryClient();
   const account = useAppStore((state) => state.account);
   const setAccount = useAppStore((state) => state.setAccount);
   const setPreferences = useAppStore((state) => state.setPreferences);
@@ -87,9 +88,23 @@ function Bootstrap() {
 
   useEffect(() => {
     if (!sessionQuery.data?.authenticated) return;
-    void desktop.engine.getState().then(setEngine);
-    return desktop.engine.subscribe(setEngine);
-  }, [sessionQuery.data?.authenticated, setEngine]);
+    let ready = false;
+    const applyEngineState = (nextEngine: Parameters<typeof setEngine>[0]) => {
+      setEngine(nextEngine);
+      const nextReady = nextEngine.phase === 'ready' && Boolean(nextEngine.latestAnalysisId);
+      if (nextReady && !ready && nextEngine.latestAnalysisId) {
+        void Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['quota'] }),
+          queryClient.invalidateQueries({ queryKey: ['history'] }),
+          queryClient.invalidateQueries({ queryKey: ['analysis', nextEngine.latestAnalysisId] }),
+          queryClient.invalidateQueries({ queryKey: ['reviews'] }),
+        ]);
+      }
+      ready = nextReady;
+    };
+    void desktop.engine.getState().then(applyEngineState);
+    return desktop.engine.subscribe(applyEngineState);
+  }, [queryClient, sessionQuery.data?.authenticated, setEngine]);
 
   useLayoutEffect(() => {
     const root = document.documentElement;

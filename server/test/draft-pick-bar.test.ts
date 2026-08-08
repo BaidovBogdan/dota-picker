@@ -4,6 +4,7 @@ import {
   BoundedJobRunner,
   prepareDraftPickBar,
   prepareDraftVisionInput,
+  processDraftVisionImage,
 } from '../src/modules/photo/draft-pick-bar.js';
 
 async function image(width: number, height: number, background = '#17202A') {
@@ -45,6 +46,11 @@ describe('prepareDraftPickBar', () => {
       }],
     });
     expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]?.localSource).toMatchObject({
+      width: 1_600,
+      height: 100,
+      channels: 3,
+    });
     await expect(sharp(result.candidates[0]?.image).metadata()).resolves.toMatchObject({
       format: 'jpeg',
       width: 1_840,
@@ -142,6 +148,10 @@ describe('prepareDraftPickBar', () => {
 
     expect(result.sourceKind).toBe('unknown');
     expect(result.candidates.length).toBeGreaterThan(1);
+    expect(result.candidates[0]?.localSource).toBeDefined();
+    expect(result.candidates.slice(1).every((candidate) => (
+      candidate.localSource === undefined
+    ))).toBe(true);
     expect(result.candidates.some((candidate) => (
       candidate.sourceTopRatio <= 290 / height
       && candidate.sourceBottomRatio >= 290 / height
@@ -313,5 +323,39 @@ describe('BoundedJobRunner', () => {
     await first;
     secondGate.resolve();
     await second;
+  });
+});
+
+describe('shared image-processing capacity', () => {
+  it('bounds preprocessing and downstream local work under one permit', async () => {
+    const input = await image(1_600, 100, '#88929A');
+    const gate = deferred();
+    let active = 0;
+    let peakActive = 0;
+    let started = 0;
+    const jobs = Array.from({ length: 10 }, () => processDraftVisionImage(
+      input,
+      async () => {
+        started += 1;
+        active += 1;
+        peakActive = Math.max(peakActive, active);
+        await gate.promise;
+        active -= 1;
+        return true;
+      },
+    ));
+    const overflow = processDraftVisionImage(input, async () => false);
+
+    await expect(overflow).rejects.toMatchObject({
+      statusCode: 503,
+      code: 'EXTERNAL_SERVICE_UNAVAILABLE',
+      message: 'Image processing is at capacity',
+    });
+    await vi.waitFor(() => expect(started).toBe(2));
+    expect(peakActive).toBe(2);
+
+    gate.resolve();
+    await expect(Promise.all(jobs)).resolves.toEqual(new Array(10).fill(true));
+    expect(peakActive).toBe(2);
   });
 });

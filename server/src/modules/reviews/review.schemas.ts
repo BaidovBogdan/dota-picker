@@ -38,7 +38,7 @@ export const reviewSchema = z.object({
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
   analysis: z.object({
-    source: z.enum(['manual', 'photo']),
+    source: z.enum(['manual', 'photo', 'overwolf']),
     patch: z.string(),
     recommendations: z.array(reviewHeroSchema).length(3),
   }),

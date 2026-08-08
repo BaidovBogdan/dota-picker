@@ -1,11 +1,16 @@
 import type {
   AdminAnalysesResponse,
+  AdminAnalysesQuery,
   AdminGrantResult,
+  AdminMeta,
   AdminOverview,
   AdminReviewsResponse,
+  AdminReviewsQuery,
   AdminSession,
   AdminSystem,
   AdminUsersResponse,
+  AdminUsersQuery,
+  RankBracket,
 } from '../types';
 
 const sessionKey = 'counterpick.admin.session';
@@ -44,7 +49,11 @@ async function parseResponse<T>(response: Response): Promise<T> {
     : await response.text().catch(() => '');
 
   if (!response.ok) {
-    throw new ApiError(errorMessage(payload, `Запрос завершился с кодом ${response.status}`), response.status, errorCode(payload));
+    throw new ApiError(
+      errorMessage(payload, `Запрос завершился с кодом ${response.status}`),
+      response.status,
+      errorCode(payload),
+    );
   }
 
   return payload as T;
@@ -93,15 +102,26 @@ async function request<T>(token: string, path: string, init: RequestInit = {}) {
   return parseResponse<T>(response);
 }
 
+function queryString(values: object) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(values)) {
+    if (value !== undefined && value !== '') params.set(key, String(value));
+  }
+  const result = params.toString();
+  return result ? `?${result}` : '';
+}
+
 export const adminApi = {
   overview: (token: string, days: 7 | 30, signal?: AbortSignal) =>
     request<AdminOverview>(token, `/overview?days=${days}`, { signal }),
-  users: (token: string, signal?: AbortSignal) =>
-    request<AdminUsersResponse>(token, '/users?limit=100&offset=0', { signal }),
-  analyses: (token: string, signal?: AbortSignal) =>
-    request<AdminAnalysesResponse>(token, '/analyses?limit=100&offset=0', { signal }),
-  reviews: (token: string, signal?: AbortSignal) =>
-    request<AdminReviewsResponse>(token, '/reviews?limit=100&offset=0', { signal }),
+  users: (token: string, query: AdminUsersQuery, signal?: AbortSignal) =>
+    request<AdminUsersResponse>(token, `/users${queryString(query)}`, { signal }),
+  analyses: (token: string, query: AdminAnalysesQuery, signal?: AbortSignal) =>
+    request<AdminAnalysesResponse>(token, `/analyses${queryString(query)}`, { signal }),
+  reviews: (token: string, query: AdminReviewsQuery, signal?: AbortSignal) =>
+    request<AdminReviewsResponse>(token, `/reviews${queryString(query)}`, { signal }),
+  meta: (token: string, rank: RankBracket | null, signal?: AbortSignal) =>
+    request<AdminMeta>(token, `/meta${queryString({ rank: rank ?? undefined })}`, { signal }),
   system: (token: string, signal?: AbortSignal) =>
     request<AdminSystem>(token, '/system', { signal }),
   deleteReview: (token: string, reviewId: string) =>

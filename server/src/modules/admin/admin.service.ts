@@ -6,6 +6,7 @@ import {
   eq,
   gte,
   ilike,
+  inArray,
   max,
   or,
   sql,
@@ -13,6 +14,7 @@ import {
 } from 'drizzle-orm';
 import type { AppConfig } from '../../config/env.js';
 import type { Database } from '../../db/client.js';
+import { ExternalServiceError } from '../../lib/errors.js';
 import {
   accounts,
   adminAuditEvents,
@@ -21,8 +23,10 @@ import {
   billingEvents,
 } from '../../db/schema.js';
 import { complimentaryProGrantId } from '../billing/billing-plan.js';
+import type { OpenDotaAdapter } from '../heroes/opendota.adapter.js';
 import type {
   AdminAnalysesQuery,
+  AdminMetaQuery,
   AdminUsersQuery,
   OverviewQuery,
 } from './admin.schemas.js';
@@ -46,6 +50,14 @@ function detailNumber(details: Record<string, unknown>, key: string) {
   return numeric(details[key] as number | string | undefined);
 }
 
+export function analysisSourceLabel(source: 'manual' | 'photo' | 'overwolf') {
+  return {
+    manual: 'Вручную',
+    photo: 'Фото',
+    overwolf: 'Overwolf Live',
+  }[source];
+}
+
 type Integration = {
   id: string;
   name: string;
@@ -59,6 +71,7 @@ export class AdminService {
   public constructor(
     private readonly db: Database,
     private readonly config: AppConfig,
+    private readonly metaAdapter?: Pick<OpenDotaAdapter, 'getHeroes' | 'getMetaPositionSnapshot' | 'getPatch'>,
   ) {}
 
   public async overview(query: OverviewQuery) {
@@ -149,8 +162,8 @@ export class AdminService {
     const accountActivity = recentAccounts.map((account) => ({
       id: `user:${account.id}`,
       type: 'user' as const,
-      title: account.kind === 'user' ? 'Registered account created' : 'Guest account created',
-      detail: account.email ?? `Guest ${account.id.slice(0, 8)}`,
+      title: account.kind === 'user' ? 'Создан аккаунт' : 'Создан гостевой профиль',
+      detail: account.email ?? `Гость ${account.id.slice(0, 8)}`,
       createdAt: account.createdAt.toISOString(),
       tone: 'neutral' as const,
     }));
@@ -158,11 +171,11 @@ export class AdminService {
       id: `analysis:${analysis.id}`,
       type: 'analysis' as const,
       title: analysis.status === 'completed'
-        ? 'Analysis completed'
+        ? 'Проверка завершена'
         : analysis.status === 'failed'
-          ? 'Analysis failed'
-          : 'Analysis started',
-      detail: [analysis.source, analysis.accountEmail ?? analysis.id.slice(0, 8), analysis.errorCode]
+          ? 'Ошибка проверки'
+          : 'Проверка запущена',
+      detail: [analysisSourceLabel(analysis.source), analysis.accountEmail ?? analysis.id.slice(0, 8), analysis.errorCode]
         .filter(Boolean)
         .join(' · '),
       createdAt: analysis.createdAt.toISOString(),
@@ -175,7 +188,7 @@ export class AdminService {
     const billingActivity = recentBilling.map((event) => ({
       id: `billing:${event.id}`,
       type: 'billing' as const,
-      title: 'RevenueCat webhook received',
+      title: 'Получен webhook RevenueCat',
       detail: `${event.type} · ${event.status}`,
       createdAt: event.createdAt.toISOString(),
       tone: event.status === 'processed' ? 'positive' as const : 'warning' as const,
@@ -183,9 +196,9 @@ export class AdminService {
     const auditActivity = recentAudits.map((event) => ({
       id: `system:${event.id}`,
       type: 'system' as const,
-      title: 'Admin action completed',
+      title: 'Действие администратора завершено',
       detail: event.action === 'grant_pro_all'
-        ? `Pro granted to ${detailNumber(event.details, 'grantedAccounts')} accounts`
+        ? `Pro выдан ${detailNumber(event.details, 'grantedAccounts')} аккаунтам`
         : event.action,
       createdAt: event.createdAt.toISOString(),
       tone: 'positive' as const,
@@ -236,64 +249,64 @@ export class AdminService {
       if (match) conditions.push(match);
     }
     const where = conditions.length > 0 ? and(...conditions) : undefined;
-    const analysisStats = this.db.select({
-      accountId: analyses.accountId,
-      analysesCount: count(analyses.id).as('analyses_count'),
-      completedCount: sql<number>`count(*) filter (where ${analyses.status} = 'completed')::int`.as('completed_count'),
-      failedCount: sql<number>`count(*) filter (where ${analyses.status} = 'failed')::int`.as('failed_count'),
-      processingCount: sql<number>`count(*) filter (where ${analyses.status} = 'processing')::int`.as('processing_count'),
-      lastAnalysisAt: max(analyses.updatedAt).as('last_analysis_at'),
-    }).from(analyses).groupBy(analyses.accountId).as('admin_analysis_stats');
-    const reviewStats = this.db.select({
-      accountId: analysisReviews.accountId,
-      reviewsCount: count(analysisReviews.id).as('reviews_count'),
-    }).from(analysisReviews).groupBy(analysisReviews.accountId).as('admin_review_stats');
-
-    const [totalRows, rows] = await Promise.all([
+    const [totalRows, pageAccounts] = await Promise.all([
       this.db.select({ total: count() }).from(accounts).where(where),
-      this.db.select({
-        account: accounts,
-        analysesCount: sql<number>`coalesce(${analysisStats.analysesCount}, 0)::int`,
-        completedCount: sql<number>`coalesce(${analysisStats.completedCount}, 0)::int`,
-        failedCount: sql<number>`coalesce(${analysisStats.failedCount}, 0)::int`,
-        processingCount: sql<number>`coalesce(${analysisStats.processingCount}, 0)::int`,
-        reviewsCount: sql<number>`coalesce(${reviewStats.reviewsCount}, 0)::int`,
-        lastAnalysisAt: analysisStats.lastAnalysisAt,
-      }).from(accounts)
-        .leftJoin(analysisStats, eq(analysisStats.accountId, accounts.id))
-        .leftJoin(reviewStats, eq(reviewStats.accountId, accounts.id))
+      this.db.select().from(accounts)
         .where(where)
         .orderBy(desc(accounts.createdAt), desc(accounts.id))
         .limit(query.limit)
         .offset(query.offset),
     ]);
+    const pageAccountIds = pageAccounts.map((account) => account.id);
+    const [analysisRows, reviewRows] = await Promise.all([
+      this.db.select({
+        accountId: analyses.accountId,
+        analysesCount: count(analyses.id),
+        completedCount: sql<number>`count(*) filter (where ${analyses.status} = 'completed')::int`,
+        failedCount: sql<number>`count(*) filter (where ${analyses.status} = 'failed')::int`,
+        processingCount: sql<number>`count(*) filter (where ${analyses.status} = 'processing')::int`,
+        lastAnalysisAt: max(analyses.updatedAt),
+      }).from(analyses)
+        .where(inArray(analyses.accountId, pageAccountIds))
+        .groupBy(analyses.accountId),
+      this.db.select({
+        accountId: analysisReviews.accountId,
+        reviewsCount: count(analysisReviews.id),
+      }).from(analysisReviews)
+        .where(inArray(analysisReviews.accountId, pageAccountIds))
+        .groupBy(analysisReviews.accountId),
+    ]);
+    const analysesByAccount = new Map(analysisRows.map((row) => [row.accountId, row]));
+    const reviewsByAccount = new Map(reviewRows.map((row) => [row.accountId, row]));
 
     return {
-      items: rows.map((row) => {
-        const completedCount = numeric(row.completedCount);
-        const failedCount = numeric(row.failedCount);
+      items: pageAccounts.map((account) => {
+        const analysisStats = analysesByAccount.get(account.id);
+        const reviewStats = reviewsByAccount.get(account.id);
+        const completedCount = numeric(analysisStats?.completedCount);
+        const failedCount = numeric(analysisStats?.failedCount);
         const terminalCount = completedCount + failedCount;
         return {
-          id: row.account.id,
-          kind: row.account.kind,
-          email: row.account.email,
-          deviceId: row.account.deviceId,
-          plan: row.account.plan,
-          complimentaryPro: row.account.complimentaryPro,
-          planProductId: row.account.planProductId,
-          planExpiresAt: row.account.planExpiresAt?.toISOString() ?? null,
-          quotaBalance: row.account.quotaBalance,
-          quotaRefreshedAt: row.account.quotaRefreshedAt.toISOString(),
-          billingUpdatedAt: row.account.billingUpdatedAt?.toISOString() ?? null,
-          createdAt: row.account.createdAt.toISOString(),
-          updatedAt: row.account.updatedAt.toISOString(),
-          analysesCount: numeric(row.analysesCount),
+          id: account.id,
+          kind: account.kind,
+          email: account.email,
+          deviceId: account.deviceId,
+          plan: account.plan,
+          complimentaryPro: account.complimentaryPro,
+          planProductId: account.planProductId,
+          planExpiresAt: account.planExpiresAt?.toISOString() ?? null,
+          quotaBalance: account.quotaBalance,
+          quotaRefreshedAt: account.quotaRefreshedAt.toISOString(),
+          billingUpdatedAt: account.billingUpdatedAt?.toISOString() ?? null,
+          createdAt: account.createdAt.toISOString(),
+          updatedAt: account.updatedAt.toISOString(),
+          analysesCount: numeric(analysisStats?.analysesCount),
           completedCount,
           failedCount,
-          processingCount: numeric(row.processingCount),
-          reviewsCount: numeric(row.reviewsCount),
+          processingCount: numeric(analysisStats?.processingCount),
+          reviewsCount: numeric(reviewStats?.reviewsCount),
           successRate: terminalCount > 0 ? completedCount / terminalCount : null,
-          lastAnalysisAt: row.lastAnalysisAt?.toISOString() ?? null,
+          lastAnalysisAt: analysisStats?.lastAnalysisAt?.toISOString() ?? null,
         };
       }),
       pagination: {
@@ -365,104 +378,121 @@ export class AdminService {
     };
   }
 
+  public async meta(query: AdminMetaQuery) {
+    if (!this.metaAdapter) throw new ExternalServiceError('OpenDota metadata is not configured');
+    const [heroes, snapshot] = await Promise.all([
+      this.metaAdapter.getHeroes(query.rank),
+      this.metaAdapter.getMetaPositionSnapshot(query.rank),
+    ]);
+    return { heroes, ...snapshot };
+  }
+
   public async system() {
     const generatedAt = new Date();
-    const startedAt = Date.now();
-    let databaseStatus: 'connected' | 'blocked' = 'connected';
-    try {
-      await this.db.execute(sql`select 1`);
-    } catch {
-      databaseStatus = 'blocked';
-    }
-    const databaseLatencyMs = Math.max(0, Date.now() - startedAt);
+    const databaseStartedAt = Date.now();
+    const databasePromise = this.db.execute(sql`select 1`)
+      .then(() => ({ status: 'connected' as const, latencyMs: Math.max(0, Date.now() - databaseStartedAt) }))
+      .catch(() => ({ status: 'blocked' as const, latencyMs: Math.max(0, Date.now() - databaseStartedAt) }));
+    const [databaseProbe, openDotaProbe] = await Promise.all([
+      databasePromise,
+      this.metaAdapter
+        ? this.metaAdapter.getPatch()
+          .then((patch) => ({ status: 'fulfilled' as const, patch }))
+          .catch(() => ({ status: 'rejected' as const }))
+        : Promise.resolve({ status: 'rejected' as const }),
+    ]);
+    const databaseStatus = databaseProbe.status;
+    const databaseLatencyMs = databaseProbe.latencyMs;
     const integrations: Integration[] = [
       {
         id: 'postgresql',
         name: 'PostgreSQL',
         status: databaseStatus,
         detail: databaseStatus === 'connected'
-          ? 'Primary application database is reachable.'
-          : 'The configured database did not respond to a health query.',
-        reason: databaseStatus === 'connected' ? null : 'Runtime database connection failed.',
-        missing: databaseStatus === 'connected' ? [] : ['Reachable DATABASE_URL'],
+          ? 'Основная база приложения отвечает на запросы.'
+          : 'Настроенная база не ответила на проверочный запрос.',
+        reason: databaseStatus === 'connected' ? null : 'Не удалось подключиться к базе во время runtime-проверки.',
+        missing: databaseStatus === 'connected' ? [] : ['Доступный DATABASE_URL'],
       },
       {
         id: 'admin-auth',
-        name: 'Admin authentication',
+        name: 'Авторизация админки',
         status: this.config.adminApiKey ? 'connected' : 'connectable',
         detail: this.config.adminApiKey
-          ? 'Short-lived admin sessions and legacy key authentication are configured.'
-          : 'The authentication implementation exists but no admin key is configured.',
-        reason: this.config.adminApiKey ? null : 'ADMIN_API_KEY is absent.',
+          ? 'Короткие админ-сессии и авторизация по legacy-ключу настроены.'
+          : 'Механизм авторизации есть, но ключ администратора не настроен.',
+        reason: this.config.adminApiKey ? null : 'Отсутствует ADMIN_API_KEY.',
         missing: this.config.adminApiKey ? [] : ['ADMIN_API_KEY'],
       },
       {
         id: 'gemini',
-        name: 'Gemini vision and recommendations',
+        name: 'Gemini: распознавание и рекомендации',
         status: this.config.gemini.apiKey ? 'connected' : 'connectable',
         detail: this.config.gemini.apiKey
-          ? 'Gemini models and credentials are configured.'
-          : 'The Gemini adapters exist but cannot call the provider without credentials.',
-        reason: this.config.gemini.apiKey ? null : 'GEMINI_API_KEY is absent.',
+          ? 'Ключ и модели Gemini настроены; отдельный runtime-запрос из аудита не выполняется.'
+          : 'Адаптеры Gemini есть, но без ключа они не могут обратиться к провайдеру.',
+        reason: this.config.gemini.apiKey ? null : 'Отсутствует GEMINI_API_KEY.',
         missing: this.config.gemini.apiKey ? [] : ['GEMINI_API_KEY'],
       },
       {
         id: 'opendota',
-        name: 'OpenDota metadata',
-        status: 'connected',
-        detail: `Metadata adapter is configured for ${this.config.openDota.baseUrl}. Runtime reachability is verified by normal cache refreshes.`,
-        reason: null,
-        missing: [],
+        name: 'Метаданные OpenDota',
+        status: openDotaProbe.status === 'fulfilled' ? 'connected' : 'blocked',
+        detail: openDotaProbe.status === 'fulfilled'
+          ? `Штатный OpenDota-адаптер вернул метаданные патча ${openDotaProbe.patch}, включая разрешённый кеш.`
+          : `Адаптер ${this.config.openDota.baseUrl} не вернул метаданные во время проверки.`,
+        reason: openDotaProbe.status === 'fulfilled' ? null : 'Проверка доступности OpenDota завершилась ошибкой.',
+        missing: openDotaProbe.status === 'fulfilled' ? [] : ['Доступный OpenDota API'],
       },
       {
         id: 'revenuecat',
-        name: 'RevenueCat webhooks',
+        name: 'Webhooks RevenueCat',
         status: this.config.revenueCat.appIds.length > 0 ? 'connected' : 'connectable',
         detail: this.config.revenueCat.appIds.length > 0
-          ? 'Webhook verification, entitlement mapping and application allow-list are configured.'
-          : 'Webhook verification works, but an application allow-list is not configured.',
-        reason: this.config.revenueCat.appIds.length > 0 ? null : 'No RevenueCat application IDs are allow-listed.',
+          ? 'Проверка webhook, сопоставление подписок и список приложений настроены.'
+          : 'Проверка webhook работает, но список разрешённых приложений не настроен.',
+        reason: this.config.revenueCat.appIds.length > 0 ? null : 'Нет разрешённых ID приложений RevenueCat.',
         missing: this.config.revenueCat.appIds.length > 0 ? [] : ['REVENUECAT_APP_IDS'],
       },
       {
         id: 'review-moderation',
-        name: 'Review moderation',
+        name: 'Модерация отзывов',
         status: 'connected',
-        detail: 'Reviews are persisted and protected admin listing and deletion endpoints are available.',
+        detail: 'Отзывы сохраняются; защищённые endpoint списка и удаления доступны администратору.',
         reason: null,
         missing: [],
       },
       {
         id: 'transactional-email',
-        name: 'Transactional email',
+        name: 'Транзакционные письма',
         status: 'blocked',
-        detail: 'OTP challenge storage exists, but there is no production email delivery adapter.',
-        reason: 'Provider integration and delivery code are not implemented.',
-        missing: ['Email provider', 'Sender domain', 'Delivery adapter'],
+        detail: 'Хранилище OTP есть, но адаптер доставки писем не реализован.',
+        reason: 'Интеграция с почтовым провайдером и отправка не реализованы.',
+        missing: ['Почтовый провайдер', 'Домен отправителя', 'Адаптер доставки'],
       },
       {
         id: 'screenshot-storage',
-        name: 'Draft screenshot storage',
+        name: 'Хранилище скриншотов',
         status: 'blocked',
-        detail: 'Draft images are processed in memory and are not retained for the admin console.',
-        reason: 'No object storage integration or screenshot reference column exists.',
-        missing: ['Object storage', 'Retention policy', 'Screenshot reference schema'],
+        detail: 'Скриншоты обрабатываются в памяти и не сохраняются для админки.',
+        reason: 'Нет объектного хранилища и поля со ссылкой на скриншот.',
+        missing: ['Объектное хранилище', 'Политика хранения', 'Схема ссылки на скриншот'],
       },
       {
         id: 'error-monitoring',
-        name: 'Error monitoring',
+        name: 'Мониторинг ошибок',
         status: 'blocked',
-        detail: 'Structured application logs exist, but no external error monitoring sink is implemented.',
-        reason: 'Monitoring SDK and environment configuration are absent.',
-        missing: ['Monitoring provider', 'SDK integration', 'Release mapping'],
+        detail: 'Структурированные логи есть, но внешняя система мониторинга ошибок не подключена.',
+        reason: 'Нет SDK мониторинга и конфигурации окружения.',
+        missing: ['Провайдер мониторинга', 'SDK-интеграция', 'Сопоставление релизов'],
       },
       {
         id: 'product-analytics',
-        name: 'Product analytics',
+        name: 'Продуктовая аналитика',
         status: 'blocked',
-        detail: 'Operational database aggregates are available, but product event tracking is not implemented.',
-        reason: 'There is no event schema, ingestion adapter or analytics provider.',
-        missing: ['Event taxonomy', 'Analytics provider', 'Consent policy'],
+        detail: 'Агрегаты базы доступны, но отслеживание продуктовых событий не реализовано.',
+        reason: 'Нет схемы событий, адаптера приёма и аналитического провайдера.',
+        missing: ['Таксономия событий', 'Провайдер аналитики', 'Политика согласий'],
       },
     ];
     const groups = {

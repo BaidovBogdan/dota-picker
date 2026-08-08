@@ -41,6 +41,10 @@ export const IPC = {
   updateCheck: 'update:check',
   updateDownloadAndInstall: 'update:download-and-install',
   updateChanged: 'update:changed',
+  overwolfGetState: 'overwolf:get-state',
+  overwolfConnect: 'overwolf:connect',
+  overwolfOpenInstaller: 'overwolf:open-installer',
+  overwolfChanged: 'overwolf:changed',
   appOpenExternal: 'app:open-external',
   appInfo: 'app:info',
 } as const;

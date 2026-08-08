@@ -135,6 +135,14 @@ export const desktop = {
       return native().updates.onState(listener) ?? (() => undefined);
     },
   },
+  overwolf: {
+    getState: () => native().overwolf.getState(),
+    connect: () => native().overwolf.connect(),
+    openInstaller: () => native().overwolf.openInstaller(),
+    subscribe(listener: Parameters<NativeBridge['overwolf']['onState']>[0]) {
+      return native().overwolf.onState(listener) ?? (() => undefined);
+    },
+  },
   app: {
     openExternal: (url: string) => native().app.openExternal(url),
     getInfo: () => native().app.getInfo(),

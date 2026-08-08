@@ -10,9 +10,33 @@ import { z } from 'zod';
 const payloadSchema = z.object({
   auth: z.object({ token: z.string().optional() }).optional(),
   map: z.object({ game_state: z.string().optional() }).optional(),
+  player: z.object({
+    team_name: z.string().optional(),
+  }).optional(),
 });
 
 export type GsiPayload = z.infer<typeof payloadSchema>;
+export type DraftAllyGroup = 'left' | 'right';
+export type GsiTeam = 'radiant' | 'dire';
+
+export function parseGsiPayload(value: unknown): GsiPayload {
+  return payloadSchema.parse(value);
+}
+
+export function resolveGsiTeam(payload: GsiPayload): GsiTeam | null {
+  const teamName = payload.player?.team_name?.trim().toLowerCase();
+  if (teamName === 'radiant' || teamName === 'dire') return teamName;
+  return null;
+}
+
+export function resolveConfiguredAllyGroup(
+  team: GsiTeam | null,
+  radiantSide: DraftAllyGroup | null,
+): DraftAllyGroup | null {
+  if (!team || !radiantSide) return null;
+  if (team === 'radiant') return radiantSide;
+  return radiantSide === 'left' ? 'right' : 'left';
+}
 
 const cfgName = 'gamestate_integration_counterpick.cfg';
 const execFileAsync = promisify(execFile);
@@ -143,7 +167,7 @@ export class GsiReceiver {
       chunks.push(buffer);
     }
     try {
-      const payload = payloadSchema.parse(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+      const payload = parseGsiPayload(JSON.parse(Buffer.concat(chunks).toString('utf8')));
       if (payload.auth?.token && payload.auth.token !== this.token) {
         response.writeHead(401).end();
         return;
@@ -175,7 +199,7 @@ export class GsiReceiver {
         const dotaRoot = join(root, 'steamapps', 'common', 'dota 2 beta', 'game', 'dota');
         if (!await pathExists(dotaRoot)) continue;
         const configPath = join(dotaRoot, 'cfg', 'gamestate_integration', cfgName);
-        const config = `"Counterpick"\n{\n  "uri" "http://127.0.0.1:${this.activePort}/gsi/${this.token}"\n  "timeout" "5.0"\n  "buffer" "0.1"\n  "throttle" "1.0"\n  "heartbeat" "10.0"\n  "auth"\n  {\n    "token" "${this.token}"\n  }\n  "data"\n  {\n    "map" "1"\n  }\n}\n`;
+        const config = `"Counterpick"\n{\n  "uri" "http://127.0.0.1:${this.activePort}/gsi/${this.token}"\n  "timeout" "5.0"\n  "buffer" "0.1"\n  "throttle" "1.0"\n  "heartbeat" "10.0"\n  "auth"\n  {\n    "token" "${this.token}"\n  }\n  "data"\n  {\n    "map" "1"\n    "player" "1"\n  }\n}\n`;
         await fs.mkdir(dirname(configPath), { recursive: true });
         await fs.writeFile(configPath, config, 'utf8');
         return { installed: true, configPath };

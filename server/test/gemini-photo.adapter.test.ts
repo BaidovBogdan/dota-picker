@@ -2,6 +2,7 @@ import type { GenerateContentParameters, GenerateContentResponse } from '@google
 import { readFile } from 'node:fs/promises';
 import sharp from 'sharp';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { createDesktopDraft } from '../src/modules/analysis/desktop-analysis.js';
 import { GeminiPhotoAdapter } from '../src/modules/photo/gemini-photo.adapter.js';
 import type { HeroMeta } from '../src/modules/heroes/heroes.types.js';
 
@@ -64,44 +65,55 @@ beforeAll(async () => {
   }).jpeg().toBuffer();
 });
 
+function addVisualTeamGroups(value: unknown) {
+  if (!value || typeof value !== 'object') return value;
+  const record = value as Record<string, unknown>;
+  if (!Array.isArray(record.recognized)) return value;
+  const recognized = record.recognized.map((item: unknown) => {
+    if (!item || typeof item !== 'object') return item;
+    const entry = item as Record<string, unknown>;
+    const teamGroup = entry.side === 'ally'
+      ? 'left'
+      : entry.side === 'enemy'
+        ? 'right'
+        : entry.side === 'unknown'
+          ? 'left'
+          : undefined;
+    return teamGroup ? { ...entry, teamGroup } : entry;
+  });
+  const occupied = new Set<string>();
+  for (const item of recognized) {
+    if (!item || typeof item !== 'object') continue;
+    const entry = item as Record<string, unknown>;
+    if (
+      entry.sourceRegion === 'team_pick_slot'
+      && (entry.teamGroup === 'left' || entry.teamGroup === 'right')
+      && typeof entry.slot === 'number'
+    ) {
+      occupied.add(`${entry.teamGroup}:${entry.slot}`);
+    }
+  }
+  const slotInventory = Array.isArray(record.slotInventory)
+    ? record.slotInventory
+    : (['left', 'right'] as const).flatMap((teamGroup) => (
+      Array.from({ length: 5 }, (_item, slot) => ({
+        teamGroup,
+        slot,
+        state: occupied.has(`${teamGroup}:${slot}`) ? 'occupied' : 'empty',
+      }))
+    ));
+  return {
+    ...record,
+    slotInventory,
+    recognized,
+  };
+}
+
 function response(value: unknown, modelVersion = 'gemini-3.5-flash-lite-001') {
   return {
-    text: JSON.stringify(value),
+    text: JSON.stringify(addVisualTeamGroups(value)),
     modelVersion,
   } as GenerateContentResponse;
-}
-
-function positionResponse(value: unknown) {
-  return {
-    text: JSON.stringify(value),
-    modelVersion: 'gemini-3.5-flash-lite-001',
-  } as GenerateContentResponse;
-}
-
-type PositionRoleLabel =
-  | 'safe_lane'
-  | 'mid_lane'
-  | 'off_lane'
-  | 'soft_support'
-  | 'support'
-  | 'hard_support';
-
-function completePositionCards(selectedRole: PositionRoleLabel | null) {
-  const supportRole = selectedRole === 'soft_support' ? 'soft_support' : 'support';
-  const roles: PositionRoleLabel[] = [
-    'safe_lane',
-    'mid_lane',
-    'off_lane',
-    supportRole,
-    'hard_support',
-  ];
-  return roles.map((roleLabel, slot) => ({
-    teamGroup: 'right' as const,
-    slot,
-    playerNameVisible: roleLabel !== selectedRole,
-    roleLabel,
-    confidence: 0.99,
-  }));
 }
 
 describe('GeminiPhotoAdapter', () => {
@@ -133,28 +145,36 @@ describe('GeminiPhotoAdapter', () => {
     const adapter = new GeminiPhotoAdapter(config, { generateContent });
     const image = testImage;
 
-    const result = await adapter.recognize(image, 'image/jpeg', heroes);
+    const result = await adapter.recognize(
+      image,
+      'image/jpeg',
+      heroes,
+      { allyGroup: 'left' },
+    );
 
     expect(result).toEqual({
       quality: 'partial',
+      orientationSource: 'explicit_signal',
       detectedPosition: null,
       recognized: [
         {
-          side: 'enemy',
-          slot: 0,
-          heroId: 1,
-          heroName: 'Anti Mage',
-          localizedName: 'Anti-Mage',
-          confidence: 0.96,
-          needsReview: true,
-        },
-        {
-          side: 'unknown',
+          side: 'ally',
+          visualGroup: 'left',
           slot: 1,
           heroId: 2,
           heroName: 'Axe',
           localizedName: 'Axe',
           confidence: 0.7,
+          needsReview: true,
+        },
+        {
+          side: 'enemy',
+          visualGroup: 'right',
+          slot: 0,
+          heroId: 1,
+          heroName: 'Anti Mage',
+          localizedName: 'Anti-Mage',
+          confidence: 0.93,
           needsReview: true,
         },
       ],
@@ -196,165 +216,57 @@ describe('GeminiPhotoAdapter', () => {
     });
     expect(request?.config?.responseJsonSchema).toMatchObject({
       type: 'object',
-      required: ['selectedCandidate', 'screenContext', 'draftUiEvidence', 'quality', 'recognized'],
+      required: [
+        'selectedCandidate',
+        'screenContext',
+        'draftUiEvidence',
+        'quality',
+        'slotInventory',
+        'recognized',
+      ],
     });
     expect(request?.config?.responseJsonSchema).not.toHaveProperty('$schema');
   });
 
-  it.each([
-    ['safe_lane', 1],
-    ['mid_lane', 2],
-    ['off_lane', 3],
-    ['soft_support', 4],
-    ['support', 4],
-    ['hard_support', 5],
-  ] as const)('maps an explicit own-card %s label to position %s', async (roleLabel, position) => {
+  it('maps Gemini visual groups through a trusted orientation and fails closed without it', async () => {
     const generateContent = vi
       .fn<(parameters: GenerateContentParameters) => Promise<GenerateContentResponse>>()
-      .mockResolvedValueOnce(response({
+      .mockResolvedValue(response({
         selectedCandidate: 'A',
         screenContext: 'dota_draft',
         draftUiEvidence: ['opposing_team_slots', 'draft_countdown'],
         quality: 'clear',
-        recognized: [],
-      }))
-      .mockResolvedValueOnce(positionResponse({
-        cards: completePositionCards(roleLabel),
+        recognized: [{
+          sourceRegion: 'team_pick_slot',
+          side: 'enemy',
+          slot: 2,
+          heroName: 'Anti-Mage',
+          confidence: 0.93,
+        }],
       }));
     const adapter = new GeminiPhotoAdapter(config, { generateContent });
 
-    const result = await adapter.recognize(
+    const rightAllies = await adapter.recognize(
       clearTestImage,
       'image/jpeg',
       heroes,
-      { detectPosition: true },
+      { allyGroup: 'right', orientationSource: 'manual_confirmation' },
     );
+    const unconfirmed = await adapter.recognize(clearTestImage, 'image/jpeg', heroes);
 
-    expect(result.detectedPosition).toBe(position);
-    expect(generateContent).toHaveBeenCalledTimes(2);
-    const positionRequest = generateContent.mock.calls[1]?.[0];
-    expect(positionRequest?.config).toMatchObject({
-      responseMimeType: 'application/json',
-      maxOutputTokens: 512,
-      responseJsonSchema: {
-        type: 'object',
-        required: ['cards'],
-      },
-    });
-    const positionPrompt = JSON.stringify(positionRequest?.contents);
-    expect(positionPrompt).toContain('List every visible player card');
-    expect(positionPrompt).toContain('Do not identify the current user');
-    expect(positionPrompt).toContain('Do not use visual color');
-    expect(positionPrompt).not.toContain('selectionEmphasis');
-  });
-
-  it('starts the dedicated detector without waiting for main recognition', async () => {
-    let resolveRecognition: (value: GenerateContentResponse) => void = () => undefined;
-    const pendingRecognition = new Promise<GenerateContentResponse>((resolve) => {
-      resolveRecognition = resolve;
-    });
-    const generateContent = vi
-      .fn<(parameters: GenerateContentParameters) => Promise<GenerateContentResponse>>()
-      .mockImplementationOnce(() => pendingRecognition)
-      .mockResolvedValueOnce(positionResponse({
-        cards: completePositionCards('mid_lane'),
-      }));
-    const adapter = new GeminiPhotoAdapter(config, { generateContent });
-    const resultPromise = adapter.recognize(
-      clearTestImage,
-      'image/jpeg',
-      heroes,
-      { detectPosition: true },
-    );
-
-    await vi.waitFor(() => expect(generateContent).toHaveBeenCalledTimes(2));
-    resolveRecognition(response({
-      selectedCandidate: 'A',
-      screenContext: 'dota_draft',
-      draftUiEvidence: ['opposing_team_slots', 'draft_countdown'],
+    expect(rightAllies).toMatchObject({
       quality: 'clear',
-      recognized: [],
-    }));
-
-    await expect(resultPromise).resolves.toMatchObject({ detectedPosition: 2 });
-  });
-
-  it.each([
-    [{
-      cards: completePositionCards('mid_lane').slice(0, 4),
-    }],
-    [{
-      cards: completePositionCards('mid_lane').map((card) => (
-        card.roleLabel === 'safe_lane' ? { ...card, playerNameVisible: false } : card
-      )),
-    }],
-    [{
-      cards: completePositionCards('off_lane').map((card) => (
-        card.roleLabel === 'off_lane' ? { ...card, confidence: 0.949 } : card
-      )),
-    }],
-    [{
-      cards: completePositionCards('mid_lane').map((card) => (
-        card.roleLabel === 'hard_support' ? { ...card, slot: 3 } : card
-      )),
-    }],
-    [{
-      cards: completePositionCards('mid_lane').map((card) => (
-        card.roleLabel === 'hard_support' ? { ...card, roleLabel: 'soft_support' as const } : card
-      )),
-    }],
-    [{ cards: completePositionCards(null) }],
-  ] as const)('does not infer a position from unsafe role evidence', async (positionDetection) => {
-    const generateContent = vi
-      .fn<(parameters: GenerateContentParameters) => Promise<GenerateContentResponse>>()
-      .mockResolvedValueOnce(response({
-        selectedCandidate: 'A',
-        screenContext: 'dota_draft',
-        draftUiEvidence: ['opposing_team_slots', 'draft_countdown'],
-        quality: 'clear',
-        recognized: [],
-      }))
-      .mockResolvedValueOnce(positionResponse(positionDetection));
-    const adapter = new GeminiPhotoAdapter(config, { generateContent });
-
-    const result = await adapter.recognize(
-      clearTestImage,
-      'image/jpeg',
-      heroes,
-      { detectPosition: true },
-    );
-
-    expect(result.detectedPosition).toBeNull();
-  });
-
-  it('keeps recognition usable when the dedicated position request fails', async () => {
-    const generateContent = vi
-      .fn<(parameters: GenerateContentParameters) => Promise<GenerateContentResponse>>()
-      .mockResolvedValueOnce(response({
-        selectedCandidate: 'A',
-        screenContext: 'dota_draft',
-        draftUiEvidence: ['opposing_team_slots', 'draft_countdown'],
-        quality: 'clear',
-        recognized: [],
-      }))
-      .mockRejectedValueOnce(new Error('Position detector unavailable'));
-    const adapter = new GeminiPhotoAdapter(config, { generateContent });
-
-    const result = await adapter.recognize(
-      clearTestImage,
-      'image/jpeg',
-      heroes,
-      { detectPosition: true },
-    );
-
-    expect(result).toMatchObject({
-      quality: 'clear',
-      detectedPosition: null,
-      recognized: [],
+      orientationSource: 'manual_confirmation',
+      recognized: [{ side: 'ally', visualGroup: 'right', needsReview: false }],
     });
+    expect(unconfirmed).toMatchObject({
+      quality: 'partial',
+      recognized: [{ side: 'unknown', visualGroup: 'right', needsReview: true }],
+    });
+    expect(unconfirmed).not.toHaveProperty('orientationSource');
   });
 
-  it('skips the dedicated request when the top crop is enhanced', async () => {
+  it('fails closed to the saved manual position without a second model request', async () => {
     const generateContent = vi
       .fn<(parameters: GenerateContentParameters) => Promise<GenerateContentResponse>>()
       .mockResolvedValue(response({
@@ -367,7 +279,7 @@ describe('GeminiPhotoAdapter', () => {
     const adapter = new GeminiPhotoAdapter(config, { generateContent });
 
     const result = await adapter.recognize(
-      testImage,
+      clearTestImage,
       'image/jpeg',
       heroes,
       { detectPosition: true },
@@ -375,6 +287,61 @@ describe('GeminiPhotoAdapter', () => {
 
     expect(result.detectedPosition).toBeNull();
     expect(generateContent).toHaveBeenCalledOnce();
+  });
+
+  it('downgrades clear output when an occupied slot has no recognized identity', async () => {
+    const slotInventory = (['left', 'right'] as const).flatMap((teamGroup) => (
+      Array.from({ length: 5 }, (_item, slot) => ({
+        teamGroup,
+        slot,
+        state: teamGroup === 'right' && slot <= 2 ? 'occupied' : 'empty',
+      }))
+    ));
+    const generateContent = vi
+      .fn<(parameters: GenerateContentParameters) => Promise<GenerateContentResponse>>()
+      .mockResolvedValue(response({
+        selectedCandidate: 'A',
+        screenContext: 'dota_draft',
+        draftUiEvidence: ['opposing_team_slots', 'draft_countdown'],
+        quality: 'clear',
+        slotInventory,
+        recognized: [
+          {
+            sourceRegion: 'team_pick_slot',
+            side: 'enemy',
+            slot: 0,
+            heroName: 'Anti-Mage',
+            confidence: 1,
+          },
+          {
+            sourceRegion: 'team_pick_slot',
+            side: 'enemy',
+            slot: 1,
+            heroName: 'Axe',
+            confidence: 1,
+          },
+        ],
+      }));
+    const adapter = new GeminiPhotoAdapter(config, { generateContent });
+
+    const result = await adapter.recognize(
+      clearTestImage,
+      'image/jpeg',
+      heroes,
+      { allyGroup: 'left' },
+    );
+
+    expect(result).toMatchObject({
+      quality: 'partial',
+      recognized: [
+        { visualGroup: 'right', slot: 0, heroId: 1 },
+        { visualGroup: 'right', slot: 1, heroId: 2 },
+      ],
+    });
+    expect(createDesktopDraft(result, 2, 7)).toEqual({
+      status: 'waiting',
+      reason: 'image_unclear',
+    });
   });
 
   it('deduplicates positions, flags hero conflicts, and returns stable partial output', async () => {
@@ -432,14 +399,31 @@ describe('GeminiPhotoAdapter', () => {
       }));
     const adapter = new GeminiPhotoAdapter(config, { generateContent });
 
-    const result = await adapter.recognize(testImage, 'image/jpeg', heroes);
+    const result = await adapter.recognize(
+      testImage,
+      'image/jpeg',
+      heroes,
+      { allyGroup: 'left' },
+    );
 
     expect(result).toEqual({
       quality: 'partial',
+      orientationSource: 'explicit_signal',
       detectedPosition: null,
       recognized: [
         {
           side: 'ally',
+          visualGroup: 'left',
+          slot: 0,
+          heroId: 3,
+          heroName: 'Bane',
+          localizedName: 'Bane',
+          confidence: 0.93,
+          needsReview: true,
+        },
+        {
+          side: 'ally',
+          visualGroup: 'left',
           slot: 4,
           heroId: 1,
           heroName: 'Anti-Mage',
@@ -449,38 +433,32 @@ describe('GeminiPhotoAdapter', () => {
         },
         {
           side: 'enemy',
+          visualGroup: 'right',
           slot: 2,
           heroId: 1,
           heroName: 'Anti Mage',
           localizedName: 'Anti-Mage',
-          confidence: 0.96,
+          confidence: 0.93,
           needsReview: true,
         },
         {
           side: 'enemy',
+          visualGroup: 'right',
           slot: 3,
           heroId: null,
           heroName: 'Unknown Hero',
           localizedName: null,
-          confidence: 0.97,
+          confidence: 0.93,
           needsReview: true,
         },
         {
           side: 'enemy',
+          visualGroup: 'right',
           slot: 4,
           heroId: 2,
           heroName: 'Axe',
           localizedName: 'Axe',
           confidence: 0.81,
-          needsReview: true,
-        },
-        {
-          side: 'unknown',
-          slot: 0,
-          heroId: 3,
-          heroName: 'Bane',
-          localizedName: 'Bane',
-          confidence: 0.99,
           needsReview: true,
         },
       ],
@@ -499,14 +477,14 @@ describe('GeminiPhotoAdapter', () => {
         recognized: [
           {
             sourceRegion: 'team_pick_slot',
-            side: 'unknown',
+            side: 'ally',
             slot: 0,
             heroName: 'Axe',
             confidence: 0.94,
           },
           {
             sourceRegion: 'team_pick_slot',
-            side: 'unknown',
+            side: 'enemy',
             slot: 0,
             heroName: 'Bane',
             confidence: 0.92,
@@ -521,15 +499,17 @@ describe('GeminiPhotoAdapter', () => {
     expect(result.recognized).toEqual([
       {
         side: 'unknown',
+        visualGroup: 'left',
         slot: 0,
         heroId: 2,
         heroName: 'Axe',
         localizedName: 'Axe',
-        confidence: 0.94,
+        confidence: 0.93,
         needsReview: true,
       },
       {
         side: 'unknown',
+        visualGroup: 'right',
         slot: 0,
         heroId: 3,
         heroName: 'Bane',
@@ -537,6 +517,50 @@ describe('GeminiPhotoAdapter', () => {
         confidence: 0.92,
         needsReview: true,
       },
+    ]);
+  });
+
+  it('orders visual groups deterministically across model response permutations', async () => {
+    const entries = [
+      {
+        sourceRegion: 'team_pick_slot',
+        side: 'enemy',
+        slot: 0,
+        heroName: 'Bane',
+        confidence: 0.92,
+      },
+      {
+        sourceRegion: 'team_pick_slot',
+        side: 'ally',
+        slot: 0,
+        heroName: 'Axe',
+        confidence: 0.94,
+      },
+    ];
+    const output = (recognized: typeof entries) => response({
+      selectedCandidate: 'A',
+      screenContext: 'dota_draft',
+      draftUiEvidence: ['opposing_team_slots', 'draft_countdown'],
+      quality: 'clear',
+      recognized,
+    });
+    const generateContent = vi
+      .fn<(parameters: GenerateContentParameters) => Promise<GenerateContentResponse>>()
+      .mockResolvedValueOnce(output(entries))
+      .mockResolvedValueOnce(output(entries.toReversed()));
+    const adapter = new GeminiPhotoAdapter(config, { generateContent });
+
+    const first = await adapter.recognize(clearTestImage, 'image/jpeg', heroes);
+    const second = await adapter.recognize(clearTestImage, 'image/jpeg', heroes);
+
+    expect(second.recognized).toEqual(first.recognized);
+    expect(first.recognized.map(({ visualGroup, slot, heroId }) => ({
+      visualGroup,
+      slot,
+      heroId,
+    }))).toEqual([
+      { visualGroup: 'left', slot: 0, heroId: 2 },
+      { visualGroup: 'right', slot: 0, heroId: 3 },
     ]);
   });
 
@@ -639,13 +663,18 @@ describe('GeminiPhotoAdapter', () => {
       }));
     const adapter = new GeminiPhotoAdapter(config, { generateContent });
 
-    const result = await adapter.recognize(clearTestImage, 'image/jpeg', heroes);
+    const result = await adapter.recognize(
+      clearTestImage,
+      'image/jpeg',
+      heroes,
+      { allyGroup: 'left' },
+    );
 
     expect(result).toMatchObject({
       quality: 'clear',
       recognized: [{
         heroId: 2,
-        confidence: 0.99,
+        confidence: 0.93,
         needsReview: false,
       }],
     });
@@ -669,13 +698,18 @@ describe('GeminiPhotoAdapter', () => {
       }));
     const adapter = new GeminiPhotoAdapter(config, { generateContent });
 
-    const result = await adapter.recognize(clearTestImage, 'image/jpeg', heroes);
+    const result = await adapter.recognize(
+      clearTestImage,
+      'image/jpeg',
+      heroes,
+      { allyGroup: 'left' },
+    );
 
     expect(result).toMatchObject({
       quality: 'partial',
       recognized: [{
         heroId: 2,
-        confidence: 0.99,
+        confidence: 0.93,
         needsReview: true,
       }],
     });
@@ -708,13 +742,18 @@ describe('GeminiPhotoAdapter', () => {
       }));
     const adapter = new GeminiPhotoAdapter(config, { generateContent });
 
-    const result = await adapter.recognize(clearTestImage, 'image/jpeg', heroes);
+    const result = await adapter.recognize(
+      clearTestImage,
+      'image/jpeg',
+      heroes,
+      { allyGroup: 'left' },
+    );
 
     expect(result.quality).toBe('partial');
     expect(result.recognized).toMatchObject([
       {
         heroId: 2,
-        confidence: 0.99,
+        confidence: 0.93,
         needsReview: false,
       },
       {
@@ -816,16 +855,21 @@ describe('GeminiPhotoAdapter', () => {
       allPickImage.toString('base64'),
     );
     expect(result.quality).toBe('partial');
-    expect(result.recognized.map(({ side, slot, heroId }) => ({ side, slot, heroId }))).toEqual([
-      { side: 'ally', slot: 0, heroId: 23 },
-      { side: 'ally', slot: 1, heroId: 73 },
-      { side: 'ally', slot: 2, heroId: 25 },
-      { side: 'ally', slot: 3, heroId: 34 },
-      { side: 'enemy', slot: 0, heroId: 46 },
-      { side: 'enemy', slot: 1, heroId: 54 },
-      { side: 'enemy', slot: 2, heroId: 1 },
-      { side: 'enemy', slot: 3, heroId: 20 },
-      { side: 'enemy', slot: 4, heroId: 120 },
+    expect(result.recognized.map(({ side, visualGroup, slot, heroId }) => ({
+      side,
+      visualGroup,
+      slot,
+      heroId,
+    }))).toEqual([
+      { side: 'unknown', visualGroup: 'left', slot: 0, heroId: 23 },
+      { side: 'unknown', visualGroup: 'left', slot: 1, heroId: 73 },
+      { side: 'unknown', visualGroup: 'left', slot: 2, heroId: 25 },
+      { side: 'unknown', visualGroup: 'left', slot: 3, heroId: 34 },
+      { side: 'unknown', visualGroup: 'right', slot: 0, heroId: 46 },
+      { side: 'unknown', visualGroup: 'right', slot: 1, heroId: 54 },
+      { side: 'unknown', visualGroup: 'right', slot: 2, heroId: 1 },
+      { side: 'unknown', visualGroup: 'right', slot: 3, heroId: 20 },
+      { side: 'unknown', visualGroup: 'right', slot: 4, heroId: 120 },
     ]);
   });
 
@@ -833,7 +877,7 @@ describe('GeminiPhotoAdapter', () => {
     const adapter = new GeminiPhotoAdapter({ ...config, apiKey: undefined });
 
     await expect(
-      adapter.recognize(Buffer.from('image'), 'image/webp', heroes),
+      adapter.recognize(testImage, 'image/jpeg', heroes),
     ).rejects.toMatchObject({
       statusCode: 503,
       code: 'EXTERNAL_SERVICE_UNAVAILABLE',

@@ -212,7 +212,11 @@ function ResultSummary({ result }: { result: AnalysisResult }) {
     ? `P${result.draft.position} · ${t(`position.${result.draft.position}`)}`
     : t('position.title');
   const rank = t(result.draft.rank ? `rank.${result.draft.rank}` : 'rank.any');
-  const source = t(result.draft.source === 'photo' ? 'draft.photo' : 'home.manualEntry');
+  const source = result.draft.source === 'photo'
+    ? t('draft.photo')
+    : result.draft.source === 'overwolf'
+      ? 'Overwolf Live'
+      : t('home.manualEntry');
 
   return (
     <View
@@ -321,7 +325,7 @@ function HeroThumbnail({
       {showImage ? (
         <Image
           source={{ uri: item.hero.imageUrl }}
-          style={{ width: '100%', height: '100%' }}
+          style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }}
           contentFit="cover"
           contentPosition="center"
           cachePolicy="disk"

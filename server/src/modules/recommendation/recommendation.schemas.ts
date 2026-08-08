@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { rankBracketSchema } from '../heroes/heroes.schemas.js';
 
 export const draftSchema = z.object({
-  source: z.enum(['manual', 'photo']).default('manual'),
+  source: z.enum(['manual', 'photo', 'overwolf']).default('manual'),
   position: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]),
   allyHeroIds: z.array(z.number().int().positive()).max(4).default([]),
   enemyHeroIds: z.array(z.number().int().positive()).min(1).max(5),

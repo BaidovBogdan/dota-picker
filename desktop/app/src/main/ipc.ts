@@ -19,15 +19,18 @@ import {
 } from '../shared/contracts.js';
 import { IPC } from '../shared/ipc-channels.js';
 import type { ApiClient } from './api-client.js';
-import type { DraftEngine } from './draft-engine.js';
+import type { AssistantEngine } from './assistant-engine.js';
 import { DesktopError, normalizeError } from './errors.js';
+import type { OverwolfBridge } from './overwolf-bridge.js';
 import type { PreferencesStore } from './preferences-store.js';
+import { updatePreferences } from './preferences-update.js';
 import type { UpdateManager } from './update-manager.js';
 
 type Dependencies = {
   getWindow: () => BrowserWindow | null;
   api: ApiClient;
-  engine: DraftEngine;
+  engine: AssistantEngine;
+  overwolf: OverwolfBridge;
   preferences: PreferencesStore;
   updates: UpdateManager;
   onPreferencesChanged?: (previous: Preferences, current: Preferences) => void | Promise<void>;
@@ -127,7 +130,7 @@ export function registerIpc(dependencies: Dependencies): void {
           english ? 'Sign in to Counterpick' : 'Войдите в Counterpick',
         );
       }
-      if (!preferences.captureConsent.accepted) {
+      if (preferences.assistantMode === 'vision' && !preferences.captureConsent.accepted) {
         const window = dependencies.getWindow();
         if (!window) {
           throw new DesktopError(
@@ -137,13 +140,13 @@ export function registerIpc(dependencies: Dependencies): void {
         }
         const result = await dialog.showMessageBox(window, {
           type: 'info',
-          title: english ? 'Dota 2 window access' : 'Доступ к окну Dota 2',
+          title: english ? 'Draft Vision access' : 'Доступ Draft Vision',
           message: english
-            ? 'Counterpick will locally capture only the Dota 2 window during hero selection.'
-            : 'Counterpick будет локально снимать только окно Dota 2 во время выбора героев.',
+            ? 'Counterpick uses a Dota 2 window frame and a local GSI phase/team signal during hero selection.'
+            : 'Counterpick использует кадр окна Dota 2 и локальный GSI-сигнал фазы и команды во время выбора героев.',
           detail: english
-            ? 'A frame is sent to the analysis server only when the draft changes. Game memory is never read.'
-            : 'Кадр отправляется на сервер анализа только при изменении драфта. Чтение памяти игры не используется.',
+            ? 'A frame is sent to the analysis API when the window image changes substantially so Counterpick can check for new picks; identical frames are not sent. The server processes it in memory, first matching portraits locally and, when confidence is low, may send the extracted draft region to the configured external recognition provider. The source image is not stored. Dota may include Steam IDs, player names, and other fields in the local GSI payload; Counterpick extracts only phase and team, then immediately discards the rest without sending or storing it. Game memory is not accessed.'
+            : 'Кадр отправляется в API анализа, когда изображение окна существенно изменилось, чтобы Counterpick проверил новые пики; одинаковые кадры не отправляются. Сервер обрабатывает его в памяти, сначала сопоставляет портреты локально, а при низкой уверенности может передать выделенную область драфта настроенному внешнему провайдеру распознавания. Исходник не сохраняется. Dota может включить Steam ID, имена игроков и другие поля в локальный GSI-пакет; Counterpick извлекает только фазу и команду, а остальное сразу отбрасывает, не отправляет и не сохраняет. Доступ к памяти игры не используется.',
           buttons: english ? ['Allow', 'Cancel'] : ['Разрешить', 'Отмена'],
           defaultId: 0,
           cancelId: 1,
@@ -157,6 +160,41 @@ export function registerIpc(dependencies: Dependencies): void {
         }
         await dependencies.preferences.update({
           captureConsent: {
+            accepted: true,
+            acceptedAt: new Date().toISOString(),
+          },
+        });
+      }
+      if (preferences.assistantMode === 'overwolf' && !preferences.overwolfConsent.accepted) {
+        const window = dependencies.getWindow();
+        if (!window) {
+          throw new DesktopError(
+            'WINDOW_UNAVAILABLE',
+            english ? 'The application window is unavailable' : 'Окно приложения недоступно',
+          );
+        }
+        const result = await dialog.showMessageBox(window, {
+          type: 'info',
+          title: 'Overwolf Live',
+          message: english
+            ? 'Connect the Overwolf Live companion?'
+            : 'Подключить companion Overwolf Live?',
+          detail: english
+            ? 'Overwolf sends exact Dota 2 draft events to Counterpick through an authenticated local connection. Installation and Overwolf terms always require your explicit confirmation.'
+            : 'Overwolf передаёт точные события драфта Dota 2 в Counterpick через защищённое локальное соединение. Установка и условия Overwolf всегда требуют вашего явного подтверждения.',
+          buttons: english ? ['Allow', 'Cancel'] : ['Разрешить', 'Отмена'],
+          defaultId: 0,
+          cancelId: 1,
+          noLink: true,
+        });
+        if (result.response !== 0) {
+          throw new DesktopError(
+            'OVERWOLF_CONSENT_REQUIRED',
+            english ? 'Overwolf Live connection was not allowed' : 'Подключение Overwolf Live не разрешено',
+          );
+        }
+        await dependencies.preferences.update({
+          overwolfConsent: {
             accepted: true,
             acceptedAt: new Date().toISOString(),
           },
@@ -187,12 +225,11 @@ export function registerIpc(dependencies: Dependencies): void {
     IPC.preferencesUpdate,
     z.tuple([preferencesPatchSchema]),
     dependencies.getWindow,
-    async ([input]) => {
-      const previous = await dependencies.preferences.get();
-      const preferences = await dependencies.preferences.update(input);
-      await dependencies.onPreferencesChanged?.(previous, preferences);
-      return preferences;
-    },
+    ([input]) => updatePreferences(
+      dependencies.preferences,
+      input,
+      dependencies.onPreferencesChanged,
+    ),
   );
 
   register(
@@ -228,6 +265,23 @@ export function registerIpc(dependencies: Dependencies): void {
     dependencies.updates.check());
   register(IPC.updateDownloadAndInstall, none, dependencies.getWindow, () =>
     dependencies.updates.downloadAndInstall());
+  register(IPC.overwolfGetState, none, dependencies.getWindow, () =>
+    dependencies.overwolf.getState());
+  register(IPC.overwolfConnect, none, dependencies.getWindow, async () => {
+    const preferences = await dependencies.preferences.get();
+    if (!preferences.overwolfConsent.accepted) {
+      throw new DesktopError(
+        'OVERWOLF_CONSENT_REQUIRED',
+        preferences.language === 'en'
+          ? 'Allow the Overwolf Live connection first'
+          : 'Сначала разрешите подключение Overwolf Live',
+      );
+    }
+    return dependencies.overwolf.connect();
+  });
+  register(IPC.overwolfOpenInstaller, none, dependencies.getWindow, async () => {
+    await dependencies.overwolf.openInstaller();
+  });
   register(IPC.appOpenExternal, z.tuple([externalUrlSchema]), dependencies.getWindow, async ([url]) => {
     await shell.openExternal(url);
   });

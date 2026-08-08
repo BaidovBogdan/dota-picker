@@ -20,7 +20,13 @@ const defaults: Preferences = {
   overlayShortcut: 'PageUp',
   wishlist: [],
   assistantEnabled: false,
+  assistantMode: 'vision',
+  radiantDraftSide: null,
   captureConsent: {
+    accepted: false,
+    acceptedAt: null,
+  },
+  overwolfConsent: {
     accepted: false,
     acceptedAt: null,
   },
@@ -48,6 +54,9 @@ export class PreferencesStore {
       captureConsent: parsedPatch.captureConsent
         ? { ...current.captureConsent, ...parsedPatch.captureConsent }
         : current.captureConsent,
+      overwolfConsent: parsedPatch.overwolfConsent
+        ? { ...current.overwolfConsent, ...parsedPatch.overwolfConsent }
+        : current.overwolfConsent,
       wishlist: parsedPatch.wishlist
         ? [...new Set(parsedPatch.wishlist)]
         : current.wishlist,

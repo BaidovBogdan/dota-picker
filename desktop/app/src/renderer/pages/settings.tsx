@@ -8,6 +8,7 @@ import {
   MonitorIcon,
   MoonIcon,
   PowerIcon,
+  Radio,
   ShieldCheckIcon,
   SlidersHorizontalIcon,
   SunIcon,
@@ -211,6 +212,19 @@ export function SettingsPage() {
     },
     onSuccess: setPreferences,
   });
+  const revokeOverwolfMutation = useMutation({
+    mutationFn: async () => {
+      const current = useAppStore.getState().preferences;
+      if (engine?.enabled && current?.assistantMode === 'overwolf') {
+        setEngine(await desktop.engine.setEnabled(false));
+      }
+      return desktop.preferences.update({
+        ...(current?.assistantMode === 'overwolf' ? { assistantEnabled: false } : {}),
+        overwolfConsent: { accepted: false, acceptedAt: null },
+      });
+    },
+    onSuccess: setPreferences,
+  });
   const updateCheckMutation = useMutation({
     mutationFn: desktop.updates.check,
     onMutate: () => setUpdateCheckFeedback('checking'),
@@ -327,6 +341,23 @@ export function SettingsPage() {
       icon: <RankIcon rank={rank} />,
     })),
   ];
+  const radiantSideOptions = [
+    {
+      value: 'unknown',
+      label: text('Не определено', 'Not configured'),
+      description: text('Стороны останутся на ручной проверке', 'Sides stay pending manual review'),
+    },
+    {
+      value: 'left',
+      label: text('Radiant слева', 'Radiant on the left'),
+      description: text('Dire будет справа', 'Dire will be on the right'),
+    },
+    {
+      value: 'right',
+      label: text('Radiant справа', 'Radiant on the right'),
+      description: text('Dire будет слева', 'Dire will be on the left'),
+    },
+  ];
   const currentShortcutAvailable = shortcutQuery.data?.available !== false;
   const shortcutStatus = recordingShortcut
     ? text('Нажмите клавишу или сочетание. Нажмите кнопку ещё раз для отмены.', 'Press a key or combination. Press the button again to cancel.')
@@ -436,6 +467,27 @@ export function SettingsPage() {
               value={preferences.rank ? String(preferences.rank) : 'all'}
               options={rankOptions}
               onValueChange={(value) => update('rank', value === 'all' ? null : Number(value))}
+            />
+          </div>
+          <div className="settings-group">
+            <div className="settings-group__copy">
+              <strong>{text('Сторона команды в Draft Vision', 'Team side in Draft Vision')}</strong>
+              <small>
+                {text(
+                  'Выберите расположение Radiant в вашем интерфейсе Dota. Без выбора приложение не угадывает стороны.',
+                  'Choose where Radiant appears in your Dota layout. Without it, the app does not guess sides.',
+                )}
+              </small>
+            </div>
+            <AppSelect
+              className="settings-rank-select"
+              label={text('Расположение Radiant', 'Radiant placement')}
+              value={preferences.radiantDraftSide ?? 'unknown'}
+              options={radiantSideOptions}
+              onValueChange={(value) => update(
+                'radiantDraftSide',
+                value === 'unknown' ? null : value as 'left' | 'right',
+              )}
             />
           </div>
           <div className="settings-group settings-group--stacked">
@@ -574,8 +626,8 @@ export function SettingsPage() {
             <div>
               <strong>
                 {preferences.captureConsent.accepted
-                  ? text('Разрешение предоставлено', 'Capture access granted')
-                  : text('Разрешение не предоставлено', 'Capture access not granted')}
+                  ? text('Draft Vision разрешён', 'Draft Vision allowed')
+                  : text('Draft Vision не разрешён', 'Draft Vision not allowed')}
               </strong>
               <small>
                 {preferences.captureConsent.acceptedAt
@@ -584,8 +636,8 @@ export function SettingsPage() {
                     `Accepted ${formatDateTime(preferences.captureConsent.acceptedAt, language)}`,
                   )
                   : text(
-                    'Приложение не может делать снимки окна Dota',
-                    'The app cannot capture the Dota window',
+                    'Кадр окна и локальный GSI-сигнал не используются',
+                    'Window frames and the local GSI signal are not used',
                   )}
               </small>
             </div>
@@ -601,8 +653,43 @@ export function SettingsPage() {
           </div>
           <p className="privacy-panel__note">
             {text(
-              'Исходный снимок используется только для распознавания текущего драфта и не сохраняется в истории.',
-              'The source frame is used only to recognize the current draft and is not stored in history.',
+              'Draft Vision использует кадр окна Dota 2 и локальный GSI. Кадр уходит в API, когда изображение окна существенно изменилось, чтобы проверить новые пики; одинаковые кадры не отправляются. Сервер обрабатывает кадр в памяти и сначала сопоставляет портреты локально; при низкой уверенности выделенная область драфта может уйти настроенному внешнему провайдеру распознавания. Исходник не хранится. Dota может включить Steam ID, имена и другие поля в GSI-пакет; Counterpick извлекает фазу и команду, а остальное сразу отбрасывает, не отправляет и не сохраняет. Доступ к памяти игры не используется.',
+              'Draft Vision uses a Dota 2 window frame and local GSI. A frame goes to the API when the window image changes substantially so it can check for new picks; identical frames are not sent. The server processes the frame in memory and first matches portraits locally; when confidence is low, the extracted draft region may go to the configured external recognition provider. The source image is not stored. Dota may include Steam IDs, names, and other fields in the GSI payload; Counterpick extracts phase and team, then immediately discards the rest without sending or storing it. Game memory is not accessed.',
+            )}
+          </p>
+          <div className="privacy-panel__status">
+            <span className={preferences.overwolfConsent.accepted ? 'is-accepted' : ''}>
+              <Radio size={19} weight="duotone" aria-hidden />
+            </span>
+            <div>
+              <strong>
+                {preferences.overwolfConsent.accepted
+                  ? text('Overwolf Live разрешён', 'Overwolf Live allowed')
+                  : text('Overwolf Live не разрешён', 'Overwolf Live not allowed')}
+              </strong>
+              <small>
+                {preferences.overwolfConsent.acceptedAt
+                  ? text(
+                      `Принято ${formatDateTime(preferences.overwolfConsent.acceptedAt, language)}`,
+                      `Accepted ${formatDateTime(preferences.overwolfConsent.acceptedAt, language)}`,
+                    )
+                  : text('Локальный companion не подключается', 'The local companion does not connect')}
+              </small>
+            </div>
+            {preferences.overwolfConsent.accepted ? (
+              <Button
+                variant="secondary"
+                loading={revokeOverwolfMutation.isPending}
+                onClick={() => revokeOverwolfMutation.mutate()}
+              >
+                {text('Отозвать', 'Revoke')}
+              </Button>
+            ) : null}
+          </div>
+          <p className="privacy-panel__note">
+            {text(
+              'Steam ID и имена не покидают companion. ID героев, стороны, позиция, баны и выбранный ранг отправляются в Counterpick API для расчёта; результат сохраняется в истории. Разрешение можно отозвать здесь в любой момент.',
+              'Steam IDs and names never leave the companion. Hero IDs, sides, position, bans, and selected rank are sent to the Counterpick API for calculation; the result is stored in history. You can revoke permission here at any time.',
             )}
           </p>
         </section>

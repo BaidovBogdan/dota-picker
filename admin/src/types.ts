@@ -1,9 +1,11 @@
 export type Plan = 'free' | 'pro';
 export type AccountKind = 'guest' | 'user';
 export type AnalysisStatus = 'completed' | 'failed' | 'processing';
-export type AnalysisSource = 'photo' | 'manual';
+export type AnalysisSource = 'photo' | 'manual' | 'overwolf';
 export type PageId = 'overview' | 'users' | 'analyses' | 'reviews' | 'meta' | 'system';
 export type ActivityTone = 'neutral' | 'positive' | 'warning' | 'negative';
+export type RankBracket = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+export type HeroPosition = 1 | 2 | 3 | 4 | 5;
 
 export type Pagination = {
   limit: number;
@@ -82,6 +84,14 @@ export type AdminUsersResponse = {
   pagination: Pagination;
 };
 
+export type AdminUsersQuery = {
+  limit: number;
+  offset: number;
+  q?: string;
+  kind?: AccountKind;
+  plan?: Plan;
+};
+
 export type AdminAnalysis = {
   id: string;
   accountId: string;
@@ -104,6 +114,14 @@ export type AdminAnalysis = {
 export type AdminAnalysesResponse = {
   items: AdminAnalysis[];
   pagination: Pagination;
+};
+
+export type AdminAnalysesQuery = {
+  limit: number;
+  offset: number;
+  q?: string;
+  status?: AnalysisStatus;
+  source?: AnalysisSource;
 };
 
 export type AdminReviewHero = {
@@ -141,6 +159,51 @@ export type AdminReviewsResponse = {
   };
   items: AdminReview[];
   pagination: Pagination;
+};
+
+export type AdminReviewsQuery = {
+  limit: number;
+  offset: number;
+  q?: string;
+  rating?: 1 | 2 | 3 | 4 | 5;
+  hasComment?: 'true' | 'false';
+};
+
+export type AdminHeroMeta = {
+  id: number;
+  name: string;
+  localizedName: string;
+  primaryAttribute: 'str' | 'agi' | 'int' | 'all';
+  attackType: 'Melee' | 'Ranged';
+  roles: string[];
+  imageUrl: string;
+  iconUrl: string;
+  picks: number;
+  wins: number;
+  winRate: number;
+};
+
+export type AdminHeroPositionStat = {
+  heroId: number;
+  position: HeroPosition;
+  picks: number;
+  wins: number;
+  winRate: number;
+  isApproximate: boolean;
+  method: 'lane_role' | 'lane_role_farm_priority';
+};
+
+export type AdminMeta = {
+  heroes: AdminHeroMeta[];
+  patch: string;
+  rank: RankBracket | null;
+  rankFilter: 'average_match_rank' | 'all_ranks';
+  window: 'current_patch_30d';
+  minimumGames: number;
+  fetchedAt: string;
+  isStale: boolean;
+  availability: 'ready' | 'collecting';
+  positionStats: AdminHeroPositionStat[];
 };
 
 export type AdminSystemItem = {

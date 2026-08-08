@@ -16,7 +16,7 @@ import {
 export const accountKindEnum = pgEnum('account_kind', ['guest', 'user']);
 export const planEnum = pgEnum('plan', ['free', 'pro']);
 export const analysisStatusEnum = pgEnum('analysis_status', ['processing', 'completed', 'failed']);
-export const analysisSourceEnum = pgEnum('analysis_source', ['manual', 'photo']);
+export const analysisSourceEnum = pgEnum('analysis_source', ['manual', 'photo', 'overwolf']);
 export const idempotencyStatusEnum = pgEnum('idempotency_status', ['in_progress', 'completed']);
 export const quotaReasonEnum = pgEnum('quota_reason', ['analysis', 'refund']);
 export const billingEventStatusEnum = pgEnum('billing_event_status', ['pending', 'processed']);
@@ -119,6 +119,7 @@ export const analyses = pgTable(
     result: jsonb('result').$type<Record<string, unknown>>(),
     patch: text('patch'),
     errorCode: text('error_code'),
+    revision: integer('revision').notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
