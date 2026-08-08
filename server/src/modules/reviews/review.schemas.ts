@@ -58,16 +58,28 @@ export const accountReviewsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).default(25),
 });
 
-export const adminReviewSchema = reviewSchema.extend({
+export const adminReviewSchema = reviewSchema.omit({ analysis: true }).extend({
+  analysis: z.object({
+    source: z.enum(['manual', 'photo', 'overwolf']),
+    patch: z.string().nullable(),
+    recommendations: z.array(reviewHeroSchema).max(3),
+    rawResult: z.json(),
+    dataQuality: z.object({
+      result: z.enum(['valid', 'absent', 'legacy_invalid']),
+      issues: z.array(z.string()),
+    }),
+  }),
   account: z.object({
     id: z.uuid(),
     kind: z.enum(['guest', 'user']),
     email: z.email().nullable(),
+    plan: z.enum(['free', 'pro']),
   }),
 });
 
 export const adminReviewsQuerySchema = z.object({
   q: z.string().trim().max(100).default(''),
+  accountId: z.uuid().optional(),
   rating: z.coerce.number().int().min(1).max(5).optional(),
   hasComment: z.enum(['true', 'false']).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(25),

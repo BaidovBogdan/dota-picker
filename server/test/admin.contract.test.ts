@@ -11,6 +11,7 @@ import type { Database } from '../src/db/client.js';
 import { adminRoutes } from '../src/modules/admin/admin.routes.js';
 import type { AdminService } from '../src/modules/admin/admin.service.js';
 import { authPlugin } from '../src/plugins/auth.js';
+import { adminApiCachePlugin } from '../src/plugins/admin-api-cache.js';
 import { errorPlugin } from '../src/plugins/errors.js';
 
 const adminKey = 'test-admin-key-that-is-longer-than-32-characters';
@@ -71,17 +72,26 @@ async function createApp() {
   await app.register(errorPlugin);
   const overview = vi.fn(async () => createOverview());
   const meta = vi.fn(async () => createMeta());
+  const listAnalyses = vi.fn<AdminService['listAnalyses']>(async () => ({
+    items: [],
+    pagination: { limit: 50, offset: 0, total: 0 },
+  }));
+  const listUsers = vi.fn<AdminService['listUsers']>(async () => ({
+    items: [],
+    pagination: { limit: 50, offset: 0, total: 0 },
+  }));
   const adminService = {
     overview,
     meta,
-    listUsers: vi.fn(),
-    listAnalyses: vi.fn(),
+    listUsers,
+    listAnalyses,
     system: vi.fn(),
     grantProToAllFreeAccounts: vi.fn(),
   } as unknown as AdminService;
+  await app.register(adminApiCachePlugin);
   await app.register(adminRoutes({ config, adminService }), { prefix: '/v1/admin' });
   await app.ready();
-  return { app, meta, overview };
+  return { app, listAnalyses, listUsers, meta, overview };
 }
 
 afterEach(async () => {
@@ -103,6 +113,24 @@ describe('admin API authentication', () => {
     expect(body.token.split('.')).toHaveLength(3);
     expect(new Date(body.expiresAt).getTime()).toBeGreaterThanOrEqual(before + 14 * 60 * 1_000);
     expect(body).not.toHaveProperty('key');
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.headers.pragma).toBe('no-cache');
+  });
+
+  it('prevents browser caches from retaining admin user and analysis data', async () => {
+    const { app } = await createApp();
+    const headers = { 'x-admin-key': adminKey };
+    const [users, analyses] = await Promise.all([
+      app.inject({ method: 'GET', url: '/v1/admin/users', headers }),
+      app.inject({ method: 'GET', url: '/v1/admin/analyses', headers }),
+    ]);
+
+    expect(users.statusCode).toBe(200);
+    expect(analyses.statusCode).toBe(200);
+    for (const response of [users, analyses]) {
+      expect(response.headers['cache-control']).toBe('no-store');
+      expect(response.headers.pragma).toBe('no-cache');
+    }
   });
 
   it('accepts an admin session and the legacy header, but rejects user access tokens', async () => {
@@ -139,6 +167,8 @@ describe('admin API authentication', () => {
     expect(bearer.statusCode).toBe(200);
     expect(legacy.statusCode).toBe(200);
     expect(user.statusCode).toBe(401);
+    expect(user.headers['cache-control']).toBe('no-store');
+    expect(user.headers.pragma).toBe('no-cache');
     expect(overview).toHaveBeenCalledTimes(2);
   });
 
@@ -152,6 +182,8 @@ describe('admin API authentication', () => {
 
     expect(response.statusCode).toBe(401);
     expect(response.json()).toMatchObject({ error: { code: 'ADMIN_AUTH_REQUIRED' } });
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.headers.pragma).toBe('no-cache');
   });
 
   it('serves the authenticated meta contract and validates rank filters', async () => {
@@ -178,5 +210,155 @@ describe('admin API authentication', () => {
     expect(response.json()).toMatchObject({ patch: '7.39e', rankFilter: 'all_ranks' });
     expect(meta).toHaveBeenCalledWith({ rank: 7 });
     expect(invalid.statusCode).toBe(400);
+  });
+
+  it('parses exact analysis-history filters and serves real diagnostic fields', async () => {
+    const { app, listAnalyses } = await createApp();
+    const analysisId = '11111111-1111-4111-8111-111111111111';
+    const accountId = '22222222-2222-4222-8222-222222222222';
+    const now = new Date().toISOString();
+    listAnalyses.mockResolvedValueOnce({
+      items: [{
+        id: analysisId,
+        accountId,
+        account: { id: accountId, kind: 'user', email: 'admin-test@example.com' },
+        status: 'completed',
+        source: 'photo',
+        input: {
+          source: 'photo',
+          position: 2,
+          allyHeroIds: [1],
+          enemyHeroIds: [2],
+          bannedHeroIds: [],
+          rank: 6,
+        },
+        result: {
+          patch: '7.41',
+          metaFetchedAt: now,
+          recommendations: [3, 4, 5].map((id) => ({
+            hero: {
+              id,
+              name: `hero_${id}`,
+              localizedName: `Hero ${id}`,
+              imageUrl: `https://cdn.cloudflare.steamstatic.com/${id}.png`,
+              iconUrl: `https://cdn.cloudflare.steamstatic.com/${id}-icon.png`,
+              roles: ['Carry'],
+            },
+            score: 80,
+            confidence: 'high' as const,
+            metrics: { roleFit: 0.8, counter: 0.7, meta: 0.6, synergy: 0.5 },
+            reasons: ['strong_counter' as const],
+          })),
+        },
+        rawInput: null,
+        rawResult: null,
+        dataQuality: {
+          input: 'valid' as const,
+          result: 'valid' as const,
+          issues: [],
+        },
+        patch: '7.41',
+        errorCode: null,
+        revision: 2,
+        durationMs: 140,
+        durationKind: 'session_to_latest_revision' as const,
+        quotaEvents: [{
+          id: '33333333-3333-4333-8333-333333333333',
+          delta: -1,
+          reason: 'analysis',
+          createdAt: now,
+        }],
+        sourceImage: {
+          stored: false as const,
+          status: 'not_stored' as const,
+          detail: 'Исходное изображение не сохраняется.',
+        },
+        createdAt: now,
+        updatedAt: now,
+      }],
+      pagination: { limit: 50, offset: 0, total: 1 },
+    });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/v1/admin/analyses?id=${analysisId}&accountId=${accountId}`,
+      headers: { 'x-admin-key': adminKey },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      items: [{
+        id: analysisId,
+        revision: 2,
+        quotaEvents: [{ delta: -1, reason: 'analysis' }],
+        sourceImage: { stored: false, status: 'not_stored' },
+      }],
+    });
+    expect(listAnalyses).toHaveBeenCalledWith(expect.objectContaining({
+      id: analysisId,
+      accountId,
+      limit: 50,
+      offset: 0,
+    }));
+  });
+
+  it('serializes legacy JSON arrays, primitives, and null without failing the page', async () => {
+    const { app, listAnalyses } = await createApp();
+    const now = new Date().toISOString();
+    const accountId = '22222222-2222-4222-8222-222222222222';
+    const legacyItem = (
+      id: string,
+      rawInput: null | boolean | number | string | (number | string)[],
+      rawResult: null | boolean | number | string | (number | string)[],
+    ) => ({
+      id,
+      accountId,
+      account: { id: accountId, kind: 'user' as const, email: 'legacy@example.com' },
+      status: 'completed' as const,
+      source: 'manual' as const,
+      input: null,
+      result: null,
+      rawInput,
+      rawResult,
+      dataQuality: {
+        input: 'legacy_invalid' as const,
+        result: 'legacy_invalid' as const,
+        issues: ['Stored payload does not match the current schema'],
+      },
+      patch: null,
+      errorCode: null,
+      revision: 0,
+      durationMs: 25,
+      durationKind: 'initial_terminal_state' as const,
+      quotaEvents: [],
+      sourceImage: {
+        stored: false as const,
+        status: 'not_applicable' as const,
+        detail: 'Ручной ввод не содержит исходного изображения.',
+      },
+      createdAt: now,
+      updatedAt: now,
+    });
+    listAnalyses.mockResolvedValueOnce({
+      items: [
+        legacyItem('11111111-1111-4111-8111-111111111111', [1, 'legacy'], false),
+        legacyItem('33333333-3333-4333-8333-333333333333', null, 0),
+      ],
+      pagination: { limit: 50, offset: 0, total: 2 },
+    });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/admin/analyses',
+      headers: { 'x-admin-key': adminKey },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      items: [
+        { rawInput: [1, 'legacy'], rawResult: false },
+        { rawInput: null, rawResult: 0 },
+      ],
+    });
   });
 });

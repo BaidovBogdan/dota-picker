@@ -10,6 +10,7 @@ import type {
   AdminSystem,
   AdminUsersResponse,
   AdminUsersQuery,
+  HeroCatalogResponse,
   RankBracket,
 } from '../types';
 
@@ -102,6 +103,11 @@ async function request<T>(token: string, path: string, init: RequestInit = {}) {
   return parseResponse<T>(response);
 }
 
+async function publicRequest<T>(path: string, init: RequestInit = {}) {
+  const response = await fetch(path, init);
+  return parseResponse<T>(response);
+}
+
 function queryString(values: object) {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(values)) {
@@ -118,6 +124,8 @@ export const adminApi = {
     request<AdminUsersResponse>(token, `/users${queryString(query)}`, { signal }),
   analyses: (token: string, query: AdminAnalysesQuery, signal?: AbortSignal) =>
     request<AdminAnalysesResponse>(token, `/analyses${queryString(query)}`, { signal }),
+  heroCatalog: (signal?: AbortSignal) =>
+    publicRequest<HeroCatalogResponse>('/v1/heroes', { signal }),
   reviews: (token: string, query: AdminReviewsQuery, signal?: AbortSignal) =>
     request<AdminReviewsResponse>(token, `/reviews${queryString(query)}`, { signal }),
   meta: (token: string, rank: RankBracket | null, signal?: AbortSignal) =>

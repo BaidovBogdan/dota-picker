@@ -6,6 +6,7 @@ export type PageId = 'overview' | 'users' | 'analyses' | 'reviews' | 'meta' | 's
 export type ActivityTone = 'neutral' | 'positive' | 'warning' | 'negative';
 export type RankBracket = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
 export type HeroPosition = 1 | 2 | 3 | 4 | 5;
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
 export type Pagination = {
   limit: number;
@@ -92,6 +93,84 @@ export type AdminUsersQuery = {
   plan?: Plan;
 };
 
+export type AdminAnalysisRecommendation = {
+  hero: {
+    id: number;
+    name: string;
+    localizedName: string;
+    imageUrl: string;
+    iconUrl: string;
+    roles: string[];
+  };
+  score: number;
+  confidence: 'low' | 'medium' | 'high';
+  metrics: {
+    roleFit: number;
+    counter: number;
+    meta: number;
+    synergy: number;
+    reliability?: number;
+    coverage?: number;
+    worstMatchup?: number;
+  };
+  scoreBreakdown?: {
+    role: number;
+    matchup: number;
+    meta: number;
+    teamFit: number;
+    reliability: number;
+    advisor: number;
+    diversity: number;
+    total: number;
+  };
+  evidence?: {
+    matchups: {
+      source: string;
+      opponentsCovered: number;
+      opponentsTotal: number;
+      games: number;
+      minimumGames: number;
+      weightedWinRate: number | null;
+      expectedWinRate: number;
+      availability?: 'ready' | 'unavailable';
+      isStale?: boolean;
+    };
+    synergy?: {
+      source: string;
+      alliesCovered: number;
+      alliesTotal: number;
+      games: number;
+      availability: 'ready' | 'unavailable';
+      isStale: boolean;
+    };
+    meta: {
+      source: string;
+      games: number;
+      wins: number;
+      winRate: number;
+      rankScoped: boolean;
+      position: 1 | 2 | 3 | 4 | 5;
+      positionApproximate: boolean | null;
+      isStale: boolean;
+    };
+  };
+  reasons: string[];
+};
+
+export type AdminRecommendationResult = {
+  patch: string;
+  metaFetchedAt: string;
+  recommendations: AdminAnalysisRecommendation[];
+  provenance?: {
+    engineVersion: 'hybrid-v2' | 'deterministic-v3';
+    scoringVersion: 'data-first-v2' | 'draft-pairs-v3';
+    aiAssisted: boolean;
+    model?: string;
+    promptVersion?: string;
+    fallbackReason?: 'not_configured' | 'insufficient_candidates' | 'timeout' | 'invalid_response' | 'provider_error';
+  };
+};
+
 export type AdminAnalysis = {
   id: string;
   accountId: string;
@@ -104,9 +183,36 @@ export type AdminAnalysis = {
   source: AnalysisSource;
   patch: string | null;
   errorCode: string | null;
-  input: Record<string, unknown>;
-  result: Record<string, unknown> | null;
+  input: {
+    source: AnalysisSource;
+    position: 1 | 2 | 3 | 4 | 5;
+    allyHeroIds: number[];
+    enemyHeroIds: number[];
+    bannedHeroIds: number[];
+    rank?: RankBracket;
+  } | null;
+  result: AdminRecommendationResult | null;
+  rawInput: JsonValue;
+  rawResult: JsonValue;
+  dataQuality: {
+    input: 'valid' | 'legacy_invalid';
+    result: 'valid' | 'absent' | 'legacy_invalid';
+    issues: string[];
+  };
+  revision: number;
   durationMs: number | null;
+  durationKind: 'initial_terminal_state' | 'session_to_latest_revision' | 'in_progress';
+  quotaEvents: Array<{
+    id: string;
+    delta: number;
+    reason: 'analysis' | 'refund';
+    createdAt: string;
+  }>;
+  sourceImage: {
+    stored: false;
+    status: 'not_stored' | 'not_applicable';
+    detail: string;
+  };
   createdAt: string;
   updatedAt: string;
 };
@@ -120,6 +226,8 @@ export type AdminAnalysesQuery = {
   limit: number;
   offset: number;
   q?: string;
+  id?: string;
+  accountId?: string;
   status?: AnalysisStatus;
   source?: AnalysisSource;
 };
@@ -141,13 +249,19 @@ export type AdminReview = {
   updatedAt: string;
   analysis: {
     source: AnalysisSource;
-    patch: string;
+    patch: string | null;
     recommendations: AdminReviewHero[];
+    rawResult: JsonValue;
+    dataQuality: {
+      result: 'valid' | 'absent' | 'legacy_invalid';
+      issues: string[];
+    };
   };
   account: {
     id: string;
     kind: AccountKind;
     email: string | null;
+    plan: Plan;
   };
 };
 
@@ -165,6 +279,7 @@ export type AdminReviewsQuery = {
   limit: number;
   offset: number;
   q?: string;
+  accountId?: string;
   rating?: 1 | 2 | 3 | 4 | 5;
   hasComment?: 'true' | 'false';
 };
@@ -181,6 +296,12 @@ export type AdminHeroMeta = {
   picks: number;
   wins: number;
   winRate: number;
+};
+
+export type HeroCatalogResponse = {
+  heroes: AdminHeroMeta[];
+  patch: string;
+  fetchedAt: string;
 };
 
 export type AdminHeroPositionStat = {

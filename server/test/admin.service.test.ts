@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { loadConfig } from '../src/config/env.js';
 import type { Database } from '../src/db/client.js';
 import type { OpenDotaAdapter } from '../src/modules/heroes/opendota.adapter.js';
-import { AdminService, analysisSourceLabel } from '../src/modules/admin/admin.service.js';
+import {
+  AdminService,
+  analysisSourceImage,
+  analysisSourceLabel,
+  parseAdminAnalysisPayloads,
+} from '../src/modules/admin/admin.service.js';
 
 const config = loadConfig({
   NODE_ENV: 'test',
@@ -27,6 +32,22 @@ function queryResult<T>(value: T) {
   return builder;
 }
 
+function listQueryResult<T>(value: T) {
+  const builder = {
+    from: vi.fn(() => builder),
+    innerJoin: vi.fn(() => builder),
+    where: vi.fn(() => builder),
+    orderBy: vi.fn(() => builder),
+    limit: vi.fn(() => builder),
+    offset: vi.fn(async () => value),
+    then: <TResult1 = T, TResult2 = never>(
+      onFulfilled?: ((result: T) => TResult1 | PromiseLike<TResult1>) | null,
+      onRejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
+    ) => Promise.resolve(value).then(onFulfilled, onRejected),
+  };
+  return builder;
+}
+
 const metaAdapter = {
   getHeroes: vi.fn(),
   getMetaPositionSnapshot: vi.fn(),
@@ -40,6 +61,127 @@ describe('AdminService analysis provenance', () => {
       analysisSourceLabel('photo'),
       analysisSourceLabel('overwolf'),
     ]).toEqual(['Вручную', 'Фото', 'Overwolf Live']);
+  });
+
+  it('reports source-image retention without inventing a preview', () => {
+    expect(analysisSourceImage('photo')).toMatchObject({
+      stored: false,
+      status: 'not_stored',
+    });
+    expect(analysisSourceImage('manual')).toMatchObject({
+      stored: false,
+      status: 'not_applicable',
+    });
+    expect(analysisSourceImage('overwolf')).toMatchObject({
+      stored: false,
+      status: 'not_applicable',
+    });
+  });
+
+  it('isolates malformed legacy payloads instead of failing the analysis page', () => {
+    const rawInput = { source: 'photo', position: 'middle', enemyHeroIds: [] };
+    const rawResult = { patch: 'old', recommendations: [{ heroId: 1 }] };
+
+    const result = parseAdminAnalysisPayloads(rawInput, rawResult);
+
+    expect(result).toMatchObject({
+      input: null,
+      result: null,
+      rawInput,
+      rawResult,
+      dataQuality: {
+        input: 'legacy_invalid',
+        result: 'legacy_invalid',
+      },
+    });
+    expect(result.dataQuality.issues.length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    { rawInput: [1, 'legacy'], rawResult: false },
+    { rawInput: null, rawResult: 0 },
+    { rawInput: 'legacy', rawResult: ['old'] },
+  ])('preserves non-object JSON payloads %# for diagnostics', ({ rawInput, rawResult }) => {
+    const result = parseAdminAnalysisPayloads(rawInput, rawResult);
+
+    expect(result).toMatchObject({
+      input: null,
+      result: null,
+      rawInput,
+      rawResult,
+      dataQuality: {
+        input: 'legacy_invalid',
+        result: 'legacy_invalid',
+      },
+    });
+  });
+
+  it('loads quota history once for the whole analysis page', async () => {
+    const createdAt = new Date('2026-08-08T10:00:00.000Z');
+    const updatedAt = new Date('2026-08-08T10:00:01.000Z');
+    const accountId = '11111111-1111-4111-8111-111111111111';
+    const analysisIds = [
+      '22222222-2222-4222-8222-222222222222',
+      '33333333-3333-4333-8333-333333333333',
+    ];
+    const rows = analysisIds.map((id, index) => ({
+      analysis: {
+        id,
+        accountId,
+        status: 'failed' as const,
+        source: index === 0 ? 'photo' as const : 'overwolf' as const,
+        input: {
+          source: index === 0 ? 'photo' as const : 'overwolf' as const,
+          position: 2,
+          allyHeroIds: [1],
+          enemyHeroIds: [2],
+          bannedHeroIds: [],
+        },
+        result: null,
+        patch: null,
+        errorCode: 'INTERNAL_ERROR',
+        revision: index,
+        createdAt,
+        updatedAt,
+      },
+      account: { id: accountId, kind: 'user' as const, email: 'user@example.com' },
+    }));
+    const quotaRows = analysisIds.map((analysisId, index) => ({
+      id: `${index + 4}4444444-4444-4444-8444-444444444444`,
+      analysisId,
+      delta: index === 0 ? -1 : 1,
+      reason: index === 0 ? 'analysis' as const : 'refund' as const,
+      createdAt: updatedAt,
+    }));
+    const select = vi.fn()
+      .mockImplementationOnce(() => listQueryResult([{ total: 2 }]))
+      .mockImplementationOnce(() => listQueryResult(rows))
+      .mockImplementationOnce(() => listQueryResult(quotaRows));
+    const service = new AdminService({ select } as unknown as Database, config, metaAdapter);
+
+    const result = await service.listAnalyses({
+      limit: 20,
+      offset: 0,
+      q: '',
+      accountId,
+    });
+
+    expect(select).toHaveBeenCalledTimes(3);
+    expect(result.items).toHaveLength(2);
+    expect(result.items[0]).toMatchObject({
+      id: analysisIds[0],
+      revision: 0,
+      sourceImage: { stored: false, status: 'not_stored' },
+      durationKind: 'initial_terminal_state',
+      quotaEvents: [{ delta: -1, reason: 'analysis' }],
+    });
+    expect(result.items[1]).toMatchObject({
+      id: analysisIds[1],
+      revision: 1,
+      sourceImage: { stored: false, status: 'not_applicable' },
+      durationKind: 'session_to_latest_revision',
+      quotaEvents: [{ delta: 1, reason: 'refund' }],
+    });
   });
 });
 

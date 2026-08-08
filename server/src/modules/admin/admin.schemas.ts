@@ -4,6 +4,10 @@ import {
   metaPositionResponseSchema,
   rankBracketSchema,
 } from '../heroes/heroes.schemas.js';
+import {
+  draftSchema,
+  recommendationResultSchema,
+} from '../recommendation/recommendation.schemas.js';
 
 const paginationSchema = z.object({
   limit: z.number().int().positive(),
@@ -15,8 +19,7 @@ const accountKindSchema = z.enum(['guest', 'user']);
 const planSchema = z.enum(['free', 'pro']);
 const analysisStatusSchema = z.enum(['processing', 'completed', 'failed']);
 const analysisSourceSchema = z.enum(['manual', 'photo', 'overwolf']);
-const jsonObjectSchema = z.record(z.string(), z.unknown());
-
+const jsonValueSchema = z.json();
 export const adminHeadersSchema = z.object({
   authorization: z.string().min(1).optional(),
   'x-admin-key': z.string().min(1).optional(),
@@ -119,8 +122,23 @@ export const adminAnalysesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   offset: z.coerce.number().int().min(0).max(1_000_000).default(0),
   q: z.string().trim().max(200).default(''),
+  id: z.uuid().optional(),
+  accountId: z.uuid().optional(),
   status: analysisStatusSchema.optional(),
   source: analysisSourceSchema.optional(),
+});
+
+const adminQuotaEventSchema = z.object({
+  id: z.uuid(),
+  delta: z.number().int(),
+  reason: z.enum(['analysis', 'refund']),
+  createdAt: z.iso.datetime(),
+});
+
+const adminSourceImageSchema = z.object({
+  stored: z.literal(false),
+  status: z.enum(['not_stored', 'not_applicable']),
+  detail: z.string().min(1),
 });
 
 export const adminAnalysisSchema = z.object({
@@ -133,11 +151,22 @@ export const adminAnalysisSchema = z.object({
   }),
   status: analysisStatusSchema,
   source: analysisSourceSchema,
-  input: jsonObjectSchema,
-  result: jsonObjectSchema.nullable(),
+  input: draftSchema.nullable(),
+  result: recommendationResultSchema.nullable(),
+  rawInput: jsonValueSchema,
+  rawResult: jsonValueSchema,
+  dataQuality: z.object({
+    input: z.enum(['valid', 'legacy_invalid']),
+    result: z.enum(['valid', 'absent', 'legacy_invalid']),
+    issues: z.array(z.string()),
+  }),
   patch: z.string().nullable(),
   errorCode: z.string().nullable(),
+  revision: z.number().int().nonnegative(),
   durationMs: z.number().int().nonnegative().nullable(),
+  durationKind: z.enum(['initial_terminal_state', 'session_to_latest_revision', 'in_progress']),
+  quotaEvents: z.array(adminQuotaEventSchema).max(2),
+  sourceImage: adminSourceImageSchema,
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
 });

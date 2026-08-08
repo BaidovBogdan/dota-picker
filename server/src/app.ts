@@ -32,6 +32,7 @@ import { RecommendationEngine } from './modules/recommendation/recommendation.en
 import { reviewRoutes } from './modules/reviews/review.routes.js';
 import { ReviewService } from './modules/reviews/review.service.js';
 import { adminStaticPlugin } from './plugins/admin-static.js';
+import { adminApiCachePlugin } from './plugins/admin-api-cache.js';
 import { authPlugin } from './plugins/auth.js';
 import { errorPlugin } from './plugins/errors.js';
 import { healthRoutes } from './routes/health.routes.js';
@@ -114,6 +115,7 @@ export function buildApp(config: AppConfig = loadConfig()) {
     transform: jsonSchemaTransform,
   });
   app.register(swaggerUi, { routePrefix: '/docs' });
+  app.register(adminApiCachePlugin);
   app.register(authPlugin, { config, db });
   app.register(errorPlugin);
   app.register(healthRoutes(db), { prefix: '/health' });

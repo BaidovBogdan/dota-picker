@@ -38,6 +38,7 @@ import type {
   AdminSystem,
   AdminUsersResponse,
   AdminUsersQuery,
+  HeroCatalogResponse,
   PageId,
   RankBracket,
 } from './types';
@@ -142,6 +143,7 @@ export function App() {
   const [usersQuery, setUsersQuery] = useState<AdminUsersQuery>({ limit: 20, offset: 0 });
   const [analyses, setAnalyses] = useState<Resource<AdminAnalysesResponse>>(emptyResource);
   const [analysesQuery, setAnalysesQuery] = useState<AdminAnalysesQuery>({ limit: 20, offset: 0 });
+  const [heroCatalog, setHeroCatalog] = useState<Resource<HeroCatalogResponse>>(emptyResource);
   const [reviews, setReviews] = useState<Resource<AdminReviewsResponse>>(emptyResource);
   const [reviewsQuery, setReviewsQuery] = useState<AdminReviewsQuery>({ limit: 20, offset: 0 });
   const [meta, setMeta] = useState<Resource<AdminMeta>>(emptyResource);
@@ -161,6 +163,7 @@ export function App() {
     setOverview(emptyResource());
     setUsers(emptyResource());
     setAnalyses(emptyResource());
+    setHeroCatalog(emptyResource());
     setReviews(emptyResource());
     setMeta(emptyResource());
     setSystem(emptyResource());
@@ -219,6 +222,11 @@ export function App() {
     return load(setAnalyses, adminApi.analyses(session.token, analysesQuery, signal));
   }, [analysesQuery, load, session]);
 
+  const refreshHeroCatalog = useCallback((signal?: AbortSignal) => {
+    if (!session) return Promise.resolve();
+    return load(setHeroCatalog, adminApi.heroCatalog(signal));
+  }, [load, session]);
+
   const refreshReviews = useCallback((signal?: AbortSignal) => {
     if (!session) return Promise.resolve();
     return load(setReviews, adminApi.reviews(session.token, reviewsQuery, signal));
@@ -268,6 +276,13 @@ export function App() {
   }, [page, refreshAnalyses, session]);
 
   useEffect(() => {
+    if (!session || page !== 'analyses' || heroCatalog.data) return;
+    const controller = new AbortController();
+    void refreshHeroCatalog(controller.signal);
+    return () => controller.abort();
+  }, [heroCatalog.data, page, refreshHeroCatalog, session]);
+
+  useEffect(() => {
     if (!session || page !== 'reviews') return;
     const controller = new AbortController();
     void refreshReviews(controller.signal);
@@ -314,7 +329,10 @@ export function App() {
   const refreshCurrent = () => {
     if (page === 'overview') void refreshOverview();
     if (page === 'users') void refreshUsers();
-    if (page === 'analyses') void refreshAnalyses();
+    if (page === 'analyses') {
+      void refreshAnalyses();
+      if (!heroCatalog.data || heroCatalog.error) void refreshHeroCatalog();
+    }
     if (page === 'reviews') void refreshReviews();
     if (page === 'meta') void refreshMeta();
     if (page === 'system') void refreshSystem();
@@ -400,9 +418,19 @@ export function App() {
                   : `Pro выдан: ${result.grantedAccounts} аккаунтов, квота ${result.quotaBalance}`);
                 await Promise.all([refreshUsers(), refreshOverview()]);
               }}
+              onOpenAnalyses={(accountId) => {
+                setAnalyses(emptyResource());
+                setAnalysesQuery({ limit: 20, offset: 0, accountId });
+                navigate('analyses');
+              }}
+              onOpenReviews={(accountId) => {
+                setReviews(emptyResource());
+                setReviewsQuery({ limit: 20, offset: 0, accountId });
+                navigate('reviews');
+              }}
             />
           ) : null}
-          {page === 'analyses' ? <AnalysesPage resource={analyses} initialQuery={analysesQuery} onRetry={() => void refreshAnalyses()} onQueryChange={updateAnalysesQuery} /> : null}
+          {page === 'analyses' ? <AnalysesPage resource={analyses} heroCatalog={heroCatalog} initialQuery={analysesQuery} onRetry={() => { void refreshAnalyses(); if (!heroCatalog.data) void refreshHeroCatalog(); }} onHeroCatalogRetry={() => void refreshHeroCatalog()} onQueryChange={updateAnalysesQuery} /> : null}
           {page === 'reviews' ? (
             <ReviewsPage
               resource={reviews}
@@ -413,6 +441,11 @@ export function App() {
                 await runAuthenticatedMutation(adminApi.deleteReview(session.token, reviewId));
                 notify('Отзыв удалён из базы');
                 await Promise.all([refreshReviews(), refreshOverview()]);
+              }}
+              onOpenAnalysis={(id) => {
+                setAnalyses(emptyResource());
+                setAnalysesQuery({ limit: 20, offset: 0, id });
+                navigate('analyses');
               }}
             />
           ) : null}

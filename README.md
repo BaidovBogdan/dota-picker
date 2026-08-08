@@ -2,7 +2,7 @@
 
 Counterpick is a Dota 2 draft assistant that turns a visible or manually entered draft into role-aware hero recommendations. It combines current OpenDota statistics with a constrained Gemini reranker and a deterministic fallback, so a recommendation can still be produced when the AI provider is unavailable.
 
-The repository contains the mobile product, API, Windows desktop companion, administration prototype, public landing page, research probes, and archived design explorations.
+The repository contains the mobile product, API, Windows desktop companion, protected administration console, public landing page, research probes, and archived design explorations.
 
 ## Repository map
 
@@ -11,7 +11,7 @@ The repository contains the mobile product, API, Windows desktop companion, admi
 | [`client`](client/README.md) | Expo application for iOS and Android | Main product |
 | [`server`](server/README.md) | Fastify API, PostgreSQL data layer, OpenDota and Gemini integrations | Main backend |
 | [`desktop/app`](desktop/app/README.md) | Electron companion with automatic Dota 2 draft detection | Main desktop product |
-| [`admin`](admin/README.md) | Lightweight React/Vite operations dashboard | Mock-data prototype |
+| [`admin`](admin/README.md) | Protected React/Vite operations dashboard backed by the real API and database | Operations console |
 | [`landing`](landing/README.md) | Astro marketing site for the future Windows client | Canonical landing |
 | [`desktop/gsi-probe`](desktop/gsi-probe/README.md) | Local Valve Game State Integration research receiver | Research tool |
 | [`desktop/capture-probe`](desktop/capture-probe/README.md) | Safe Windows window-capture proof of concept | Research tool |
@@ -106,4 +106,4 @@ npm run build
 
 ## Current scope
 
-The mobile client, desktop companion, and API are the primary product surfaces. The desktop app automatically detects Dota 2 hero selection through GSI and analyzes changed window captures; the probes remain isolated research tools. The Astro package is the canonical public landing, and the admin panel is currently a mock-data prototype.
+The mobile client, desktop companion, and API are the primary product surfaces. The desktop app automatically detects Dota 2 hero selection through GSI and analyzes changed window captures; the probes remain isolated research tools. The Astro package is the canonical public landing. The protected admin console reads real accounts, analyses, quota events, reviews, meta snapshots and system status from the same-origin API. Source screenshots are intentionally not persisted, and integrations without required external configuration are reported as unavailable rather than represented with placeholder data.

@@ -18,8 +18,8 @@ The console uses these protected server endpoints:
 
 - `GET /v1/admin/overview?days=7|30`
 - `GET /v1/admin/users?q=&kind=&plan=&limit=&offset=`
-- `GET /v1/admin/analyses?q=&status=&source=&limit=&offset=`
-- `GET /v1/admin/reviews?q=&rating=&hasComment=&limit=&offset=`
+- `GET /v1/admin/analyses?id=&accountId=&q=&status=&source=&limit=&offset=`
+- `GET /v1/admin/reviews?accountId=&q=&rating=&hasComment=&limit=&offset=`
 - `DELETE /v1/admin/reviews/:id`
 - `GET /v1/admin/meta?rank=1..8`
 - `GET /v1/admin/system`
@@ -50,9 +50,14 @@ Vite builds with `base: '/admin/'`. The backend serves the generated assets and 
 ## Operational notes
 
 - Search, filters and pagination for users, analyses and reviews run on the server and expose the real total.
+- User details expose stored account, plan, quota, billing timestamps and aggregate analysis counts, with exact links to account-scoped analyses and reviews.
+- Analysis details expose the saved draft, recommendation assets and metrics, revision, quota events and payload provenance. Historical payloads that do not match the current schema remain isolated as raw JSON instead of failing the whole page.
+- Source screenshots are processed in memory and intentionally not stored. The console shows retention status and metadata without inventing a preview.
 - Every data screen has loading, error, empty and retry states.
 - Overview and Meta charts expose cursor-following tooltips and keyboard focus states.
 - Meta reads the cached, validated OpenDota snapshot through the backend and reports stale or unavailable data honestly.
 - Review deletion is a real irreversible database operation and requires confirmation.
 - The Pro grant is a real idempotent bulk operation and requires confirmation.
 - System integration groups come from the backend audit response: connected, connectable now, and blocked pending schema or telemetry.
+- Admin API responses use `Cache-Control: no-store` and `Pragma: no-cache` so account and diagnostic data are not retained in the browser cache after logout.
+- The overview shows recent billing webhook and admin audit events. Full raw journals are not exposed until redaction, retention and pagination policies are defined.

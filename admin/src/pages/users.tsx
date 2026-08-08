@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ChevronLeft, ChevronRight, ShieldCheck, Sparkles } from 'lucide-react';
+import { ChevronLeft, ChevronRight, History, MessageSquareText, ScanSearch, ShieldCheck, Sparkles } from 'lucide-react';
 import type { PageResource } from '../App';
 import {
   Button,
@@ -31,12 +31,16 @@ export function UsersPage({
   onRetry,
   onQueryChange,
   onGrantProAll,
+  onOpenAnalyses,
+  onOpenReviews,
 }: {
   resource: PageResource<AdminUsersResponse>;
   initialQuery: AdminUsersQuery;
   onRetry: () => void;
   onQueryChange: (query: AdminUsersQuery) => void;
   onGrantProAll: () => Promise<void>;
+  onOpenAnalyses: (accountId: string) => void;
+  onOpenReviews: (accountId: string) => void;
 }) {
   const [query, setQuery] = useState(() => initialQuery.q ?? '');
   const [kind, setKind] = useState<'all' | 'user' | 'guest'>(() => initialQuery.kind ?? 'all');
@@ -157,13 +161,27 @@ export function UsersPage({
         {selected ? (
           <div className="user-drawer">
             <div className="user-identity"><UserAvatar name={userLabel(selected)} size="lg" /><div><div><StatusBadge tone={selected.plan === 'pro' ? 'info' : 'neutral'}>{selected.plan === 'pro' ? (selected.complimentaryPro ? 'Подарочный Pro' : 'Pro') : 'Free'}</StatusBadge><StatusBadge tone="neutral">{selected.kind === 'guest' ? 'Гость' : 'Аккаунт'}</StatusBadge></div><p>{selected.email ?? 'Email отсутствует'}</p></div></div>
-            <div className="drawer-stat-grid"><div><span>Проверки</span><strong>{selected.analysesCount}</strong></div><div><span>Успешно</span><strong>{selected.completedCount}</strong></div><div><span>Квота</span><strong>{selected.quotaBalance}</strong></div></div>
+            <div className="drawer-stat-grid drawer-stat-grid--wide"><div><span>Проверки</span><strong>{selected.analysesCount}</strong></div><div><span>Успешно</span><strong>{selected.completedCount}</strong></div><div><span>Ошибки</span><strong>{selected.failedCount}</strong></div><div><span>В процессе</span><strong>{selected.processingCount}</strong></div><div><span>Успешность</span><strong>{selected.successRate === null ? '—' : formatPercent(selected.successRate * 100, 0)}</strong></div><div><span>Квота</span><strong>{selected.quotaBalance}</strong></div></div>
+            <section className="drawer-section">
+              <div className="drawer-section__heading"><h3>История</h3><History size={18} /></div>
+              <p className="drawer-section__lead">Открывает серверные списки с точным фильтром account ID и собственной пагинацией.</p>
+              <div className="drawer-action-row">
+                <Button icon={<ScanSearch size={16} />} onClick={() => onOpenAnalyses(selected.id)}>Проверки ({selected.analysesCount})</Button>
+                <Button icon={<MessageSquareText size={16} />} onClick={() => onOpenReviews(selected.id)}>Отзывы ({selected.reviewsCount})</Button>
+              </div>
+            </section>
             <section className="drawer-section drawer-section--details">
               <h3>Детали аккаунта</h3>
               <dl>
+                <div><dt>ID</dt><dd className="drawer-code-value"><code>{selected.id}</code></dd></div>
+                <div><dt>Device ID</dt><dd className="drawer-code-value"><code>{selected.deviceId ?? 'Не применимо'}</code></dd></div>
                 <div><dt>Создан</dt><dd>{formatDateTime(selected.createdAt)}</dd></div>
                 <div><dt>Обновлён</dt><dd>{formatDateTime(selected.updatedAt)}</dd></div>
                 <div><dt>Отзывов</dt><dd>{selected.reviewsCount}</dd></div>
+                <div><dt>Последняя проверка</dt><dd>{selected.lastAnalysisAt ? formatDateTime(selected.lastAnalysisAt) : 'Ещё не было'}</dd></div>
+                <div><dt>Квота обновлена</dt><dd>{formatDateTime(selected.quotaRefreshedAt)}</dd></div>
+                <div><dt>Billing обновлён</dt><dd>{selected.billingUpdatedAt ? formatDateTime(selected.billingUpdatedAt) : 'Событий нет'}</dd></div>
+                <div><dt>Product ID</dt><dd className="drawer-code-value"><code>{selected.planProductId ?? 'Не задан'}</code></dd></div>
                 <div><dt>Pro до</dt><dd>{selected.complimentaryPro ? 'Бессрочно' : selected.planExpiresAt ? formatDateTime(selected.planExpiresAt) : 'Не задано'}</dd></div>
               </dl>
             </section>

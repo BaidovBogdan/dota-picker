@@ -12,6 +12,7 @@ import { desktop } from './bridge';
 import { AppShell } from './components/app-shell';
 import { AppUpdate } from './components/app-update';
 import { BrandMark } from './components/brand-mark';
+import { StartupLoader } from './components/startup-loader';
 import { AsyncState } from './components/ui';
 import { WindowControls } from './components/window-controls';
 import { useI18n } from './i18n';
@@ -135,7 +136,7 @@ function Bootstrap() {
   if (!preferences) {
     return (
       <BootstrapScreen>
-        <AsyncState status="loading" title="COUNTERPICK" />
+        <StartupLoader phase="preferences" />
       </BootstrapScreen>
     );
   }
@@ -143,7 +144,7 @@ function Bootstrap() {
   if (sessionQuery.isPending) {
     return (
       <BootstrapScreen>
-        <AsyncState status="loading" title={text('Запускаем Counterpick', 'Starting Counterpick')} />
+        <StartupLoader phase="session" />
       </BootstrapScreen>
     );
   }
@@ -236,14 +237,13 @@ function UpdateSync() {
 }
 
 export function App() {
-  const { text } = useI18n();
   return (
     <HashRouter>
       <UpdateSync />
       <Suspense
         fallback={
           <BootstrapScreen>
-            <AsyncState status="loading" title={text('Открываем экран', 'Opening screen')} />
+            <StartupLoader phase="route" />
           </BootstrapScreen>
         }
       >

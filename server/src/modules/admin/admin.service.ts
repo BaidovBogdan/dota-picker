@@ -12,6 +12,7 @@ import {
   sql,
   type SQL,
 } from 'drizzle-orm';
+import { z } from 'zod';
 import type { AppConfig } from '../../config/env.js';
 import type { Database } from '../../db/client.js';
 import { ExternalServiceError } from '../../lib/errors.js';
@@ -21,9 +22,14 @@ import {
   analyses,
   analysisReviews,
   billingEvents,
+  quotaEvents,
 } from '../../db/schema.js';
 import { complimentaryProGrantId } from '../billing/billing-plan.js';
 import type { OpenDotaAdapter } from '../heroes/opendota.adapter.js';
+import {
+  draftSchema,
+  recommendationResultSchema,
+} from '../recommendation/recommendation.schemas.js';
 import type {
   AdminAnalysesQuery,
   AdminMetaQuery,
@@ -56,6 +62,51 @@ export function analysisSourceLabel(source: 'manual' | 'photo' | 'overwolf') {
     photo: 'Фото',
     overwolf: 'Overwolf Live',
   }[source];
+}
+
+export function analysisSourceImage(source: 'manual' | 'photo' | 'overwolf') {
+  return source === 'photo'
+    ? {
+        stored: false as const,
+        status: 'not_stored' as const,
+        detail: 'Исходное изображение обрабатывается в памяти и не сохраняется по политике приватности.',
+      }
+    : {
+        stored: false as const,
+        status: 'not_applicable' as const,
+        detail: source === 'overwolf'
+          ? 'Overwolf передаёт структурированное состояние драфта; исходное изображение не требуется.'
+          : 'Ручной ввод не содержит исходного изображения.',
+      };
+}
+
+export function parseAdminAnalysisPayloads(
+  input: unknown,
+  result: unknown,
+) {
+  const parsedInput = draftSchema.safeParse(input);
+  const parsedResult = result === null ? null : recommendationResultSchema.safeParse(result);
+  const rawInput = z.json().safeParse(input);
+  const rawResult = z.json().safeParse(result);
+  const issues = [
+    ...(parsedInput.success ? [] : parsedInput.error.issues.map((issue) => `input.${issue.path.join('.') || 'root'}: ${issue.message}`)),
+    ...(parsedResult === null || parsedResult.success ? [] : parsedResult.error.issues.map((issue) => `result.${issue.path.join('.') || 'root'}: ${issue.message}`)),
+  ];
+  return {
+    input: parsedInput.success ? parsedInput.data : null,
+    result: parsedResult?.success ? parsedResult.data : null,
+    rawInput: parsedInput.success || !rawInput.success ? null : rawInput.data,
+    rawResult: parsedResult === null || parsedResult.success || !rawResult.success ? null : rawResult.data,
+    dataQuality: {
+      input: parsedInput.success ? 'valid' as const : 'legacy_invalid' as const,
+      result: parsedResult === null
+        ? 'absent' as const
+        : parsedResult.success
+          ? 'valid' as const
+          : 'legacy_invalid' as const,
+      issues,
+    },
+  };
 }
 
 type Integration = {
@@ -319,6 +370,8 @@ export class AdminService {
 
   public async listAnalyses(query: AdminAnalysesQuery) {
     const conditions: SQL[] = [];
+    if (query.id) conditions.push(eq(analyses.id, query.id));
+    if (query.accountId) conditions.push(eq(analyses.accountId, query.accountId));
     if (query.status) conditions.push(eq(analyses.status, query.status));
     if (query.source) conditions.push(eq(analyses.source, query.source));
     if (query.q) {
@@ -353,23 +406,58 @@ export class AdminService {
         .offset(query.offset),
     ]);
 
+    const analysisIds = rows.map(({ analysis }) => analysis.id);
+    const quotaRows = analysisIds.length > 0
+      ? await this.db.select({
+          id: quotaEvents.id,
+          analysisId: quotaEvents.analysisId,
+          delta: quotaEvents.delta,
+          reason: quotaEvents.reason,
+          createdAt: quotaEvents.createdAt,
+        }).from(quotaEvents)
+          .where(inArray(quotaEvents.analysisId, analysisIds))
+          .orderBy(desc(quotaEvents.createdAt), desc(quotaEvents.id))
+      : [];
+    const quotaByAnalysis = new Map<string, typeof quotaRows>();
+    for (const event of quotaRows) {
+      if (!event.analysisId) continue;
+      const events = quotaByAnalysis.get(event.analysisId) ?? [];
+      events.push(event);
+      quotaByAnalysis.set(event.analysisId, events);
+    }
+
     return {
-      items: rows.map(({ analysis, account }) => ({
-        id: analysis.id,
-        accountId: analysis.accountId,
-        account,
-        status: analysis.status,
-        source: analysis.source,
-        input: analysis.input,
-        result: analysis.result,
-        patch: analysis.patch,
-        errorCode: analysis.errorCode,
-        durationMs: analysis.status === 'processing'
-          ? null
-          : Math.max(0, analysis.updatedAt.getTime() - analysis.createdAt.getTime()),
-        createdAt: analysis.createdAt.toISOString(),
-        updatedAt: analysis.updatedAt.toISOString(),
-      })),
+      items: rows.map(({ analysis, account }) => {
+        const payloads = parseAdminAnalysisPayloads(analysis.input, analysis.result);
+        return {
+          id: analysis.id,
+          accountId: analysis.accountId,
+          account,
+          status: analysis.status,
+          source: analysis.source,
+          ...payloads,
+          patch: analysis.patch,
+          errorCode: analysis.errorCode,
+          revision: analysis.revision,
+          durationMs: analysis.status === 'processing'
+            ? null
+            : Math.max(0, analysis.updatedAt.getTime() - analysis.createdAt.getTime()),
+          durationKind: analysis.status === 'processing'
+            ? 'in_progress' as const
+            : analysis.revision > 0
+              ? 'session_to_latest_revision' as const
+              : 'initial_terminal_state' as const,
+          quotaEvents: (quotaByAnalysis.get(analysis.id) ?? []).map((event) => ({
+            id: event.id,
+            delta: event.delta,
+            reason: event.reason,
+            createdAt: event.createdAt.toISOString(),
+          })),
+          sourceImage: analysisSourceImage(analysis.source),
+          createdAt: analysis.createdAt.toISOString(),
+          updatedAt: analysis.updatedAt.toISOString(),
+        };
+      }),
       pagination: {
         limit: query.limit,
         offset: query.offset,

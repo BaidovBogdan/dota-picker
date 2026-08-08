@@ -12,6 +12,7 @@ import {
   sql,
   type SQL,
 } from 'drizzle-orm';
+import { z } from 'zod';
 import type { Database } from '../../db/client.js';
 import {
   accounts,
@@ -27,10 +28,9 @@ import type {
   UpsertReviewInput,
 } from './review.schemas.js';
 
-type AnalysisData = Pick<
-  typeof analyses.$inferSelect,
-  'source' | 'patch' | 'result'
->;
+type AnalysisData = Pick<typeof analyses.$inferSelect, 'source' | 'patch'> & {
+  result: unknown;
+};
 type AccountReviewsCursor = {
   id: string;
   updatedAt: Date;
@@ -266,6 +266,7 @@ export class ReviewService {
             id: accounts.id,
             kind: accounts.kind,
             email: accounts.email,
+            plan: accounts.plan,
           },
           analysis: {
             source: analyses.source,
@@ -301,7 +302,7 @@ export class ReviewService {
         distribution,
       },
       items: rows.map(({ review, analysis, account }) => ({
-        ...this.toView(review, analysis),
+        ...this.toAdminView(review, analysis),
         account,
       })),
       pagination: {
@@ -356,6 +357,9 @@ export class ReviewService {
 
   private adminConditions(query: AdminReviewsQuery) {
     const conditions: SQL[] = [];
+    if (query.accountId !== undefined) {
+      conditions.push(eq(analysisReviews.accountId, query.accountId));
+    }
     if (query.rating !== undefined) {
       conditions.push(eq(analysisReviews.rating, query.rating));
     }
@@ -396,13 +400,7 @@ export class ReviewService {
   ) {
     const result = recommendationResultSchema.parse(analysis.result);
     return {
-      id: review.id,
-      analysisId: review.analysisId,
-      rating: review.rating,
-      selectedHeroIds: review.selectedHeroIds,
-      comment: review.comment,
-      createdAt: review.createdAt.toISOString(),
-      updatedAt: review.updatedAt.toISOString(),
+      ...this.reviewFields(review),
       analysis: {
         source: analysis.source,
         patch: analysis.patch ?? result.patch,
@@ -413,6 +411,57 @@ export class ReviewService {
           iconUrl: hero.iconUrl,
         })),
       },
+    };
+  }
+
+  private toAdminView(
+    review: typeof analysisReviews.$inferSelect,
+    analysis: AnalysisData
+  ) {
+    const parsedResult = analysis.result === null
+      ? null
+      : recommendationResultSchema.safeParse(analysis.result);
+    const rawResult = z.json().safeParse(analysis.result);
+    const issues = parsedResult === null || parsedResult.success
+      ? []
+      : parsedResult.error.issues.map((issue) => `result.${issue.path.join('.') || 'root'}: ${issue.message}`);
+    return {
+      ...this.reviewFields(review),
+      analysis: {
+        source: analysis.source,
+        patch: analysis.patch ?? (parsedResult?.success ? parsedResult.data.patch : null),
+        recommendations: parsedResult?.success
+          ? parsedResult.data.recommendations.map(({ hero }) => ({
+              id: hero.id,
+              localizedName: hero.localizedName,
+              imageUrl: hero.imageUrl,
+              iconUrl: hero.iconUrl,
+            }))
+          : [],
+        rawResult: parsedResult === null || parsedResult.success || !rawResult.success
+          ? null
+          : rawResult.data,
+        dataQuality: {
+          result: parsedResult === null
+            ? 'absent' as const
+            : parsedResult.success
+              ? 'valid' as const
+              : 'legacy_invalid' as const,
+          issues,
+        },
+      },
+    };
+  }
+
+  private reviewFields(review: typeof analysisReviews.$inferSelect) {
+    return {
+      id: review.id,
+      analysisId: review.analysisId,
+      rating: review.rating,
+      selectedHeroIds: review.selectedHeroIds,
+      comment: review.comment,
+      createdAt: review.createdAt.toISOString(),
+      updatedAt: review.updatedAt.toISOString(),
     };
   }
 }
