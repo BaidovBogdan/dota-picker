@@ -28,6 +28,6 @@ describe('overlay render acknowledgement contract', () => {
     assert.equal(source.includes("recordOverlayDeliveryFailure('OVERLAY_RENDER_ACK_TIMEOUT')"), true);
     assert.equal(source.includes("recordOverlayDeliveryFailure('OVERLAY_RENDERER_GONE')"), true);
     assert.equal(source.includes("overlayLog.info('Overlay state rendered'"), true);
-    assert.equal(source.includes('details: {\n          ...delivery.diagnostic,\n          visibleSlots,'), true);
+    assert.match(source, /details:\s*\{\s*\.\.\.delivery\.diagnostic,\s*visibleSlots,/);
   });
 });
