@@ -7,7 +7,7 @@ export type PhotoRecognitionResult = z.infer<typeof recognitionResponseSchema>;
 export type PhotoRecognitionOptions = {
   detectPosition?: boolean;
   allyGroup?: 'left' | 'right';
-  orientationSource?: 'gsi_layout_heuristic' | 'manual_confirmation';
+  orientationSource?: 'gsi_layout_heuristic' | 'gsi_player_hero' | 'manual_confirmation';
 };
 
 export type PhotoRecognizer = {

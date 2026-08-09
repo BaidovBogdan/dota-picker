@@ -65,6 +65,19 @@ export function createOverlayState(
 ): OverlayState {
   const available = authenticated && preferences.assistantEnabled && state.enabled;
   const position = state.recognition?.detectedPosition ?? preferences.position;
+  const orientation = state.draftOrientation ?? null;
+  const recognized = available ? state.recognition?.recognized ?? [] : [];
+  const orientationRequired = Boolean(
+    available
+    && preferences.assistantMode === 'vision'
+    && state.draftActive
+    && !orientation
+    && recognized.some((pick) => (
+      pick.side === 'unknown'
+      && pick.visualGroup !== undefined
+      && pick.heroId !== null
+    )),
+  );
   return {
     language: preferences.language,
     available,
@@ -75,21 +88,22 @@ export function createOverlayState(
     draftActive: state.draftActive,
     position,
     positionSource: state.recognition?.detectedPosition ? 'detected' : 'manual',
-    picks: (available ? state.recognition?.recognized ?? [] : [])
-      .filter((pick) => (
-        (pick.side === 'ally' || pick.side === 'enemy')
-        && pick.heroId !== null
-        && !pick.needsReview
-      ))
-      .map((pick) => ({
-        side: pick.side as 'ally' | 'enemy',
-        slot: pick.slot,
-        heroId: pick.heroId,
-        heroName: pick.heroName,
-        localizedName: pick.localizedName,
-        imageUrl: pick.heroId ? heroImages.get(pick.heroId) ?? null : null,
-        confidence: pick.confidence,
-      }))
+    picks: recognized
+      .flatMap((pick) => {
+        const side = pick.side === 'ally' || pick.side === 'enemy'
+          ? !pick.needsReview ? pick.side : null
+          : null;
+        if (!side || pick.heroId === null) return [];
+        return [{
+          side,
+          slot: pick.slot,
+          heroId: pick.heroId,
+          heroName: pick.heroName,
+          localizedName: pick.localizedName,
+          imageUrl: heroImages.get(pick.heroId) ?? null,
+          confidence: pick.confidence,
+        }];
+      })
       .sort((left, right) => left.side.localeCompare(right.side) || left.slot - right.slot),
     recommendations: recommendations(state, preferences, position, available),
     latestAnalysisId: available ? state.latestAnalysisId : null,
@@ -97,5 +111,12 @@ export function createOverlayState(
     shortcut: shortcut.shortcut,
     shortcutAvailable: shortcut.available,
     refreshing: state.refreshPending || state.phase === 'recognizing' || state.phase === 'analyzing',
+    draftOrientation: {
+      required: orientationRequired,
+      allyGroup: orientation?.allyGroup ?? null,
+      source: preferences.assistantMode === 'overwolf'
+        ? 'overwolf'
+        : orientation?.source ?? null,
+    },
   };
 }

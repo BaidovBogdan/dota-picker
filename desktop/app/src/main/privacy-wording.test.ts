@@ -18,9 +18,11 @@ describe('Draft Vision privacy wording', () => {
 
     for (const required of [
       'локальный GSI-сигнал',
-      'local GSI phase/team signal',
+      'local GSI phase, team, and selected-hero signals',
       'Dota may include Steam IDs, player names, and other fields in the local GSI payload',
-      'then immediately discards the rest without sending or storing it',
+      'The raw hero ID/name stay in memory and are not sent or stored',
+      'only the derived visual-group side and its source label accompany the frame',
+      'All other GSI fields are immediately discarded',
       'window image changes substantially',
       'identical frames are not sent',
       'configured external recognition provider',
@@ -39,6 +41,8 @@ describe('Draft Vision privacy wording', () => {
       'Steam IDs, player names, and game memory are never read',
       'GSI supplies only match phase and team',
       'GSI сообщает только фазу матча и команду',
+      'Counterpick extracts only phase and team',
+      'Counterpick извлекает только фазу и команду',
       'A frame goes to the API only when the draft changes',
       'Only a changed draft frame goes to the API',
       'Кадр уходит в API только при изменении драфта',

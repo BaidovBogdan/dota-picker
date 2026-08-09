@@ -38,6 +38,7 @@ export const recognitionOutputSchema = z.object({
 export const recognitionResponseSchema = z.object({
   quality: z.enum(['clear', 'partial', 'not_dota', 'too_blurry']),
   orientationSource: z.enum([
+    'gsi_player_hero',
     'gsi_layout_heuristic',
     'manual_confirmation',
     'explicit_signal',

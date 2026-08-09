@@ -341,23 +341,6 @@ export function SettingsPage() {
       icon: <RankIcon rank={rank} />,
     })),
   ];
-  const radiantSideOptions = [
-    {
-      value: 'unknown',
-      label: text('Не определено', 'Not configured'),
-      description: text('Стороны останутся на ручной проверке', 'Sides stay pending manual review'),
-    },
-    {
-      value: 'left',
-      label: text('Radiant слева', 'Radiant on the left'),
-      description: text('Dire будет справа', 'Dire will be on the right'),
-    },
-    {
-      value: 'right',
-      label: text('Radiant справа', 'Radiant on the right'),
-      description: text('Dire будет слева', 'Dire will be on the left'),
-    },
-  ];
   const currentShortcutAvailable = shortcutQuery.data?.available !== false;
   const shortcutStatus = recordingShortcut
     ? text('Нажмите клавишу или сочетание. Нажмите кнопку ещё раз для отмены.', 'Press a key or combination. Press the button again to cancel.')
@@ -467,27 +450,6 @@ export function SettingsPage() {
               value={preferences.rank ? String(preferences.rank) : 'all'}
               options={rankOptions}
               onValueChange={(value) => update('rank', value === 'all' ? null : Number(value))}
-            />
-          </div>
-          <div className="settings-group">
-            <div className="settings-group__copy">
-              <strong>{text('Сторона команды в Draft Vision', 'Team side in Draft Vision')}</strong>
-              <small>
-                {text(
-                  'Выберите расположение Radiant в вашем интерфейсе Dota. Без выбора приложение не угадывает стороны.',
-                  'Choose where Radiant appears in your Dota layout. Without it, the app does not guess sides.',
-                )}
-              </small>
-            </div>
-            <AppSelect
-              className="settings-rank-select"
-              label={text('Расположение Radiant', 'Radiant placement')}
-              value={preferences.radiantDraftSide ?? 'unknown'}
-              options={radiantSideOptions}
-              onValueChange={(value) => update(
-                'radiantDraftSide',
-                value === 'unknown' ? null : value as 'left' | 'right',
-              )}
             />
           </div>
           <div className="settings-group settings-group--stacked">
@@ -653,8 +615,8 @@ export function SettingsPage() {
           </div>
           <p className="privacy-panel__note">
             {text(
-              'Draft Vision использует кадр окна Dota 2 и локальный GSI. Кадр уходит в API, когда изображение окна существенно изменилось, чтобы проверить новые пики; одинаковые кадры не отправляются. Сервер обрабатывает кадр в памяти и сначала сопоставляет портреты локально; при низкой уверенности выделенная область драфта может уйти настроенному внешнему провайдеру распознавания. Исходник не хранится. Dota может включить Steam ID, имена и другие поля в GSI-пакет; Counterpick извлекает фазу и команду, а остальное сразу отбрасывает, не отправляет и не сохраняет. Доступ к памяти игры не используется.',
-              'Draft Vision uses a Dota 2 window frame and local GSI. A frame goes to the API when the window image changes substantially so it can check for new picks; identical frames are not sent. The server processes the frame in memory and first matches portraits locally; when confidence is low, the extracted draft region may go to the configured external recognition provider. The source image is not stored. Dota may include Steam IDs, names, and other fields in the GSI payload; Counterpick extracts phase and team, then immediately discards the rest without sending or storing it. Game memory is not accessed.',
+              'Draft Vision использует кадр окна Dota 2 и локальный GSI. Кадр уходит в API, когда изображение окна существенно изменилось, чтобы проверить новые пики; одинаковые кадры не отправляются. Сервер обрабатывает кадр в памяти и сначала сопоставляет портреты локально; при низкой уверенности выделенная область драфта может уйти настроенному внешнему провайдеру распознавания. Исходник не хранится. Из GSI Counterpick оставляет фазу, команду и ID/имя выбранного локальным игроком героя. Исходные ID/имя героя остаются в памяти, не отправляются и не сохраняются; вместе с кадром уходят вычисленная сторона визуальной группы и метка источника. Остальные поля сразу отбрасываются. Доступ к памяти игры не используется.',
+              'Draft Vision uses a Dota 2 window frame and local GSI. A frame goes to the API when the window image changes substantially so it can check for new picks; identical frames are not sent. The server processes the frame in memory and first matches portraits locally; when confidence is low, the extracted draft region may go to the configured external recognition provider. The source image is not stored. Counterpick keeps GSI phase, team, and the local selected hero ID/name. The raw hero ID/name stay in memory and are not sent or stored; only the derived visual-group side and source label accompany the frame. All other fields are discarded immediately. Game memory is not accessed.',
             )}
           </p>
           <div className="privacy-panel__status">

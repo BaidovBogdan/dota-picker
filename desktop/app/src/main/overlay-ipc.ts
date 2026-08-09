@@ -1,7 +1,9 @@
 import { ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from 'electron';
 import { z } from 'zod';
 import {
+  draftAllyGroupSchema,
   positionSchema,
+  type DraftAllyGroup,
   type IpcResult,
   type OverlayState,
   type Position,
@@ -14,6 +16,7 @@ type OverlayIpcDependencies = {
   getState: () => Promise<OverlayState>;
   refresh: () => Promise<OverlayState>;
   setPosition: (position: Position) => Promise<OverlayState>;
+  setDraftAllyGroup: (allyGroup: DraftAllyGroup) => Promise<OverlayState>;
   hide: () => void;
   presented: (presentationId: number) => void;
 };
@@ -70,6 +73,12 @@ export function registerOverlayIpc(dependencies: OverlayIpcDependencies): void {
     z.tuple([positionSchema]),
     dependencies,
     ([position]) => dependencies.setPosition(position),
+  );
+  register(
+    IPC.overlaySetDraftAllyGroup,
+    z.tuple([draftAllyGroupSchema]),
+    dependencies,
+    ([allyGroup]) => dependencies.setDraftAllyGroup(allyGroup),
   );
   register(IPC.overlayHide, none, dependencies, () => dependencies.hide());
   register(

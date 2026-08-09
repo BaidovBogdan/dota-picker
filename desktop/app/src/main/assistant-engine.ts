@@ -1,4 +1,4 @@
-import type { AssistantMode, EngineState } from '../shared/contracts.js';
+import type { AssistantMode, DraftAllyGroup, EngineState } from '../shared/contracts.js';
 import type { DraftEngine } from './draft-engine.js';
 import type { OverwolfDraftEngine } from './overwolf-draft-engine.js';
 import type { PreferencesStore } from './preferences-store.js';
@@ -14,10 +14,14 @@ type EngineImplementation = Pick<
   | 'useManualPositionForCurrentDraft'
   | 'dispose'
 >;
+type VisionEngineImplementation = EngineImplementation & Pick<
+  DraftEngine,
+  'setManualAllyGroupForCurrentDraft'
+>;
 
 export class AssistantEngine {
   private readonly preferences: PreferencesStore;
-  private readonly vision: EngineImplementation;
+  private readonly vision: VisionEngineImplementation;
   private readonly overwolf: OverwolfDraftEngine;
   private readonly emit: (state: EngineState) => void;
   private activeMode: AssistantMode = 'vision';
@@ -25,7 +29,7 @@ export class AssistantEngine {
 
   constructor(
     preferences: PreferencesStore,
-    vision: EngineImplementation,
+    vision: VisionEngineImplementation,
     overwolf: OverwolfDraftEngine,
     emit: (state: EngineState) => void,
   ) {
@@ -94,6 +98,14 @@ export class AssistantEngine {
 
   useManualPositionForCurrentDraft(): void {
     this.active.useManualPositionForCurrentDraft();
+  }
+
+  setManualAllyGroupForCurrentDraft(allyGroup: DraftAllyGroup): Promise<EngineState> {
+    return this.enqueueTransition(async () => {
+      await this.syncMode();
+      if (this.activeMode !== 'vision') return this.getState();
+      return this.vision.setManualAllyGroupForCurrentDraft(allyGroup);
+    });
   }
 
   async dispose(): Promise<void> {

@@ -18,7 +18,6 @@ const basePreferences: Preferences = {
   wishlist: [],
   assistantEnabled: false,
   assistantMode: 'vision',
-  radiantDraftSide: null,
   captureConsent: { accepted: false, acceptedAt: null },
   overwolfConsent: { accepted: false, acceptedAt: null },
 };

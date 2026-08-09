@@ -20,6 +20,7 @@ export const rankSchema = z.union([
 ]);
 
 export const assistantModeSchema = z.enum(['vision', 'overwolf']);
+export const draftAllyGroupSchema = z.enum(['left', 'right']);
 
 const acceleratorModifiers = new Map<string, string>([
   ['command', 'Command'],
@@ -158,7 +159,6 @@ export const preferencesSchema = z.object({
   wishlist: z.array(z.number().int().positive()).max(200),
   assistantEnabled: z.boolean(),
   assistantMode: assistantModeSchema.default('vision'),
-  radiantDraftSide: z.enum(['left', 'right']).nullable().default(null),
   captureConsent: z.object({
     accepted: z.boolean(),
     acceptedAt: z.string().datetime().nullable(),
@@ -265,6 +265,7 @@ export const enginePhaseSchema = z.enum([
 export type Position = z.infer<typeof positionSchema>;
 export type Rank = z.infer<typeof rankSchema>;
 export type AssistantMode = z.infer<typeof assistantModeSchema>;
+export type DraftAllyGroup = z.infer<typeof draftAllyGroupSchema>;
 export type Preferences = z.infer<typeof preferencesSchema>;
 export type PreferencesPatch = z.infer<typeof preferencesPatchSchema>;
 export type EnginePhase = z.infer<typeof enginePhaseSchema>;
@@ -352,6 +353,10 @@ export type EngineState = {
   dotaDetected: boolean;
   draftActive: boolean;
   refreshPending: boolean;
+  draftOrientation?: {
+    allyGroup: DraftAllyGroup;
+    source: 'gsi_player_hero' | 'manual_confirmation';
+  } | null;
   recognition?: {
     quality: 'clear' | 'partial' | 'not_dota' | 'too_blurry';
     detectedPosition: Position | null;
@@ -403,6 +408,11 @@ export type OverlayState = {
   shortcut: string;
   shortcutAvailable: boolean;
   refreshing: boolean;
+  draftOrientation: {
+    required: boolean;
+    allyGroup: DraftAllyGroup | null;
+    source: 'gsi_player_hero' | 'manual_confirmation' | 'overwolf' | null;
+  };
 };
 
 export type OverlayShortcutStatus = {
@@ -539,6 +549,7 @@ export type OverlayBridge = {
   getState: () => Promise<OverlayState>;
   refresh: () => Promise<OverlayState>;
   setPosition: (position: Position) => Promise<OverlayState>;
+  setDraftAllyGroup: (allyGroup: DraftAllyGroup) => Promise<OverlayState>;
   hide: () => Promise<void>;
   presented: (presentationId: number) => Promise<void>;
   onState: (listener: (state: OverlayState, presentationId?: number) => void) => () => void;

@@ -35,6 +35,7 @@ import { PositionLabel, RankLabel } from '../components/dota-taxonomy';
 import { GameSignalVisual, type GameSignalMode } from '../components/game-signal-visual';
 import { phaseCopy, formatRelative, heroName } from '../format';
 import { useI18n } from '../i18n';
+import { recognitionPickKey, recognitionSideLabel } from '../recognition-presentation';
 import { ModalPortal } from '../components/modal-portal';
 import { StatusScrub } from '../components/motion';
 import { AsyncState, Button, HeroIcon, Panel, TextLink } from '../components/ui';
@@ -446,11 +447,9 @@ export function DashboardPage() {
                   aria-label={text('Распознанные герои', 'Recognized heroes')}
                 >
                   {currentEngine.recognition.recognized.slice(0, 5).map((pick) => (
-                    <span key={`${pick.side}-${pick.slot}`}>
+                    <span key={recognitionPickKey(pick)}>
                       <small>
-                        {pick.side === 'enemy'
-                          ? text('Противник', 'Enemy')
-                          : text('Союзник', 'Ally')}
+                        {recognitionSideLabel(pick, language)}
                       </small>
                       <strong>
                         {language === 'en'
@@ -629,7 +628,7 @@ export function DashboardPage() {
               <dd>
                 {assistantMode === 'overwolf'
                   ? overwolfPhaseCopy
-                  : text('Кадр + фаза/команда', 'Frame + phase/team')}
+                  : text('Кадр + GSI ориентация', 'Frame + GSI orientation')}
               </dd>
             </div>
           </dl>
@@ -743,8 +742,8 @@ export function DashboardPage() {
               </header>
               <p>
                 {text(
-                  'Автоматически проверяет новые пики по существенно изменившимся кадрам окна Dota 2, а локальный GSI сообщает фазу драфта и команду игрока. Работает без дополнительной платформы.',
-                  'Automatically checks for new picks when the Dota 2 window image changes substantially, while local GSI supplies the draft phase and player team. It needs no extra platform.',
+                  'Автоматически проверяет новые пики по существенно изменившимся кадрам окна Dota 2, а локальный GSI сообщает фазу, команду и выбранного вами героя для точного сопоставления сторон. Работает без дополнительной платформы.',
+                  'Automatically checks for new picks when the Dota 2 window image changes substantially, while local GSI supplies the phase, team, and your selected hero to align the sides. It needs no extra platform.',
                 )}
               </p>
               <div className="mode-comparison-card__terms">
@@ -922,16 +921,16 @@ export function DashboardPage() {
             </h2>
             <p>
               {text(
-                'Counterpick использует кадр окна Dota 2 и локальный GSI-сигнал фазы и команды. Кадр отправляется в API, когда изображение окна существенно изменилось, чтобы проверить новые пики; одинаковые кадры не отправляются, исходник не сохраняется.',
-                'Counterpick uses a Dota 2 window frame plus a local GSI phase/team signal. A frame goes to the API when the window image changes substantially so it can check for new picks; identical frames are not sent, and the source image is not stored.',
+                'Counterpick использует кадр окна Dota 2 и локальные GSI-сигналы фазы, команды и выбранного героя. Кадр отправляется в API, когда изображение окна существенно изменилось, чтобы проверить новые пики; одинаковые кадры не отправляются, исходник не сохраняется.',
+                'Counterpick uses a Dota 2 window frame plus local GSI phase, team, and selected-hero signals. A frame goes to the API when the window image changes substantially so it can check for new picks; identical frames are not sent, and the source image is not stored.',
               )}
             </p>
             <ul>
               <li>
                 <CheckCircle size={17} weight="duotone" aria-hidden />
                 {text(
-                  'Dota может включить Steam ID, имена и другие поля в локальный GSI; Counterpick извлекает фазу и команду, а остальное сразу отбрасывает, не отправляет и не сохраняет',
-                  'Dota may include Steam IDs, names, and other fields in local GSI; Counterpick extracts phase and team, then immediately discards the rest without sending or storing it',
+                  'Исходные ID/имя выбранного героя используются только в памяти и не отправляются или сохраняются; вместе с кадром уходят вычисленная сторона визуальной группы и метка источника, остальные поля GSI сразу отбрасываются',
+                  'The raw selected-hero ID/name are used only in memory and are not sent or stored; only the derived visual-group side and source label accompany the frame, and all other GSI fields are discarded immediately',
                 )}
               </li>
               <li>

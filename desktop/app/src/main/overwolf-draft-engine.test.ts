@@ -220,7 +220,6 @@ function createHarness(
     wishlist: [],
     assistantEnabled: false,
     assistantMode: 'overwolf',
-    radiantDraftSide: null,
     captureConsent: { accepted: false, acceptedAt: null },
     overwolfConsent: { accepted: true, acceptedAt: new Date().toISOString() },
   };

@@ -89,7 +89,6 @@ export type Preferences = {
   wishlist: number[];
   assistantEnabled: boolean;
   assistantMode: AssistantMode;
-  radiantDraftSide: 'left' | 'right' | null;
   captureConsent: {
     accepted: boolean;
     acceptedAt: string | null;

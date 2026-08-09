@@ -6,6 +6,7 @@ import { createServer, type Server } from 'node:http';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { z } from 'zod';
+import type { DraftAllyGroup } from '../shared/contracts.js';
 
 const payloadSchema = z.object({
   auth: z.object({ token: z.string().optional() }).optional(),
@@ -13,11 +14,19 @@ const payloadSchema = z.object({
   player: z.object({
     team_name: z.string().optional(),
   }).optional(),
+  hero: z.object({
+    id: z.number().int().nonnegative().optional(),
+    name: z.string().optional(),
+  }).optional(),
 });
 
 export type GsiPayload = z.infer<typeof payloadSchema>;
-export type DraftAllyGroup = 'left' | 'right';
 export type GsiTeam = 'radiant' | 'dire';
+export type GsiHeroSignal = {
+  id: number | null;
+  name: string | null;
+};
+export type { DraftAllyGroup } from '../shared/contracts.js';
 
 export function parseGsiPayload(value: unknown): GsiPayload {
   return payloadSchema.parse(value);
@@ -29,17 +38,47 @@ export function resolveGsiTeam(payload: GsiPayload): GsiTeam | null {
   return null;
 }
 
-export function resolveConfiguredAllyGroup(
-  team: GsiTeam | null,
-  radiantSide: DraftAllyGroup | null,
+export function resolveGsiHeroSignal(payload: GsiPayload): GsiHeroSignal | null {
+  const id = payload.hero?.id && payload.hero.id > 0 ? payload.hero.id : null;
+  const name = payload.hero?.name?.trim() || null;
+  return id || name ? { id, name } : null;
+}
+
+function normalizeHeroName(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/^npc_dota_hero_/, '')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+export function resolveGsiHeroAllyGroup(
+  hero: GsiHeroSignal | null,
+  recognized: ReadonlyArray<{
+    heroId: number | null;
+    heroName: string;
+    confidence: number;
+    visualGroup?: DraftAllyGroup;
+  }>,
 ): DraftAllyGroup | null {
-  if (!team || !radiantSide) return null;
-  if (team === 'radiant') return radiantSide;
-  return radiantSide === 'left' ? 'right' : 'left';
+  if (!hero) return null;
+  const expectedName = hero.name ? normalizeHeroName(hero.name) : null;
+  const matches = recognized.filter((entry) => {
+    if (!entry.visualGroup || entry.heroId === null || entry.confidence < 0.8) return false;
+    if (hero.id !== null) return entry.heroId === hero.id;
+    return expectedName !== null && normalizeHeroName(entry.heroName) === expectedName;
+  });
+  if (matches.length !== 1) return null;
+  return matches[0]?.visualGroup ?? null;
 }
 
 const cfgName = 'gamestate_integration_counterpick.cfg';
 const execFileAsync = promisify(execFile);
+
+export function createGsiConfig(port: number, token: string): string {
+  return `"Counterpick"\n{\n  "uri" "http://127.0.0.1:${port}/gsi/${token}"\n  "timeout" "5.0"\n  "buffer" "0.1"\n  "throttle" "1.0"\n  "heartbeat" "10.0"\n  "auth"\n  {\n    "token" "${token}"\n  }\n  "data"\n  {\n    "map" "1"\n    "player" "1"\n    "hero" "1"\n  }\n}\n`;
+}
 
 async function pathExists(path: string): Promise<boolean> {
   try {
@@ -199,7 +238,7 @@ export class GsiReceiver {
         const dotaRoot = join(root, 'steamapps', 'common', 'dota 2 beta', 'game', 'dota');
         if (!await pathExists(dotaRoot)) continue;
         const configPath = join(dotaRoot, 'cfg', 'gamestate_integration', cfgName);
-        const config = `"Counterpick"\n{\n  "uri" "http://127.0.0.1:${this.activePort}/gsi/${this.token}"\n  "timeout" "5.0"\n  "buffer" "0.1"\n  "throttle" "1.0"\n  "heartbeat" "10.0"\n  "auth"\n  {\n    "token" "${this.token}"\n  }\n  "data"\n  {\n    "map" "1"\n    "player" "1"\n  }\n}\n`;
+        const config = createGsiConfig(this.activePort, this.token);
         await fs.mkdir(dirname(configPath), { recursive: true });
         await fs.writeFile(configPath, config, 'utf8');
         return { installed: true, configPath };

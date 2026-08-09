@@ -766,7 +766,10 @@ describe('desktop analysis route', () => {
     );
   });
 
-  it('uses a detected position in auto mode and fingerprints the mode', async () => {
+  it.each([
+    'gsi_layout_heuristic',
+    'gsi_player_hero',
+  ] as const)('accepts %s orientation and fingerprints auto mode', async (orientationSource) => {
     const { app, idempotency, recognize, analyze } = await createTestApp({
       firstFrameWaiting: false,
       detectedPosition: 4,
@@ -774,10 +777,10 @@ describe('desktop analysis route', () => {
     const image = multipartImage();
     const response = await app.inject({
       method: 'POST',
-      url: `/v1/analyses/desktop?sessionId=${sessionId}&position=2&autoPosition=true&allyGroup=right&orientationSource=gsi_layout_heuristic&revision=7`,
+      url: `/v1/analyses/desktop?sessionId=${sessionId}&position=2&autoPosition=true&allyGroup=right&orientationSource=${orientationSource}&revision=7`,
       headers: {
         'content-type': image.contentType,
-        'idempotency-key': 'auto-position-frame',
+        'idempotency-key': `auto-position-frame-${orientationSource}`,
       },
       payload: image.payload,
     });
@@ -800,14 +803,14 @@ describe('desktop analysis route', () => {
       {
         detectPosition: true,
         allyGroup: 'right',
-        orientationSource: 'gsi_layout_heuristic',
+        orientationSource,
       },
     );
     expect(idempotency.claim).toHaveBeenNthCalledWith(
       1,
       accountId,
       'analyses.desktop.frame',
-      'auto-position-frame',
+      `auto-position-frame-${orientationSource}`,
       {
         sessionId,
         frameHash: pngHash,
@@ -815,7 +818,7 @@ describe('desktop analysis route', () => {
         position: 2,
         autoPosition: true,
         allyGroup: 'right',
-        orientationSource: 'gsi_layout_heuristic',
+        orientationSource,
         rank: null,
         revision: 7,
       },
@@ -830,7 +833,7 @@ describe('desktop analysis route', () => {
         position: 2,
         autoPosition: true,
         allyGroup: 'right',
-        orientationSource: 'gsi_layout_heuristic',
+        orientationSource,
         rank: null,
       },
     );

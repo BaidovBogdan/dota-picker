@@ -19,7 +19,6 @@ const preferences: Preferences = {
   wishlist: [],
   assistantEnabled: true,
   assistantMode: 'vision',
-  radiantDraftSide: null,
   captureConsent: {
     accepted: true,
     acceptedAt: '2026-08-02T00:00:00.000Z',
@@ -122,5 +121,128 @@ describe('createOverlayState position resolution', () => {
 
     assert.equal(state.position, 2);
     assert.equal(state.recommendations.length, 0);
+  });
+
+  it('keeps unknown visual groups hidden and requests one overlay confirmation', () => {
+    const unresolved = engineState(null, 3);
+    unresolved.latestAnalysis = null;
+    unresolved.latestAnalysisId = null;
+    unresolved.phase = 'watching_draft';
+    unresolved.recognition = {
+      quality: 'partial',
+      detectedPosition: null,
+      recognized: [
+        {
+          side: 'unknown',
+          visualGroup: 'left',
+          slot: 0,
+          heroId: 27,
+          heroName: 'npc_dota_hero_shadow_shaman',
+          localizedName: 'Shadow Shaman',
+          confidence: 0.93,
+          needsReview: true,
+        },
+        {
+          side: 'unknown',
+          visualGroup: 'right',
+          slot: 0,
+          heroId: 74,
+          heroName: 'npc_dota_hero_invoker',
+          localizedName: 'Invoker',
+          confidence: 0.92,
+          needsReview: true,
+        },
+      ],
+    };
+
+    const state = createOverlayState(unresolved, preferences, shortcut, new Map(), true);
+
+    assert.equal(state.picks.length, 0);
+    assert.deepEqual(state.draftOrientation, {
+      required: true,
+      allyGroup: null,
+      source: null,
+    });
+  });
+
+  it('publishes complete visual groups after the confirmed server response', () => {
+    const resolved = engineState(null, 3);
+    resolved.latestAnalysis = null;
+    resolved.latestAnalysisId = null;
+    resolved.phase = 'watching_draft';
+    resolved.draftOrientation = {
+      allyGroup: 'right',
+      source: 'manual_confirmation',
+    };
+    resolved.recognition = {
+      quality: 'partial',
+      detectedPosition: null,
+      recognized: [
+        {
+          side: 'enemy',
+          visualGroup: 'left',
+          slot: 1,
+          heroId: 27,
+          heroName: 'npc_dota_hero_shadow_shaman',
+          localizedName: 'Shadow Shaman',
+          confidence: 0.93,
+          needsReview: false,
+        },
+        {
+          side: 'ally',
+          visualGroup: 'right',
+          slot: 2,
+          heroId: 74,
+          heroName: 'npc_dota_hero_invoker',
+          localizedName: 'Invoker',
+          confidence: 0.92,
+          needsReview: false,
+        },
+      ],
+    };
+
+    const state = createOverlayState(resolved, preferences, shortcut, new Map(), true);
+
+    assert.deepEqual(
+      state.picks.map(({ side, slot, heroId }) => ({ side, slot, heroId })),
+      [
+        { side: 'ally', slot: 2, heroId: 74 },
+        { side: 'enemy', slot: 1, heroId: 27 },
+      ],
+    );
+    assert.deepEqual(state.draftOrientation, {
+      required: false,
+      allyGroup: 'right',
+      source: 'manual_confirmation',
+    });
+  });
+
+  it('does not publish unresolved picks even after an orientation selection', () => {
+    const unresolved = engineState(null, 3);
+    unresolved.latestAnalysis = null;
+    unresolved.latestAnalysisId = null;
+    unresolved.draftOrientation = {
+      allyGroup: 'left',
+      source: 'manual_confirmation',
+    };
+    unresolved.recognition = {
+      quality: 'partial',
+      detectedPosition: null,
+      recognized: [{
+        side: 'unknown',
+        visualGroup: 'left',
+        slot: 0,
+        heroId: 27,
+        heroName: 'npc_dota_hero_shadow_shaman',
+        localizedName: 'Shadow Shaman',
+        confidence: 0.84,
+        needsReview: true,
+      }],
+    };
+
+    const state = createOverlayState(unresolved, preferences, shortcut, new Map(), true);
+
+    assert.equal(state.picks.length, 0);
+    assert.equal(state.draftOrientation.required, false);
   });
 });

@@ -29,6 +29,7 @@ import { applyPreferenceEngineChanges } from './preferences-update.js';
 import { TokenVault } from './token-vault.js';
 import { UpdateManager } from './update-manager.js';
 import type {
+  DraftAllyGroup,
   EngineState,
   OverlayShortcutStatus,
   OverlayState,
@@ -38,6 +39,7 @@ import { IPC } from '../shared/ipc-channels.js';
 
 const processStartedAt = performance.now();
 const startupLog = log.scope('startup');
+const overlayLog = log.scope('overlay');
 
 if (process.platform === 'win32') {
   app.commandLine.appendSwitch('wm-window-animations-disabled');
@@ -452,6 +454,7 @@ async function bootstrap(): Promise<void> {
     timeout: NodeJS.Timeout;
     resolve: () => void;
   } | null = null;
+  let lastOverlayDiagnostic = '';
   const getOverlayState = async (): Promise<OverlayState> => {
     if (!engine) throw new Error('Draft engine is unavailable');
     const currentPreferences = await preferences.get();
@@ -483,6 +486,19 @@ async function bootstrap(): Promise<void> {
   const publishOverlayState = (state: OverlayState, presentationId?: number): void => {
     const window = overlayWindow;
     if (!window || window.isDestroyed() || window.webContents.isDestroyed()) return;
+    const diagnostic = {
+      phase: state.phase,
+      draftActive: state.draftActive,
+      pickCount: state.picks.length,
+      orientationRequired: state.draftOrientation.required,
+      orientationSource: state.draftOrientation.source,
+      allyGroup: state.draftOrientation.allyGroup,
+    };
+    const diagnosticKey = JSON.stringify(diagnostic);
+    if (diagnosticKey !== lastOverlayDiagnostic) {
+      lastOverlayDiagnostic = diagnosticKey;
+      overlayLog.info('Overlay state published', diagnostic);
+    }
     if (presentationId) window.webContents.send(IPC.overlayChanged, state, presentationId);
     else window.webContents.send(IPC.overlayChanged, state);
   };
@@ -705,6 +721,35 @@ async function bootstrap(): Promise<void> {
         await preferences.update({ position });
       }
       await engine?.refresh(true);
+      const state = await getOverlayState();
+      publishOverlayState(state);
+      return state;
+    },
+    setDraftAllyGroup: async (allyGroup: DraftAllyGroup) => {
+      const current = await preferences.get();
+      if (!api.isAuthenticated()) {
+        throw new DesktopError(
+          'AUTH_REQUIRED',
+          current.language === 'en' ? 'Sign in to Counterpick' : 'Войдите в Counterpick',
+        );
+      }
+      if (!current.assistantEnabled || !engine?.getState().enabled) {
+        throw new DesktopError(
+          'ASSISTANT_DISABLED',
+          current.language === 'en'
+            ? 'Turn on the assistant in Counterpick'
+            : 'Включите помощник в Counterpick',
+        );
+      }
+      if (current.assistantMode !== 'vision') {
+        throw new DesktopError(
+          'DRAFT_ORIENTATION_NOT_REQUIRED',
+          current.language === 'en'
+            ? 'Overwolf supplies the team side automatically'
+            : 'Overwolf определяет сторону команды автоматически',
+        );
+      }
+      await engine.setManualAllyGroupForCurrentDraft(allyGroup);
       const state = await getOverlayState();
       publishOverlayState(state);
       return state;

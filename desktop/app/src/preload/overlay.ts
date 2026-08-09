@@ -9,6 +9,7 @@ const IPC = {
   getState: 'overlay:get-state',
   refresh: 'overlay:refresh',
   setPosition: 'overlay:set-position',
+  setDraftAllyGroup: 'overlay:set-draft-ally-group',
   hide: 'overlay:hide',
   presented: 'overlay:presented',
   changed: 'overlay:changed',
@@ -38,6 +39,7 @@ const bridge: OverlayBridge = {
   getState: () => invoke(IPC.getState),
   refresh: () => invoke(IPC.refresh),
   setPosition: (position) => invoke(IPC.setPosition, position),
+  setDraftAllyGroup: (allyGroup) => invoke(IPC.setDraftAllyGroup, allyGroup),
   hide: () => invoke(IPC.hide),
   presented: (presentationId) => invoke(IPC.presented, presentationId),
   onState: (listener) => {

@@ -130,7 +130,6 @@ function createEngine(api: ApiClient, capture: () => NativeImage) {
     wishlist: [],
     assistantEnabled: false,
     assistantMode: 'vision',
-    radiantDraftSide: 'left',
     captureConsent: { accepted: true, acceptedAt: '2026-08-08T00:00:00.000Z' },
     overwolfConsent: { accepted: false, acceptedAt: null },
   };

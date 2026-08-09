@@ -1,14 +1,22 @@
 import { randomUUID } from 'node:crypto';
 import type { NativeImage } from 'electron';
-import type { Analysis, EngineState, Position, Preferences } from '../shared/contracts.js';
+import log from 'electron-log/main';
+import type {
+  Analysis,
+  DraftAllyGroup,
+  EngineState,
+  Position,
+  Preferences,
+} from '../shared/contracts.js';
 import type { ApiClient } from './api-client.js';
 import { isRetryableAnalysisError } from './analysis-errors.js';
 import { DesktopError } from './errors.js';
 import {
   GsiReceiver,
-  resolveConfiguredAllyGroup,
+  resolveGsiHeroAllyGroup,
+  resolveGsiHeroSignal,
   resolveGsiTeam,
-  type DraftAllyGroup,
+  type GsiHeroSignal,
   type GsiPayload,
   type GsiTeam,
 } from './gsi.js';
@@ -21,6 +29,12 @@ const lastSeenPublishIntervalMs = 10_000;
 const windowPollIntervalsMs = [10_000, 20_000, 30_000] as const;
 const hashWatchThumbnailSize = { width: 320, height: 180 };
 const uploadThumbnailSize = { width: 1600, height: 900 };
+const visionLog = log.scope('vision');
+
+type DraftOrientation = {
+  allyGroup: DraftAllyGroup;
+  source: 'gsi_player_hero' | 'manual_confirmation';
+};
 
 type DraftEngineOptions = {
   captureDotaWindow?: (thumbnailSize: { width: number; height: number }) => Promise<NativeImage | null>;
@@ -119,6 +133,7 @@ export class DraftEngine {
     dotaDetected: false,
     draftActive: false,
     refreshPending: false,
+    draftOrientation: null,
     recognition: null,
   };
   private captureTimer: NodeJS.Timeout | null = null;
@@ -141,9 +156,13 @@ export class DraftEngine {
   private requestKey: string | null = null;
   private requestImage: Buffer | null = null;
   private requestAllyGroup: DraftAllyGroup | null = null;
+  private requestOrientationSource: 'gsi_player_hero' | 'manual_confirmation' | null = null;
   private liveAnalysisId: string | null = null;
   private liveSessionToken: string | null = null;
   private localTeam: GsiTeam | null = null;
+  private localHero: GsiHeroSignal | null = null;
+  private automaticAllyGroup: DraftAllyGroup | null = null;
+  private manualAllyGroup: DraftAllyGroup | null = null;
   private refreshRequested = false;
   private retryRequested = false;
   private forceRefresh = false;
@@ -236,6 +255,27 @@ export class DraftEngine {
     });
   }
 
+  async setManualAllyGroupForCurrentDraft(allyGroup: DraftAllyGroup): Promise<EngineState> {
+    if (!this.state.enabled || !this.inDraft) {
+      throw new DesktopError('DRAFT_NOT_ACTIVE', 'Выбор стороны доступен только во время драфта');
+    }
+    this.manualAllyGroup = allyGroup;
+    this.automaticAllyGroup = null;
+    this.update({
+      ...this.state,
+      draftOrientation: {
+        allyGroup,
+        source: 'manual_confirmation',
+      },
+      message: 'Сторона команды подтверждена — обновляем пики',
+    });
+    visionLog.info('Draft orientation selected', {
+      source: 'manual_confirmation',
+      allyGroup,
+    });
+    return this.refresh(true);
+  }
+
   async dispose(): Promise<void> {
     await this.enqueueTransition(() => this.disable(false));
   }
@@ -296,9 +336,13 @@ export class DraftEngine {
     this.requestKey = null;
     this.requestImage = null;
     this.requestAllyGroup = null;
+    this.requestOrientationSource = null;
     this.liveAnalysisId = null;
     this.liveSessionToken = null;
     this.localTeam = null;
+    this.localHero = null;
+    this.automaticAllyGroup = null;
+    this.manualAllyGroup = null;
     this.refreshRequested = false;
     this.retryRequested = false;
     this.forceRefresh = false;
@@ -315,6 +359,7 @@ export class DraftEngine {
       dotaDetected: false,
       draftActive: false,
       refreshPending: false,
+      draftOrientation: null,
       recognition: null,
     });
     if (persist) await this.preferences.setAssistantEnabled(false);
@@ -329,9 +374,12 @@ export class DraftEngine {
     if (publishLastSeen) this.lastSeenPublishedAt = now;
     const publishLiveness = publishLastSeen || !this.state.dotaDetected;
     const lastSeenAt = publishLastSeen ? new Date(now).toISOString() : this.state.lastSeenAt;
-    if (payload.player) this.localTeam = resolveGsiTeam(payload);
+    const nextTeam = payload.player === undefined ? undefined : resolveGsiTeam(payload);
+    const nextHero = payload.hero === undefined ? undefined : resolveGsiHeroSignal(payload);
     const gameState = payload.map?.game_state;
     if (!gameState) {
+      if (nextTeam !== undefined) this.localTeam = nextTeam;
+      if (nextHero !== undefined) this.localHero = nextHero;
       if (publishLiveness) {
         this.update({
           ...this.state,
@@ -339,6 +387,7 @@ export class DraftEngine {
           lastSeenAt,
         });
       }
+      if (this.applyAutomaticOrientation(this.state.recognition ?? null)) this.scheduleCapture();
       return;
     }
 
@@ -350,6 +399,8 @@ export class DraftEngine {
     } else if (endingDraft) {
       this.endDraftSession();
     }
+    if (nextTeam !== undefined) this.localTeam = nextTeam;
+    if (nextHero !== undefined) this.localHero = nextHero;
 
     if (!nextInDraft) {
       if (endingDraft || this.state.phase !== 'ready') {
@@ -369,6 +420,7 @@ export class DraftEngine {
             message,
             dotaDetected: true,
             lastSeenAt,
+            draftOrientation: null,
           });
         }
       } else if (publishLiveness) {
@@ -404,10 +456,12 @@ export class DraftEngine {
         latestAnalysisId: startingDraft ? null : this.state.latestAnalysisId,
         latestAnalysis: startingDraft ? null : this.state.latestAnalysis,
         recognition: startingDraft ? null : this.state.recognition,
+        draftOrientation: startingDraft ? null : this.state.draftOrientation,
         dotaDetected: true,
         lastSeenAt,
       });
     }
+    this.applyAutomaticOrientation(this.state.recognition ?? null);
     this.scheduleCapture();
   }
 
@@ -422,12 +476,16 @@ export class DraftEngine {
     this.requestKey = null;
     this.requestImage = null;
     this.requestAllyGroup = null;
+    this.requestOrientationSource = null;
     this.liveAnalysisId = null;
     this.liveSessionToken = null;
     this.refreshRequested = false;
     this.retryRequested = false;
     this.forceRefresh = false;
     this.autoDetectPosition = true;
+    this.localHero = null;
+    this.automaticAllyGroup = null;
+    this.manualAllyGroup = null;
   }
 
   private endDraftSession(): void {
@@ -438,9 +496,13 @@ export class DraftEngine {
     this.requestKey = null;
     this.requestImage = null;
     this.requestAllyGroup = null;
+    this.requestOrientationSource = null;
     this.liveAnalysisId = null;
     this.liveSessionToken = null;
     this.localTeam = null;
+    this.localHero = null;
+    this.automaticAllyGroup = null;
+    this.manualAllyGroup = null;
     this.refreshRequested = false;
     this.retryRequested = false;
     this.forceRefresh = false;
@@ -479,10 +541,13 @@ export class DraftEngine {
       const unchanged = Boolean(this.lastHash && hashDistance(this.lastHash, nextHash) < 14);
       const currentPreferences = await this.preferences.get();
       if (!this.isCurrentCapture(generation)) return;
-      const configuredAllyGroup = resolveConfiguredAllyGroup(
-        this.localTeam,
-        currentPreferences.radiantDraftSide,
-      );
+      const orientation = this.getDraftOrientation();
+      const configuredAllyGroup = orientation?.allyGroup ?? null;
+      const configuredOrientationSource = orientation?.source === 'manual_confirmation'
+        ? 'manual_confirmation' as const
+        : orientation
+          ? 'gsi_player_hero' as const
+          : null;
       const orientationChanged = configuredAllyGroup !== this.requestAllyGroup;
       const retryingFailedFrame = unchanged
         && !orientationChanged
@@ -550,6 +615,7 @@ export class DraftEngine {
         this.requestKey = randomUUID();
         this.requestImage = fitForUpload(uploadImage).toPNG();
         this.requestAllyGroup = configuredAllyGroup;
+        this.requestOrientationSource = configuredOrientationSource;
         this.retryRequested = false;
       }
       this.update({
@@ -587,7 +653,7 @@ export class DraftEngine {
             this.requestKey,
             shouldDetectPosition,
             this.requestAllyGroup,
-            this.requestAllyGroup ? 'gsi_layout_heuristic' : null,
+            this.requestOrientationSource,
             this.liveSessionToken,
           )
         : await this.api.analyzeDesktop(
@@ -599,7 +665,7 @@ export class DraftEngine {
             this.requestKey,
             shouldDetectPosition,
             this.requestAllyGroup,
-            this.requestAllyGroup ? 'gsi_layout_heuristic' : null,
+            this.requestOrientationSource,
           );
       if (!this.isCurrentCapture(generation)) return;
       if (this.analyzingTimer) clearTimeout(this.analyzingTimer);
@@ -623,6 +689,12 @@ export class DraftEngine {
             detectedPosition: response.recognition.detectedPosition ?? previousDetectedPosition,
           }
         : { ...response.recognition, detectedPosition: null };
+      this.reportRecognition(recognition);
+      if (this.applyAutomaticOrientation(recognition)) {
+        this.requestKey = null;
+        this.requestImage = null;
+        return;
+      }
       if (response.status === 'waiting') {
         this.requestKey = null;
         this.requestImage = null;
@@ -711,6 +783,89 @@ export class DraftEngine {
         }
       }
     }
+  }
+
+  private getDraftOrientation(): DraftOrientation | null {
+    if (this.manualAllyGroup) {
+      return {
+        allyGroup: this.manualAllyGroup,
+        source: 'manual_confirmation',
+      };
+    }
+    if (this.automaticAllyGroup) {
+      return {
+        allyGroup: this.automaticAllyGroup,
+        source: 'gsi_player_hero',
+      };
+    }
+    return null;
+  }
+
+  private applyAutomaticOrientation(
+    recognition: NonNullable<EngineState['recognition']> | null,
+  ): boolean {
+    if (
+      !this.inDraft
+      || this.manualAllyGroup
+      || this.automaticAllyGroup
+      || !this.localTeam
+      || !recognition
+    ) {
+      return false;
+    }
+    const allyGroup = resolveGsiHeroAllyGroup(this.localHero, recognition.recognized);
+    if (!allyGroup) return false;
+    this.automaticAllyGroup = allyGroup;
+    this.refreshRequested = true;
+    this.forceRefresh = true;
+    this.retryRequested = false;
+    this.update({
+      ...this.state,
+      phase: this.busy ? this.state.phase : 'watching_draft',
+      message: 'Сторона команды определена — обновляем пики',
+      draftOrientation: {
+        allyGroup,
+        source: 'gsi_player_hero',
+      },
+    });
+    visionLog.info('Draft orientation resolved', {
+      source: 'gsi_player_hero',
+      allyGroup,
+    });
+    return true;
+  }
+
+  private reportRecognition(
+    recognition: NonNullable<EngineState['recognition']> & { model?: string },
+  ): void {
+    const bySide = { ally: 0, enemy: 0, unknown: 0 };
+    const byVisualGroup = { left: 0, right: 0, missing: 0 };
+    let needsReview = 0;
+    let withHero = 0;
+    for (const pick of recognition.recognized) {
+      bySide[pick.side] += 1;
+      if (pick.visualGroup) byVisualGroup[pick.visualGroup] += 1;
+      else byVisualGroup.missing += 1;
+      if (pick.needsReview) needsReview += 1;
+      if (pick.heroId !== null) withHero += 1;
+    }
+    const orientation = this.getDraftOrientation();
+    visionLog.info('Draft recognition completed', {
+      quality: recognition.quality,
+      model: recognition.model ?? null,
+      recognizedCount: recognition.recognized.length,
+      withHero,
+      needsReview,
+      bySide,
+      byVisualGroup,
+      orientationSource: orientation?.source ?? null,
+      orientationRequired: !orientation
+        && recognition.recognized.some((pick) => (
+          pick.side === 'unknown'
+          && pick.visualGroup !== undefined
+          && pick.heroId !== null
+        )),
+    });
   }
 
   private async captureDotaWindow(thumbnailSize: { width: number; height: number }): Promise<NativeImage | null> {

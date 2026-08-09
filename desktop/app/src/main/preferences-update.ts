@@ -24,11 +24,7 @@ export async function applyPreferenceEngineChanges(
   }
   const positionChanged = previous.position !== current.position;
   const analysisInputChanged = positionChanged
-    || previous.rank !== current.rank
-    || (
-      current.assistantMode === 'vision'
-      && previous.radiantDraftSide !== current.radiantDraftSide
-    );
+    || previous.rank !== current.rank;
   if (!analysisInputChanged) return;
   if (positionChanged) engine.useManualPositionForCurrentDraft();
   await engine.refresh(true);

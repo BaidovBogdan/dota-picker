@@ -1,4 +1,7 @@
 import {
+  ArrowLeftIcon,
+  ArrowRightIcon,
+  ArrowsLeftRightIcon,
   ArrowsClockwiseIcon,
   CrosshairSimpleIcon,
   ShieldCheckIcon,
@@ -8,6 +11,7 @@ import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 
 import type {
   OverlayBridge,
+  DraftAllyGroup,
   OverlayPick,
   OverlayRecommendation,
   OverlayState,
@@ -32,6 +36,11 @@ const emptyState: OverlayState = {
   shortcut: 'PageUp',
   shortcutAvailable: true,
   refreshing: false,
+  draftOrientation: {
+    required: false,
+    allyGroup: null,
+    source: null,
+  },
 };
 
 const positions: Position[] = [1, 2, 3, 4, 5];
@@ -163,6 +172,50 @@ function DraftRow({
   );
 }
 
+function DraftOrientationPrompt({
+  language,
+  pending,
+  onSelect,
+}: {
+  language: Language;
+  pending: boolean;
+  onSelect: (allyGroup: DraftAllyGroup) => void;
+}) {
+  const options = [
+    {
+      allyGroup: 'left' as const,
+      icon: ArrowLeftIcon,
+      label: text(language, 'Моя команда слева', 'My team is on the left'),
+    },
+    {
+      allyGroup: 'right' as const,
+      icon: ArrowRightIcon,
+      label: text(language, 'Моя команда справа', 'My team is on the right'),
+    },
+  ];
+  return (
+    <div className="overlay-orientation" role="group" aria-label={text(language, 'Сторона вашей команды', 'Your team side')}>
+      <div className="overlay-orientation__copy">
+        <strong>{text(language, 'Где ваша команда?', 'Where is your team?')}</strong>
+        <span>{text(language, 'Автовыбор продолжит работать в следующих кадрах', 'Auto-detection will keep checking the next frames')}</span>
+      </div>
+      <div className="overlay-orientation__options">
+        {options.map(({ allyGroup, icon: Icon, label }) => (
+          <button
+            type="button"
+            key={allyGroup}
+            disabled={pending}
+            onClick={() => onSelect(allyGroup)}
+          >
+            <Icon size={13} weight="bold" aria-hidden />
+            <span>{label}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function RecommendationCard({
   recommendation,
   index,
@@ -274,7 +327,7 @@ export function OverlayPage() {
     state: emptyState,
     presentationId: null as number | null,
   });
-  const [pending, setPending] = useState<'refresh' | Position | null>(null);
+  const [pending, setPending] = useState<'refresh' | Position | DraftAllyGroup | null>(null);
   const [actionError, setActionError] = useState<ActionFailure | null>(null);
   const state = renderFrame.state;
   const bridge = useMemo(overlayBridge, []);
@@ -366,7 +419,7 @@ export function OverlayPage() {
   }, [bridge, renderFrame]);
 
   const runAction = async (
-    key: 'refresh' | Position,
+    key: 'refresh' | Position | DraftAllyGroup,
     action: (currentBridge: OverlayBridge) => Promise<OverlayState>,
   ) => {
     if (!state.available || !bridge || pending !== null) return;
@@ -409,6 +462,24 @@ export function OverlayPage() {
             <span>{phaseLabel(state, refreshing)}</span>
             <span>{visiblePicks.length}/10</span>
           </div>
+          {state.draftOrientation.allyGroup ? (
+            <button
+              className="draft-overlay__orientation-swap"
+              type="button"
+              disabled={!state.available || refreshing}
+              aria-label={text(state.language, 'Поменять стороны команд', 'Swap team sides')}
+              title={text(state.language, 'Исправить сторону команды', 'Correct your team side')}
+              onClick={() => {
+                const allyGroup = state.draftOrientation.allyGroup === 'left' ? 'right' : 'left';
+                void runAction(
+                  allyGroup,
+                  (currentBridge) => currentBridge.setDraftAllyGroup(allyGroup),
+                );
+              }}
+            >
+              <ArrowsLeftRightIcon size={14} weight="bold" aria-hidden />
+            </button>
+          ) : null}
           <button
             className="draft-overlay__close"
             type="button"
@@ -421,8 +492,21 @@ export function OverlayPage() {
         </header>
 
         <div className="overlay-draft">
-          <DraftRow side="ally" picks={allies} language={state.language} />
-          <DraftRow side="enemy" picks={enemies} language={state.language} />
+          {state.draftOrientation.required ? (
+            <DraftOrientationPrompt
+              language={state.language}
+              pending={pending !== null}
+              onSelect={(allyGroup) => void runAction(
+                allyGroup,
+                (currentBridge) => currentBridge.setDraftAllyGroup(allyGroup),
+              )}
+            />
+          ) : (
+            <>
+              <DraftRow side="ally" picks={allies} language={state.language} />
+              <DraftRow side="enemy" picks={enemies} language={state.language} />
+            </>
+          )}
         </div>
 
         <div className="overlay-answers">

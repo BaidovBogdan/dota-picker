@@ -58,7 +58,11 @@ export const desktopAnalysisQuerySchema = z.object({
     .transform((value) => value === 'true')
     .default(false),
   allyGroup: z.enum(['left', 'right']).optional(),
-  orientationSource: z.enum(['gsi_layout_heuristic', 'manual_confirmation']).optional(),
+  orientationSource: z.enum([
+    'gsi_layout_heuristic',
+    'gsi_player_hero',
+    'manual_confirmation',
+  ]).optional(),
   rank: z.coerce.number().pipe(rankBracketSchema).optional(),
   revision: z.coerce.number().int().nonnegative(),
 });

@@ -25,6 +25,7 @@ export const IPC = {
   overlayGetState: 'overlay:get-state',
   overlayRefresh: 'overlay:refresh',
   overlaySetPosition: 'overlay:set-position',
+  overlaySetDraftAllyGroup: 'overlay:set-draft-ally-group',
   overlayHide: 'overlay:hide',
   overlayPresented: 'overlay:presented',
   overlayChanged: 'overlay:changed',

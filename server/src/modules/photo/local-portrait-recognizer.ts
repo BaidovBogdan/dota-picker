@@ -124,7 +124,7 @@ type CandidateInspection = {
 
 export type LocalPortraitRecognitionOptions = {
   allyGroup?: 'left' | 'right';
-  orientationSource?: 'gsi_layout_heuristic' | 'manual_confirmation';
+  orientationSource?: 'gsi_layout_heuristic' | 'gsi_player_hero' | 'manual_confirmation';
 };
 
 function clamp(value: number, minimum: number, maximum: number) {

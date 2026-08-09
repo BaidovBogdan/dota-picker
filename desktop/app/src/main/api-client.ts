@@ -323,7 +323,7 @@ export class ApiClient {
     idempotencyKey: string,
     autoPosition: boolean,
     allyGroup: 'left' | 'right' | null,
-    orientationSource: 'gsi_layout_heuristic' | 'manual_confirmation' | null,
+    orientationSource: 'gsi_player_hero' | 'manual_confirmation' | null,
   ): Promise<DesktopAnalysisResponse> {
     const query = new URLSearchParams({
       autoPosition: String(autoPosition),
@@ -354,7 +354,7 @@ export class ApiClient {
     idempotencyKey: string,
     autoPosition: boolean,
     allyGroup: 'left' | 'right' | null,
-    orientationSource: 'gsi_layout_heuristic' | 'manual_confirmation' | null,
+    orientationSource: 'gsi_player_hero' | 'manual_confirmation' | null,
     liveSessionToken: string,
   ): Promise<DesktopAnalysisResponse> {
     const query = new URLSearchParams({
