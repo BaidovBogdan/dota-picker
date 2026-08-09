@@ -232,7 +232,7 @@ function createOverlayWindow(): BrowserWindow {
     transparent: true,
     backgroundColor: '#00000000',
     alwaysOnTop: true,
-    focusable: false,
+    focusable: true,
     skipTaskbar: true,
     resizable: false,
     minimizable: false,

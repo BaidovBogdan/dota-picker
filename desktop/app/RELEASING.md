@@ -15,7 +15,7 @@
 
 ## Текущий подготовленный релиз
 
-В `desktop/app/package.json` и `package-lock.json` указана версия `0.1.12`. Локальная Windows-сборка выполняет typecheck, тесты, production build, проверку packaging-контракта, NSIS-сборку и проверку готовых артефактов:
+В `desktop/app/package.json` и `package-lock.json` указана версия `0.1.13`. Локальная Windows-сборка выполняет typecheck, тесты, production build, проверку packaging-контракта, NSIS-сборку и проверку готовых артефактов:
 
 ```powershell
 cd desktop/app
@@ -23,10 +23,10 @@ npm ci
 npm run dist:win
 ```
 
-Для `0.1.12` ожидаются:
+Для `0.1.13` ожидаются:
 
-- `release/Counterpick-0.1.12-x64.exe`
-- `release/Counterpick-0.1.12-x64.exe.blockmap`
+- `release/Counterpick-0.1.13-x64.exe`
+- `release/Counterpick-0.1.13-x64.exe.blockmap`
 - `release/latest.yml`
 - `release/win-unpacked/` с Electron-локалями только `en-US.pak` и `ru.pak`
 
