@@ -1,6 +1,7 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  ChartLineUpIcon,
   CheckCircleIcon,
   PaperPlaneTiltIcon,
   StarIcon,
@@ -109,128 +110,147 @@ export function ReviewsPage() {
       className="reviews-page"
     >
       <section className="reviews-layout" data-reveal>
-        <section className="review-composer" aria-labelledby="review-composer-title">
-          <div className="section-heading">
-            <div>
-              <h2 id="review-composer-title">{text('Оценить рекомендацию', 'Rate a recommendation')}</h2>
-              <p>{text('Оценку всегда можно изменить позже', 'You can change your rating later')}</p>
-            </div>
-          </div>
-          <form onSubmit={form.handleSubmit((value) => saveMutation.mutate(value))} noValidate>
-            <InputField
-              label={text('Результат', 'Result')}
-              error={form.formState.errors.analysisId?.message}
-            >
-              <Controller
-                control={form.control}
-                name="analysisId"
-                render={({ field }) => (
-                  <AppSelect
-                    className="review-analysis-select"
-                    label={text('Результат анализа', 'Analysis result')}
-                    placeholder={text('Выберите расчёт', 'Select a result')}
-                    value={field.value}
-                    options={analysisOptions}
-                    disabled={historyQuery.isPending || !analysisOptions.length}
-                    onValueChange={field.onChange}
+        <section className="review-composer" aria-label={text('Оценка рекомендаций', 'Recommendation ratings')}>
+          {historyQuery.isPending ? (
+            <AsyncState
+              status="loading"
+              title={text('Загружаем результаты', 'Loading results')}
+              description={text('Проверяем, какие рекомендации уже можно оценить.', 'Checking which recommendations are ready to rate.')}
+            />
+          ) : historyQuery.isError ? (
+            <AsyncState status="error" onRetry={() => void historyQuery.refetch()} />
+          ) : analysisOptions.length ? (
+            <>
+              <div className="section-heading">
+                <div>
+                  <h2 id="review-composer-title">{text('Оценить рекомендацию', 'Rate a recommendation')}</h2>
+                  <p>{text('Оценку всегда можно изменить позже', 'You can change your rating later')}</p>
+                </div>
+              </div>
+              <form onSubmit={form.handleSubmit((value) => saveMutation.mutate(value))} noValidate>
+                <InputField
+                  label={text('Результат', 'Result')}
+                  error={form.formState.errors.analysisId?.message}
+                >
+                  <Controller
+                    control={form.control}
+                    name="analysisId"
+                    render={({ field }) => (
+                      <AppSelect
+                        className="review-analysis-select"
+                        label={text('Результат анализа', 'Analysis result')}
+                        placeholder={text('Выберите расчёт', 'Select a result')}
+                        value={field.value}
+                        options={analysisOptions}
+                        disabled={historyQuery.isPending || !analysisOptions.length}
+                        onValueChange={field.onChange}
+                      />
+                    )}
                   />
-                )}
-              />
-            </InputField>
+                </InputField>
 
-            <InputField label={text('Насколько полезен ответ?', 'How useful was this answer?')} error={form.formState.errors.rating?.message}>
-              <Controller
-                control={form.control}
-                name="rating"
-                render={({ field }) => (
-                  <div className="rating-input" aria-label={text('Оценка от 1 до 5', 'Rating from 1 to 5')}>
-                    {[1, 2, 3, 4, 5].map((value) => (
-                      <button
-                        type="button"
-                        key={value}
-                        className={field.value >= value ? 'is-active' : ''}
-                        aria-label={text(`${value} из 5`, `${value} out of 5`)}
-                        aria-pressed={field.value === value}
-                        onClick={() => field.onChange(value)}
-                      >
-                        <StarIcon
-                          size={24}
-                          weight={field.value >= value ? 'fill' : 'regular'}
-                          aria-hidden
-                        />
-                      </button>
-                    ))}
-                    <span>{field.value ? `${field.value}/5` : text('Без оценки', 'Not rated')}</span>
-                  </div>
-                )}
-              />
-            </InputField>
-
-            {selectedAnalysis?.result.recommendations.length ? (
-              <InputField label={text('Кого вы выбрали?', 'Who did you pick?')}>
-                <Controller
-                  control={form.control}
-                  name="selectedHeroIds"
-                  render={({ field }) => (
-                    <div className="review-hero-picker">
-                      {selectedAnalysis.result.recommendations.map((item) => {
-                        const selected = field.value.includes(item.hero.id);
-                        return (
+                <InputField label={text('Насколько полезен ответ?', 'How useful was this answer?')} error={form.formState.errors.rating?.message}>
+                  <Controller
+                    control={form.control}
+                    name="rating"
+                    render={({ field }) => (
+                      <div className="rating-input" aria-label={text('Оценка от 1 до 5', 'Rating from 1 to 5')}>
+                        {[1, 2, 3, 4, 5].map((value) => (
                           <button
                             type="button"
-                            key={item.hero.id}
-                            className={selected ? 'is-active' : ''}
-                            aria-pressed={selected}
-                            onClick={() =>
-                              field.onChange(
-                                selected
-                                  ? field.value.filter((id) => id !== item.hero.id)
-                                  : [...field.value, item.hero.id].slice(0, 3),
-                              )
-                            }
+                            key={value}
+                            className={field.value >= value ? 'is-active' : ''}
+                            aria-label={text(`${value} из 5`, `${value} out of 5`)}
+                            aria-pressed={field.value === value}
+                            onClick={() => field.onChange(value)}
                           >
-                            <HeroIcon hero={item.hero} />
-                            <span>{heroName(item.hero, language)}</span>
-                            {selected ? (
-                              <CheckCircleIcon size={17} weight="duotone" aria-hidden />
-                            ) : null}
+                            <StarIcon
+                              size={24}
+                              weight={field.value >= value ? 'fill' : 'regular'}
+                              aria-hidden
+                            />
                           </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                />
-              </InputField>
-            ) : null}
+                        ))}
+                        <span>{field.value ? `${field.value}/5` : text('Без оценки', 'Not rated')}</span>
+                      </div>
+                    )}
+                  />
+                </InputField>
 
-            <InputField
-              label={text('Комментарий', 'Comment')}
-              error={form.formState.errors.comment?.message}
-              hint={`${form.watch('comment').length}/500`}
-            >
-              <textarea
-                rows={4}
-                placeholder={text('Что оказалось полезным или неточным?', 'What was useful or inaccurate?')}
-                {...form.register('comment')}
-              />
-            </InputField>
+                {selectedAnalysis?.result.recommendations.length ? (
+                  <InputField label={text('Кого вы выбрали?', 'Who did you pick?')}>
+                    <Controller
+                      control={form.control}
+                      name="selectedHeroIds"
+                      render={({ field }) => (
+                        <div className="review-hero-picker">
+                          {selectedAnalysis.result.recommendations.map((item) => {
+                            const selected = field.value.includes(item.hero.id);
+                            return (
+                              <button
+                                type="button"
+                                key={item.hero.id}
+                                className={selected ? 'is-active' : ''}
+                                aria-pressed={selected}
+                                onClick={() =>
+                                  field.onChange(
+                                    selected
+                                      ? field.value.filter((id) => id !== item.hero.id)
+                                      : [...field.value, item.hero.id].slice(0, 3),
+                                  )
+                                }
+                              >
+                                <HeroIcon hero={item.hero} />
+                                <span>{heroName(item.hero, language)}</span>
+                                {selected ? (
+                                  <CheckCircleIcon size={17} weight="duotone" aria-hidden />
+                                ) : null}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    />
+                  </InputField>
+                ) : null}
 
-            {saveMutation.isError ? (
-              <p className="form-error" role="alert">
-                {text('Не удалось сохранить оценку. Попробуйте ещё раз.', 'Could not save the rating. Try again.')}
-              </p>
-            ) : null}
-            {saveMutation.isSuccess ? (
-              <p className="form-success" role="status">
-                <CheckCircleIcon size={16} weight="duotone" aria-hidden />
-                {text('Оценка сохранена', 'Rating saved')}
-              </p>
-            ) : null}
-            <Button type="submit" loading={saveMutation.isPending}>
-              <PaperPlaneTiltIcon size={16} aria-hidden />
-              {text('Сохранить оценку', 'Save rating')}
-            </Button>
-          </form>
+                <InputField
+                  label={text('Комментарий', 'Comment')}
+                  error={form.formState.errors.comment?.message}
+                  hint={`${form.watch('comment').length}/500`}
+                >
+                  <textarea
+                    rows={4}
+                    placeholder={text('Что оказалось полезным или неточным?', 'What was useful or inaccurate?')}
+                    {...form.register('comment')}
+                  />
+                </InputField>
+
+                {saveMutation.isError ? (
+                  <p className="form-error" role="alert">
+                    {text('Не удалось сохранить оценку. Попробуйте ещё раз.', 'Could not save the rating. Try again.')}
+                  </p>
+                ) : null}
+                {saveMutation.isSuccess ? (
+                  <p className="form-success" role="status">
+                    <CheckCircleIcon size={16} weight="duotone" aria-hidden />
+                    {text('Оценка сохранена', 'Rating saved')}
+                  </p>
+                ) : null}
+                <Button type="submit" loading={saveMutation.isPending}>
+                  <PaperPlaneTiltIcon size={16} aria-hidden />
+                  {text('Сохранить оценку', 'Save rating')}
+                </Button>
+              </form>
+            </>
+          ) : (
+            <AsyncState
+              status="empty"
+              icon={<ChartLineUpIcon size={25} weight="duotone" />}
+              title={text('Пока нечего оценивать', 'Nothing to rate yet')}
+              description={text('Завершите первый анализ на главной странице. Когда рекомендации будут готовы, здесь появится форма оценки.', 'Complete your first analysis on the home page. Once recommendations are ready, the rating form will appear here.')}
+            />
+          )}
         </section>
 
         <section className="review-history" aria-labelledby="review-history-title">
@@ -287,7 +307,7 @@ export function ReviewsPage() {
             <AsyncState
               status="empty"
               title={text('Отзывов пока нет', 'No reviews yet')}
-              description={text('Выберите один из результатов и поставьте первую оценку.', 'Select a result and add your first rating.')}
+              description={text('После первой оценки ваши отзывы появятся здесь.', 'Your reviews will appear here after you submit your first rating.')}
             />
           )}
         </section>

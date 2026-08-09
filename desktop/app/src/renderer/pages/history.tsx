@@ -3,6 +3,7 @@ import {
   CalendarDotsIcon,
   CameraIcon,
   CaretDownIcon,
+  ClockCounterClockwiseIcon,
   CursorClickIcon,
   DesktopIcon,
   FunnelIcon,
@@ -150,47 +151,51 @@ export function HistoryPage() {
       );
     });
   }, [allItems, deferredSearch, language, locale, position, source]);
+  const hasHistory = allItems.length > 0;
+  const hasActiveFilters = Boolean(search.trim()) || source !== 'all' || position !== 'all';
 
   return (
     <Page
       title={text('История контрпиков', 'Counterpick history')}
       description={text('Каждый результат хранит входной драфт, численные метрики и происхождение данных.', 'Every result keeps the input draft, numerical metrics, and data provenance.')}
     >
-      <StickyFilterBar
-        className="history-toolbar"
-        label={text('Фильтры истории контрпиков', 'Counterpick history filters')}
-      >
-        <div className="history-toolbar__controls">
-          <FilterSearchField
-            value={search}
-            onValueChange={setSearch}
-            label={text('Поиск по герою', 'Search by hero')}
-            placeholder={text('Найти героя в рекомендациях', 'Find a recommended hero')}
-          />
-          <AppSelect
-            className="history-filter-select history-filter-select--source"
-            value={source}
-            onValueChange={(value) => setSource(value as SourceFilter)}
-            options={sourceOptions}
-            label={text('Источник', 'Source')}
-            leadingIcon={<FunnelIcon size={16} weight="duotone" />}
-          />
-          <AppSelect
-            className="history-filter-select history-filter-select--position"
-            value={String(position)}
-            onValueChange={(value) =>
-              setPosition(value === 'all' ? 'all' : (Number(value) as Position))
-            }
-            options={positionOptions}
-            label={text('Позиция', 'Position')}
-            leadingIcon={<TargetIcon size={16} weight="duotone" />}
-          />
-        </div>
-        <div className="history-toolbar__summary" aria-live="polite">
-          <strong>{items.length}</strong>
-          <span>{text('результатов · сначала новые', 'results · newest first')}</span>
-        </div>
-      </StickyFilterBar>
+      {hasHistory ? (
+        <StickyFilterBar
+          className="history-toolbar"
+          label={text('Фильтры истории контрпиков', 'Counterpick history filters')}
+        >
+          <div className="history-toolbar__controls">
+            <FilterSearchField
+              value={search}
+              onValueChange={setSearch}
+              label={text('Поиск по герою', 'Search by hero')}
+              placeholder={text('Найти героя в рекомендациях', 'Find a recommended hero')}
+            />
+            <AppSelect
+              className="history-filter-select history-filter-select--source"
+              value={source}
+              onValueChange={(value) => setSource(value as SourceFilter)}
+              options={sourceOptions}
+              label={text('Источник', 'Source')}
+              leadingIcon={<FunnelIcon size={16} weight="duotone" />}
+            />
+            <AppSelect
+              className="history-filter-select history-filter-select--position"
+              value={String(position)}
+              onValueChange={(value) =>
+                setPosition(value === 'all' ? 'all' : (Number(value) as Position))
+              }
+              options={positionOptions}
+              label={text('Позиция', 'Position')}
+              leadingIcon={<TargetIcon size={16} weight="duotone" />}
+            />
+          </div>
+          <div className="history-toolbar__summary" aria-live="polite">
+            <strong>{items.length}</strong>
+            <span>{text('результатов · сначала новые', 'results · newest first')}</span>
+          </div>
+        </StickyFilterBar>
+      ) : null}
 
       {query.isPending ? (
         <AsyncState status="loading" />
@@ -205,16 +210,17 @@ export function HistoryPage() {
       ) : (
         <AsyncState
           status="empty"
-          title={search ? text('Ничего не найдено', 'Nothing found') : text('История пока пуста', 'History is empty')}
+          icon={<ClockCounterClockwiseIcon size={25} weight="duotone" />}
+          title={hasActiveFilters ? text('Ничего не найдено', 'Nothing found') : text('История пока пуста', 'History is empty')}
           description={
-            search
+            hasActiveFilters
               ? text('Измените запрос или сбросьте фильтры.', 'Change the query or reset the filters.')
               : text('Включите ассистента на главной — первый результат появится здесь.', 'Turn on the assistant on the home page and your first result will appear here.')
           }
         />
       )}
 
-      {query.hasNextPage ? (
+      {hasHistory && query.hasNextPage ? (
         <div className="load-more" data-reveal>
           <Button
             variant="secondary"

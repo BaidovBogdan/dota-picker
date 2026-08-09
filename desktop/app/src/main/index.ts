@@ -22,6 +22,7 @@ import { registerIpc } from './ipc.js';
 import { registerOverlayIpc } from './overlay-ipc.js';
 import { createOverlayState } from './overlay-state.js';
 import { OverlayShortcutManager } from './overlay-shortcut.js';
+import { overlayWindowPosition } from './overlay-window-position.js';
 import { normalizeOverwolfBridgePort, OverwolfBridge } from './overwolf-bridge.js';
 import { OverwolfDraftEngine } from './overwolf-draft-engine.js';
 import { PreferencesStore } from './preferences-store.js';
@@ -212,13 +213,13 @@ function createWindow(preferences: PreferencesStore): BrowserWindow {
 function createOverlayWindow(): BrowserWindow {
   const width = 452;
   const height = 278;
-  const margin = 22;
   const { workArea } = screen.getPrimaryDisplay();
+  const position = overlayWindowPosition(workArea, { width, height });
   const window = new BrowserWindow({
     width,
     height,
-    x: workArea.x + workArea.width - width - margin,
-    y: workArea.y + margin,
+    x: position.x,
+    y: position.y,
     show: false,
     paintWhenInitiallyHidden: true,
     frame: false,

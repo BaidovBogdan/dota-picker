@@ -167,11 +167,13 @@ export function AsyncState({
   status,
   title,
   description,
+  icon,
   onRetry,
 }: {
   status: 'loading' | 'error' | 'empty';
   title?: string;
   description?: string;
+  icon?: ReactNode;
   onRetry?: () => void;
 }) {
   const { text } = useI18n();
@@ -192,7 +194,7 @@ export function AsyncState({
       description: description ?? text('Проверьте подключение и попробуйте ещё раз.', 'Check your connection and try again.'),
     },
     empty: {
-      icon: <CheckIcon size={24} weight="bold" />,
+      icon: icon ?? <CheckIcon size={24} weight="bold" />,
       title: title ?? text('Здесь пока пусто', 'Nothing here yet'),
       description: description ?? text('Новые данные появятся после первой попытки.', 'New data will appear after your first attempt.'),
     },

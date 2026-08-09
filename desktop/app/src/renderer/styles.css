@@ -349,18 +349,6 @@ img {
   line-height: 1;
 }
 
-.titlebar__status::after {
-  position: absolute;
-  top: -1px;
-  right: -1px;
-  width: 5px;
-  height: 5px;
-  border-top: 1px solid var(--chrome-copper);
-  border-right: 1px solid var(--chrome-copper);
-  content: "";
-  opacity: 0.75;
-}
-
 .titlebar__status-signal {
   width: 6px;
   height: 6px;
@@ -7835,7 +7823,11 @@ article[data-active="true"] .mode-comparison-card__choice,
 
 .app-select-content {
   z-index: 1000;
-  width: max(var(--radix-select-trigger-width), 214px);
+  width: max-content;
+  min-width: min(
+    var(--radix-select-trigger-width),
+    var(--radix-select-content-available-width)
+  );
   max-width: var(--radix-select-content-available-width);
   max-height: min(420px, var(--radix-select-content-available-height));
   overflow: hidden;
