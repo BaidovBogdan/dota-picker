@@ -18,7 +18,7 @@ npm run build
 npm run package
 ```
 
-`npm run package` создаёт распакованное приложение, а `npm run dist:win` — Windows NSIS-установщик, update metadata и blockmap. `npm run verify:packaging` проверяет исходный packaging-контракт, а `npm run verify:dist` — готовые Windows-артефакты. Текущая desktop-версия — `0.1.13`; в Electron-пакет включаются только локали `en-US` и `ru`.
+`npm run package` создаёт распакованное приложение, а `npm run dist:win` — Windows NSIS-установщик, update metadata и blockmap. `npm run verify:packaging` проверяет исходный packaging-контракт, а `npm run verify:dist` — готовые Windows-артефакты. Текущая desktop-версия — `0.1.15`; в Electron-пакет включаются только локали `en-US` и `ru`.
 
 ## API
 

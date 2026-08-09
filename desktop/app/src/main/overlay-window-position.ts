@@ -6,7 +6,7 @@ type WorkArea = {
 };
 
 const overlayMargin = 22;
-const overlayTopOffset = 104;
+const overlayTopOffset = 142;
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(Math.max(value, minimum), maximum);
