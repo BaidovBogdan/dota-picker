@@ -2,7 +2,7 @@ export type Plan = 'free' | 'pro';
 export type AccountKind = 'guest' | 'user';
 export type AnalysisStatus = 'completed' | 'failed' | 'processing';
 export type AnalysisSource = 'photo' | 'manual' | 'overwolf';
-export type PageId = 'overview' | 'users' | 'analyses' | 'reviews' | 'meta' | 'system';
+export type PageId = 'overview' | 'users' | 'analyses' | 'diagnostics' | 'reviews' | 'meta' | 'system';
 export type ActivityTone = 'neutral' | 'positive' | 'warning' | 'negative';
 export type RankBracket = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
 export type HeroPosition = 1 | 2 | 3 | 4 | 5;
@@ -230,6 +230,140 @@ export type AdminAnalysesQuery = {
   accountId?: string;
   status?: AnalysisStatus;
   source?: AnalysisSource;
+};
+
+export type DiagnosticMode = 'vision' | 'overwolf';
+export type DiagnosticSessionStatus = 'active' | 'completed' | 'error';
+export type DiagnosticEventStatus = 'info' | 'success' | 'warning' | 'error';
+export type DiagnosticEventType =
+  | 'app_started'
+  | 'mode_changed'
+  | 'draft_started'
+  | 'capture_decision'
+  | 'request_started'
+  | 'request_completed'
+  | 'recognition_result'
+  | 'overlay_state'
+  | 'engine_error'
+  | 'draft_ended'
+  | 'app_stopped';
+
+export type AdminDiagnosticSession = {
+  id: string;
+  accountId: string;
+  app: {
+    platform: 'win32' | 'darwin' | 'linux';
+    version: string;
+    build: string;
+  };
+  mode: DiagnosticMode;
+  status: DiagnosticSessionStatus;
+  startedAt: string;
+  endedAt: string | null;
+  durationMs: number | null;
+  eventCount: number;
+  errorCount: number;
+  lastEventAt: string;
+};
+
+export type AdminDiagnosticSlot = {
+  slot: number;
+  side: 'ally' | 'enemy' | 'unknown';
+  visualGroup: 'left' | 'right' | null;
+  heroId: number | null;
+  confidence: number | null;
+  needsReview: boolean;
+};
+
+export type AdminDiagnosticVisibleSlot = {
+  slot: number;
+  side: 'ally' | 'enemy';
+  heroId: number;
+};
+
+export type AdminDiagnosticEventDetails = {
+  consentVersion?: number;
+  mode?: DiagnosticMode;
+  draftSessionId?: string;
+  revision?: number;
+  operation?: 'create' | 'revise';
+  attempt?: number;
+  distance?: number | null;
+  decision?: 'no_window' | 'unchanged' | 'changed' | 'forced' | 'retry';
+  outcome?: 'waiting' | 'completed' | 'stale' | 'error';
+  waitingReason?: 'not_dota_draft' | 'image_unclear' | 'uncertain_picks' | 'insufficient_enemy_picks' | 'no_enemy_picks';
+  latencyMs?: number;
+  analysisId?: string;
+  recommendationHeroIds?: number[];
+  quality?: 'clear' | 'partial' | 'not_dota' | 'too_blurry';
+  model?: string | null;
+  recognizedCount?: number;
+  needsReviewCount?: number;
+  slots?: AdminDiagnosticSlot[];
+  phase?: string;
+  pickCount?: number;
+  draftActive?: boolean;
+  visibleSlots?: AdminDiagnosticVisibleSlot[];
+  orientationRequired?: boolean;
+  orientationSource?: 'gsi_player_hero' | 'manual_confirmation' | 'overwolf' | null;
+  allyGroup?: 'left' | 'right' | null;
+  code?: string;
+  recoverable?: boolean;
+  errorCode?: string;
+  stage?: string;
+  reason?: 'completed' | 'left_draft' | 'assistant_disabled' | 'mode_changed' | 'error' | 'quit' | 'update' | 'crash' | 'rollover';
+};
+
+export type AdminDiagnosticEvent = {
+  id: string;
+  sequence: number;
+  type: DiagnosticEventType;
+  status: DiagnosticEventStatus;
+  stage: string;
+  createdAt: string;
+  durationMs: number | null;
+  error?: {
+    code: string;
+    recoverable: boolean;
+  };
+  details?: AdminDiagnosticEventDetails;
+};
+
+export type AdminDiagnosticSessionsResponse = {
+  items: AdminDiagnosticSession[];
+  pagination: Pagination;
+  summary: {
+    sessions: number;
+    events: number;
+    errors: number;
+  };
+};
+
+export type AdminDiagnosticSessionResponse = {
+  session: AdminDiagnosticSession;
+  events: AdminDiagnosticEvent[];
+  pagination: {
+    limit: number;
+    total: number;
+    nextBeforeSequence: number | null;
+  };
+};
+
+export type AdminDiagnosticSessionQuery = {
+  limit: number;
+  beforeSequence?: number;
+};
+
+export type AdminDiagnosticSessionsQuery = {
+  limit: number;
+  offset: number;
+  q?: string;
+  appVersion?: string;
+  mode?: DiagnosticMode;
+  status?: DiagnosticSessionStatus;
+  hasErrors?: boolean;
+  from?: string;
+  to?: string;
 };
 
 export type AdminReviewHero = {

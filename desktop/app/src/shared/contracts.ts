@@ -21,6 +21,17 @@ export const rankSchema = z.union([
 
 export const assistantModeSchema = z.enum(['vision', 'overwolf']);
 export const draftAllyGroupSchema = z.enum(['left', 'right']);
+export const overlayVisibleSlotSchema = z.object({
+  slot: z.number().int().min(0).max(4),
+  side: z.enum(['ally', 'enemy']),
+  heroId: z.number().int().positive(),
+}).strict();
+export const overlayVisibleSlotsSchema = z.array(overlayVisibleSlotSchema).max(10).superRefine((slots, context) => {
+  const identities = slots.map((slot) => `${slot.side}:${slot.slot}`);
+  if (new Set(identities).size !== identities.length) {
+    context.addIssue({ code: 'custom', message: 'Overlay slots must be unique' });
+  }
+});
 
 const acceleratorModifiers = new Map<string, string>([
   ['command', 'Command'],
@@ -167,6 +178,18 @@ export const preferencesSchema = z.object({
     accepted: z.boolean(),
     acceptedAt: z.string().datetime().nullable(),
   }).default({ accepted: false, acceptedAt: null }),
+  diagnosticsConsent: z.discriminatedUnion('accepted', [
+    z.object({
+      accepted: z.literal(true),
+      acceptedAt: z.string().datetime(),
+      version: z.literal(1),
+    }),
+    z.object({
+      accepted: z.literal(false),
+      acceptedAt: z.null(),
+      version: z.null(),
+    }),
+  ]).default({ accepted: false, acceptedAt: null, version: null }),
 });
 
 export const preferencesPatchSchema = preferencesSchema.omit({ overlayShortcut: true }).partial();
@@ -266,6 +289,7 @@ export type Position = z.infer<typeof positionSchema>;
 export type Rank = z.infer<typeof rankSchema>;
 export type AssistantMode = z.infer<typeof assistantModeSchema>;
 export type DraftAllyGroup = z.infer<typeof draftAllyGroupSchema>;
+export type OverlayVisibleSlot = z.infer<typeof overlayVisibleSlotSchema>;
 export type Preferences = z.infer<typeof preferencesSchema>;
 export type PreferencesPatch = z.infer<typeof preferencesPatchSchema>;
 export type EnginePhase = z.infer<typeof enginePhaseSchema>;
@@ -540,6 +564,7 @@ export type DesktopBridge = {
   };
   app: {
     openExternal: (url: string) => Promise<void>;
+    openLocalLogs: () => Promise<void>;
     getInfo: () => Promise<AppInfo>;
     reportStartup: (input: StartupDiagnostic) => Promise<void>;
   };
@@ -551,7 +576,7 @@ export type OverlayBridge = {
   setPosition: (position: Position) => Promise<OverlayState>;
   setDraftAllyGroup: (allyGroup: DraftAllyGroup) => Promise<OverlayState>;
   hide: () => Promise<void>;
-  presented: (presentationId: number) => Promise<void>;
+  presented: (presentationId: number, visibleSlots: OverlayVisibleSlot[]) => Promise<void>;
   onState: (listener: (state: OverlayState, presentationId?: number) => void) => () => void;
 };
 

@@ -12,6 +12,7 @@ import type { OverwolfBridge } from './overwolf-bridge.js';
 import { isDraftMatchState } from './overwolf-bridge.js';
 import type { OverwolfSnapshotMessage } from './overwolf-protocol.js';
 import type { PreferencesStore } from './preferences-store.js';
+import { safeDiagnosticErrorCode, type DiagnosticEventDraft } from './diagnostics.js';
 
 type EngineLogger = {
   info: (message: string, ...details: unknown[]) => void;
@@ -120,6 +121,7 @@ export class OverwolfDraftEngine {
   private readonly bridge: OverwolfBridge;
   private readonly emit: (state: EngineState) => void;
   private readonly logger: EngineLogger;
+  private readonly diagnostic?: (event: DiagnosticEventDraft) => void;
   private state: EngineState = {
     enabled: false,
     phase: 'off',
@@ -154,6 +156,9 @@ export class OverwolfDraftEngine {
   private heroesPromise: Promise<void> | null = null;
   private readonly unsubscribeSnapshot: () => void;
   private readonly unsubscribeBridgeState: () => void;
+  private diagnosticRevision = 0;
+  private diagnosticAttempt = 0;
+  private lastRecognitionDiagnosticKey: string | null = null;
 
   constructor(
     api: ApiClient,
@@ -161,12 +166,14 @@ export class OverwolfDraftEngine {
     bridge: OverwolfBridge,
     emit: (state: EngineState) => void,
     logger: EngineLogger,
+    diagnostic?: (event: DiagnosticEventDraft) => void,
   ) {
     this.api = api;
     this.preferences = preferences;
     this.bridge = bridge;
     this.emit = emit;
     this.logger = logger;
+    this.diagnostic = diagnostic;
     this.unsubscribeSnapshot = bridge.onSnapshot((snapshot) => this.handleSnapshot(snapshot));
     this.unsubscribeBridgeState = bridge.onState(() => this.handleBridgeState());
   }
@@ -192,9 +199,11 @@ export class OverwolfDraftEngine {
     });
   }
 
-  async suspend(): Promise<EngineState> {
+  async suspend(
+    reason: 'assistant_disabled' | 'mode_changed' = 'assistant_disabled',
+  ): Promise<EngineState> {
     return this.enqueueTransition(async () => {
-      await this.disable(false);
+      await this.disable(false, reason);
       return this.getState();
     });
   }
@@ -270,6 +279,17 @@ export class OverwolfDraftEngine {
       await this.bridge.start();
       if (!['connected', 'pairing'].includes(this.bridge.getState().phase)) {
         await this.bridge.connect().catch((error) => {
+          this.reportDiagnostic({
+            type: 'engine_error',
+            status: 'error',
+            stage: 'engine',
+            durationMs: null,
+            details: {
+              code: safeDiagnosticErrorCode(error, 'OVERWOLF_CONNECT_FAILED'),
+              recoverable: true,
+              stage: 'engine',
+            },
+          });
           this.logger.warn('Overwolf companion launch was not completed', {
             code: error instanceof DesktopError ? error.code : 'UNKNOWN',
           });
@@ -278,6 +298,17 @@ export class OverwolfDraftEngine {
       this.handleBridgeState();
       if (this.latestSnapshot) this.handleSnapshot(this.latestSnapshot);
     } catch (error) {
+      this.reportDiagnostic({
+        type: 'engine_error',
+        status: 'error',
+        stage: 'engine',
+        durationMs: null,
+        details: {
+          code: safeDiagnosticErrorCode(error, 'OVERWOLF_START_FAILED'),
+          recoverable: true,
+          stage: 'engine',
+        },
+      });
       this.update({
         ...this.state,
         phase: 'error',
@@ -286,8 +317,11 @@ export class OverwolfDraftEngine {
     }
   }
 
-  private async disable(persist = true): Promise<void> {
-    this.endDraftSession();
+  private async disable(
+    persist = true,
+    reason: 'assistant_disabled' | 'mode_changed' = 'assistant_disabled',
+  ): Promise<void> {
+    this.endDraftSession(reason);
     this.latestSnapshot = null;
     this.update({
       enabled: false,
@@ -345,9 +379,14 @@ export class OverwolfDraftEngine {
     if (!this.state.enabled) return;
     this.latestSnapshot = structuredClone(snapshot);
     const inDraft = snapshot.game.running && isDraftMatchState(snapshot.game.matchState);
+    const draftEndReason = new Set(snapshot.draft.picks.flatMap((pick) => (
+      pick.confirmed && pick.heroId ? [pick.heroId] : []
+    ))).size >= 10
+      ? 'completed' as const
+      : 'left_draft' as const;
     const bridgeState = this.bridge.getState();
     if (!snapshot.game.running) {
-      this.endDraftSession();
+      this.endDraftSession(draftEndReason);
       this.update({
         ...this.state,
         phase: 'waiting_for_dota',
@@ -363,7 +402,7 @@ export class OverwolfDraftEngine {
       return;
     }
     if (!inDraft) {
-      this.endDraftSession();
+      this.endDraftSession(draftEndReason);
       this.update({
         ...this.state,
         phase: 'waiting_for_dota',
@@ -411,6 +450,36 @@ export class OverwolfDraftEngine {
     const recognition = draft ? this.createRecognition(snapshot, draft) : null;
     const enemyCount = draft?.enemyHeroIds.length ?? 0;
     const currentDraftKey = draft ? draftKey(draft) : null;
+    const recognitionRevision = draft
+      && enemyCount >= 2
+      && currentDraftKey !== this.requestDraftKey
+      && currentDraftKey !== this.lastCompletedDraftKey
+      ? Math.min(10_000, this.diagnosticRevision + 1)
+      : Math.min(10_000, this.diagnosticRevision);
+    if (recognition && currentDraftKey !== this.lastRecognitionDiagnosticKey) {
+      this.lastRecognitionDiagnosticKey = currentDraftKey;
+      this.reportDiagnostic({
+        type: 'recognition_result',
+        status: 'success',
+        stage: 'recognition',
+        durationMs: null,
+        details: {
+          revision: recognitionRevision,
+          quality: recognition.quality,
+          model: 'overwolf-live',
+          recognizedCount: recognition.recognized.length,
+          needsReviewCount: 0,
+          slots: recognition.recognized.map((pick) => ({
+            slot: pick.slot,
+            side: pick.side,
+            visualGroup: null,
+            heroId: pick.heroId,
+            confidence: pick.confidence,
+            needsReview: pick.needsReview,
+          })),
+        },
+      });
+    }
     const hasCurrentResult = Boolean(
       currentDraftKey
       && currentDraftKey === this.lastCompletedDraftKey
@@ -517,6 +586,10 @@ export class OverwolfDraftEngine {
     if (!retrying) {
       this.requestDraftKey = nextDraftKey;
       this.requestIdempotencyKey = randomUUID();
+      this.diagnosticRevision += 1;
+      this.diagnosticAttempt = 1;
+    } else {
+      this.diagnosticAttempt = Math.min(20, this.diagnosticAttempt + 1);
     }
     if (!this.requestIdempotencyKey) this.requestIdempotencyKey = randomUUID();
     this.busy = true;
@@ -541,6 +614,18 @@ export class OverwolfDraftEngine {
     const analysisId = this.isActiveDraftScopeReserved()
       ? this.liveAnalysisId
       : null;
+    const requestStartedAt = performance.now();
+    this.reportDiagnostic({
+      type: 'request_started',
+      status: 'info',
+      stage: 'request',
+      durationMs: null,
+      details: {
+        revision: this.diagnosticRevision,
+        operation: analysisId ? 'revise' : 'create',
+        attempt: this.diagnosticAttempt,
+      },
+    });
     try {
       const response = analysisId
         ? await this.api.reviseOverwolf(
@@ -602,6 +687,22 @@ export class OverwolfDraftEngine {
         revision: Boolean(analysisId),
         remainingQuota: response.quota.remaining,
       });
+      const latencyMs = Math.min(120_000, Math.round(performance.now() - requestStartedAt));
+      this.reportDiagnostic({
+        type: 'request_completed',
+        status: resultApplies ? 'success' : 'warning',
+        stage: 'request',
+        durationMs: latencyMs,
+        details: {
+          revision: this.diagnosticRevision,
+          outcome: resultApplies ? 'completed' : 'stale',
+          latencyMs,
+          analysisId: response.analysis.id,
+          recommendationHeroIds: response.analysis.result?.recommendations
+            .slice(0, 3)
+            .map((recommendation) => recommendation.hero.id) ?? [],
+        },
+      });
     } catch (error) {
       if (
         generation !== this.generation
@@ -612,6 +713,34 @@ export class OverwolfDraftEngine {
         && error instanceof DesktopError
         && error.code === 'OVERWOLF_LIVE_SESSION_INVALID'
         && error.status === 401;
+      const isQuota = error instanceof DesktopError
+        && (error.code === 'QUOTA_EXHAUSTED' || error.status === 402);
+      const retryable = liveSessionInvalid || isRetryableAnalysisError(error);
+      const latencyMs = Math.min(120_000, Math.round(performance.now() - requestStartedAt));
+      this.reportDiagnostic({
+        type: 'request_completed',
+        status: 'error',
+        stage: 'request',
+        durationMs: latencyMs,
+        details: {
+          revision: this.diagnosticRevision,
+          outcome: 'error',
+          latencyMs,
+          errorCode: safeDiagnosticErrorCode(error),
+          recoverable: retryable,
+        },
+      });
+      this.reportDiagnostic({
+        type: 'engine_error',
+        status: 'error',
+        stage: 'engine',
+        durationMs: null,
+        details: {
+          code: safeDiagnosticErrorCode(error),
+          recoverable: retryable,
+          stage: 'request',
+        },
+      });
       if (liveSessionInvalid) {
         this.liveAnalysisId = null;
         this.liveSessionToken = null;
@@ -631,9 +760,6 @@ export class OverwolfDraftEngine {
         this.logger.warn('Overwolf live capability expired; starting a new scoped analysis');
         return;
       }
-      const isQuota = error instanceof DesktopError
-        && (error.code === 'QUOTA_EXHAUSTED' || error.status === 402);
-      const retryable = isRetryableAnalysisError(error);
       if (!retryable || isQuota) {
         this.requestDraftKey = null;
         this.requestIdempotencyKey = null;
@@ -758,6 +884,7 @@ export class OverwolfDraftEngine {
     }
     this.queuedDraftKey = null;
     this.autoDetectPosition = true;
+    this.lastRecognitionDiagnosticKey = null;
     if (clearSnapshot) this.latestSnapshot = null;
   }
 
@@ -767,10 +894,7 @@ export class OverwolfDraftEngine {
       ? `match:${createHash('sha256').update(matchId).digest('hex')}`
       : null;
     if (!this.activeDraftScope) {
-      this.activeDraftScope = observedScope ?? `local:${randomUUID()}`;
-      this.reservedDraftScope = null;
-      this.liveAnalysisId = null;
-      this.liveSessionToken = null;
+      this.beginDraftSession(observedScope ?? `local:${randomUUID()}`);
       return true;
     }
     if (!observedScope || observedScope === this.activeDraftScope) return false;
@@ -780,12 +904,26 @@ export class OverwolfDraftEngine {
       if (reservationBelongsToDraft) this.reservedDraftScope = observedScope;
       return false;
     }
-    this.invalidateDraftSession(false);
-    this.activeDraftScope = observedScope;
+    this.endDraftSession('left_draft');
+    this.beginDraftSession(observedScope);
+    return true;
+  }
+
+  private beginDraftSession(scope: string): void {
+    this.activeDraftScope = scope;
+    const diagnosticDraftSessionId = randomUUID();
+    this.diagnosticRevision = 0;
+    this.diagnosticAttempt = 0;
+    this.reportDiagnostic({
+      type: 'draft_started',
+      status: 'info',
+      stage: 'draft',
+      durationMs: null,
+      details: { draftSessionId: diagnosticDraftSessionId },
+    });
     this.reservedDraftScope = null;
     this.liveAnalysisId = null;
     this.liveSessionToken = null;
-    return true;
   }
 
   private suspendDraftForReconnect(): void {
@@ -812,12 +950,31 @@ export class OverwolfDraftEngine {
     );
   }
 
-  private endDraftSession(): void {
+  private endDraftSession(
+    reason: 'completed' | 'left_draft' | 'assistant_disabled' | 'mode_changed' | 'error' = 'left_draft',
+  ): void {
+    if (this.activeDraftScope) {
+      this.reportDiagnostic({
+        type: 'draft_ended',
+        status: reason === 'completed' ? 'success' : reason === 'error' ? 'error' : 'info',
+        stage: 'draft',
+        durationMs: null,
+        details: { reason },
+      });
+    }
     this.invalidateDraftSession(false);
     this.activeDraftScope = null;
     this.reservedDraftScope = null;
     this.liveAnalysisId = null;
     this.liveSessionToken = null;
+  }
+
+  private reportDiagnostic(event: DiagnosticEventDraft): void {
+    try {
+      this.diagnostic?.(event);
+    } catch {
+      return;
+    }
   }
 
   private enqueueTransition<T>(operation: () => Promise<T>): Promise<T> {

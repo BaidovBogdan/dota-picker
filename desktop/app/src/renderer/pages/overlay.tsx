@@ -401,6 +401,11 @@ export function OverlayPage() {
   useLayoutEffect(() => {
     const { presentationId } = renderFrame;
     if (!bridge || !presentationId) return undefined;
+    const visibleSlots = (renderFrame.state.available ? renderFrame.state.picks : []).flatMap((pick) => (
+      pick.heroId === null
+        ? []
+        : [{ slot: pick.slot, side: pick.side, heroId: pick.heroId }]
+    ));
     let secondFrame = 0;
     const firstFrame = window.requestAnimationFrame(() => {
       secondFrame = window.requestAnimationFrame(() => {
@@ -409,7 +414,7 @@ export function OverlayPage() {
             ? { ...current, presentationId: null }
             : current
         ));
-        void bridge.presented(presentationId).catch(() => undefined);
+        void bridge.presented(presentationId, visibleSlots).catch(() => undefined);
       });
     });
     return () => {

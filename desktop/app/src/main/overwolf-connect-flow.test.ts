@@ -20,6 +20,7 @@ const basePreferences: Preferences = {
   assistantMode: 'vision',
   captureConsent: { accepted: false, acceptedAt: null },
   overwolfConsent: { accepted: false, acceptedAt: null },
+  diagnosticsConsent: { accepted: false, acceptedAt: null, version: null },
 };
 
 describe('activateOverwolfLive', () => {

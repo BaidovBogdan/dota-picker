@@ -9,7 +9,10 @@ type PreferencesWriter = {
 };
 
 type PreferenceAwareEngine = {
-  switchMode: (mode: Preferences['assistantMode']) => Promise<unknown>;
+  switchMode: (
+    mode: Preferences['assistantMode'],
+    onSuspended?: () => void | Promise<void>,
+  ) => Promise<unknown>;
   useManualPositionForCurrentDraft: () => void;
   refresh: (force?: boolean) => Promise<unknown>;
 };
@@ -18,9 +21,10 @@ export async function applyPreferenceEngineChanges(
   previous: Preferences,
   current: Preferences,
   engine: PreferenceAwareEngine,
+  onModeSuspended?: () => void | Promise<void>,
 ): Promise<void> {
   if (previous.assistantMode !== current.assistantMode) {
-    await engine.switchMode(current.assistantMode);
+    await engine.switchMode(current.assistantMode, onModeSuspended);
   }
   const positionChanged = previous.position !== current.position;
   const analysisInputChanged = positionChanged

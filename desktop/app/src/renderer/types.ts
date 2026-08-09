@@ -97,6 +97,11 @@ export type Preferences = {
     accepted: boolean;
     acceptedAt: string | null;
   };
+  diagnosticsConsent: {
+    accepted: boolean;
+    acceptedAt: string | null;
+    version: 1 | null;
+  };
 };
 
 export type OverwolfBridgePhase =
@@ -461,6 +466,7 @@ export type NativeBridge = {
   };
   app: {
     openExternal: (url: string) => Promise<void> | void;
+    openLocalLogs: () => Promise<void> | void;
     getInfo: () => Promise<AppInfo>;
     reportStartup: (input: StartupDiagnostic) => Promise<void> | void;
   };

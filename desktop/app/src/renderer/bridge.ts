@@ -145,6 +145,7 @@ export const desktop = {
   },
   app: {
     openExternal: (url: string) => native().app.openExternal(url),
+    openLocalLogs: () => native().app.openLocalLogs(),
     getInfo: () => native().app.getInfo(),
     reportStartup: (input: Parameters<NativeBridge['app']['reportStartup']>[0]) =>
       native().app.reportStartup(input),

@@ -41,7 +41,7 @@ const bridge: OverlayBridge = {
   setPosition: (position) => invoke(IPC.setPosition, position),
   setDraftAllyGroup: (allyGroup) => invoke(IPC.setDraftAllyGroup, allyGroup),
   hide: () => invoke(IPC.hide),
-  presented: (presentationId) => invoke(IPC.presented, presentationId),
+  presented: (presentationId, visibleSlots) => invoke(IPC.presented, presentationId, visibleSlots),
   onState: (listener) => {
     const handler = (
       _event: Electron.IpcRendererEvent,

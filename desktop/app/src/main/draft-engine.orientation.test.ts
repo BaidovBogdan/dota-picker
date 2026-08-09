@@ -102,6 +102,7 @@ function harness(initialPayload: GsiPayload) {
     assistantMode: 'vision',
     captureConsent: { accepted: true, acceptedAt: '2026-08-08T00:00:00.000Z' },
     overwolfConsent: { accepted: false, acceptedAt: null },
+    diagnosticsConsent: { accepted: false, acceptedAt: null, version: null },
   };
   const preferences = {
     get: async () => structuredClone(preferencesValue),

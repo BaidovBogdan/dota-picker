@@ -31,6 +31,7 @@ There is no root npm workspace. Install dependencies and run commands inside the
 - A deterministic recommendation path when Gemini reranking is disabled or unavailable.
 - An opt-in Windows assistant that watches the Dota 2 draft, skips unchanged frames, and updates one live result as the draft gains new picks.
 - Optional exact-pick ingestion through a local Overwolf companion; its public Appstore release is still pending.
+- Local desktop troubleshooting logs plus an optional, explicitly enabled diagnostic timeline for support operators.
 
 ## Technology
 
@@ -74,6 +75,14 @@ npm run dev
 For a local API, set `EXPO_PUBLIC_API_URL=http://localhost:4000/v1` in `client/.env`. A physical phone must use an address it can reach over the local network or HTTPS; `localhost` on the phone refers to the phone itself.
 
 Package-specific setup, environment variables, and operational notes are documented in the linked README files above.
+
+## Diagnostics and support
+
+The desktop app always keeps a bounded local text log. Packaged, development, and automated runs write to separate `main.log`, `development.log`, and `test.log` files under Electron's `userData/logs` directory, so tests cannot pollute a real user's log. The Settings screen can open that folder directly.
+
+Remote diagnostics are disabled by default and require explicit consent from an authenticated account. When enabled, Counterpick uploads bounded structured events for app/session/build/mode, stage and timing, capture decisions, request status and latency, recognized and recommended hero IDs, slot/side/confidence/review state, the hero slots actually visible in the overlay, orientation decisions, and safe error codes. It never uploads screenshots, image bytes, raw GSI, player names, Steam IDs, tokens, file paths, error messages, or stacks. Revoking consent stops future uploads and removes unsent remote events; the local log remains. Accepted remote events are account-scoped and retained for at most 30 days.
+
+Operators can inspect only opted-in sessions in the protected Admin Diagnostics page. Start with the session timeline, compare `recognition_result` with `overlay_state.visibleSlots`, then use the local log supplied by the user for details that are intentionally excluded from the server.
 
 ## Quality checks
 

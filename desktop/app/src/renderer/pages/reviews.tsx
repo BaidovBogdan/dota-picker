@@ -7,13 +7,14 @@ import {
   StarIcon,
   TrashIcon,
 } from '@phosphor-icons/react';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { Link, useSearchParams } from 'react-router';
 import { z } from 'zod';
 
 import { desktop } from '../bridge';
 import { AppSelect } from '../components/app-select';
+import { ConfirmDialog } from '../components/confirm-dialog';
 import { formatDateTime, heroName } from '../format';
 import { useI18n } from '../i18n';
 import { AsyncState, Button, HeroIcon, InputField, Page } from '../components/ui';
@@ -30,6 +31,7 @@ export function ReviewsPage() {
   const [params] = useSearchParams();
   const requestedAnalysisId = params.get('analysis');
   const queryClient = useQueryClient();
+  const [reviewToDelete, setReviewToDelete] = useState<string | null>(null);
   const reviewSchema = useMemo(() => z.object({
     analysisId: z.string().min(1, text('Выберите результат', 'Select a result')),
     rating: z.number().int().min(1, text('Поставьте оценку', 'Add a rating')).max(5),
@@ -88,19 +90,17 @@ export function ReviewsPage() {
         selectedHeroIds: input.selectedHeroIds,
         ...(input.comment ? { comment: input.comment } : {}),
       }),
-    onSuccess: () => {
-      form.reset({
-        analysisId: '',
-        rating: 0,
-        selectedHeroIds: [],
-        comment: '',
-      });
+    onSuccess: (_review, input) => {
+      form.reset(input);
       void queryClient.invalidateQueries({ queryKey: ['reviews'] });
     },
   });
   const deleteMutation = useMutation({
     mutationFn: desktop.data.deleteReview,
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['reviews'] }),
+    onSuccess: () => {
+      setReviewToDelete(null);
+      void queryClient.invalidateQueries({ queryKey: ['reviews'] });
+    },
   });
 
   return (
@@ -231,7 +231,7 @@ export function ReviewsPage() {
                     {text('Не удалось сохранить оценку. Попробуйте ещё раз.', 'Could not save the rating. Try again.')}
                   </p>
                 ) : null}
-                {saveMutation.isSuccess ? (
+                {saveMutation.isSuccess && !form.formState.isDirty ? (
                   <p className="form-success" role="status">
                     <CheckCircleIcon size={16} weight="duotone" aria-hidden />
                     {text('Оценка сохранена', 'Rating saved')}
@@ -282,9 +282,8 @@ export function ReviewsPage() {
                       aria-label={text('Удалить отзыв', 'Delete review')}
                       disabled={deleteMutation.isPending}
                       onClick={() => {
-                        if (globalThis.confirm(text('Удалить этот отзыв?', 'Delete this review?'))) {
-                          deleteMutation.mutate(review.id);
-                        }
+                        deleteMutation.reset();
+                        setReviewToDelete(review.id);
                       }}
                     >
                       <TrashIcon size={16} aria-hidden />
@@ -312,6 +311,28 @@ export function ReviewsPage() {
           )}
         </section>
       </section>
+      <ConfirmDialog
+        open={reviewToDelete !== null}
+        title={text('Удалить этот отзыв?', 'Delete this review?')}
+        description={text(
+          'Оценка и комментарий будут удалены. Сам результат анализа останется в истории.',
+          'The rating and comment will be deleted. The analysis result will remain in your history.',
+        )}
+        cancelLabel={text('Отмена', 'Cancel')}
+        confirmLabel={text('Удалить отзыв', 'Delete review')}
+        pending={deleteMutation.isPending}
+        error={deleteMutation.isError
+          ? text('Не удалось удалить отзыв. Попробуйте ещё раз.', 'Could not delete the review. Try again.')
+          : undefined}
+        onCancel={() => {
+          if (deleteMutation.isPending) return;
+          deleteMutation.reset();
+          setReviewToDelete(null);
+        }}
+        onConfirm={() => {
+          if (reviewToDelete && !deleteMutation.isPending) deleteMutation.mutate(reviewToDelete);
+        }}
+      />
     </Page>
   );
 }

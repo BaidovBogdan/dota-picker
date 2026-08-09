@@ -47,6 +47,7 @@ export const IPC = {
   overwolfOpenInstaller: 'overwolf:open-installer',
   overwolfChanged: 'overwolf:changed',
   appOpenExternal: 'app:open-external',
+  appOpenLocalLogs: 'app:open-local-logs',
   appInfo: 'app:info',
   appStartupDiagnostic: 'app:startup-diagnostic',
 } as const;

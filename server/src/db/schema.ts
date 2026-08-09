@@ -253,6 +253,83 @@ export const adminAuditEvents = pgTable(
   ],
 );
 
+export const diagnosticSessions = pgTable(
+  'diagnostic_sessions',
+  {
+    id: uuid('id').primaryKey(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    platform: text('platform').notNull(),
+    appVersion: text('app_version').notNull(),
+    appBuild: text('app_build').notNull(),
+    mode: text('mode').notNull(),
+    status: text('status').notNull().default('active'),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull(),
+    endedAt: timestamp('ended_at', { withTimezone: true }),
+    lastEventAt: timestamp('last_event_at', { withTimezone: true }).notNull(),
+    eventCount: integer('event_count').notNull().default(0),
+    errorCount: integer('error_count').notNull().default(0),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('diagnostic_sessions_account_started_idx').on(table.accountId, table.startedAt, table.id),
+    index('diagnostic_sessions_account_created_idx').on(table.accountId, table.createdAt),
+    index('diagnostic_sessions_account_last_event_idx').on(table.accountId, table.lastEventAt, table.id),
+    index('diagnostic_sessions_mode_last_event_idx').on(table.mode, table.lastEventAt, table.id),
+    index('diagnostic_sessions_status_last_event_idx').on(table.status, table.lastEventAt, table.id),
+    index('diagnostic_sessions_started_idx').on(table.startedAt, table.id),
+    index('diagnostic_sessions_last_event_idx').on(table.lastEventAt, table.id),
+    index('diagnostic_sessions_expires_idx').on(table.expiresAt),
+    check('diagnostic_sessions_platform_check', sql`${table.platform} in ('win32', 'darwin', 'linux')`),
+    check('diagnostic_sessions_mode_check', sql`${table.mode} in ('vision', 'overwolf')`),
+    check('diagnostic_sessions_status_check', sql`${table.status} in ('active', 'completed', 'error')`),
+    check('diagnostic_sessions_version_check', sql`
+      char_length(${table.appVersion}) between 1 and 32
+      and char_length(${table.appBuild}) between 1 and 64
+    `),
+    check('diagnostic_sessions_counts_check', sql`
+      ${table.eventCount} >= 0 and ${table.errorCount} >= 0 and ${table.errorCount} <= ${table.eventCount}
+    `),
+  ],
+);
+
+export const diagnosticEvents = pgTable(
+  'diagnostic_events',
+  {
+    id: uuid('id').primaryKey(),
+    sessionId: uuid('session_id')
+      .notNull()
+      .references(() => diagnosticSessions.id, { onDelete: 'cascade' }),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    sequence: integer('sequence').notNull(),
+    type: text('type').notNull(),
+    status: text('status').notNull(),
+    stage: text('stage').notNull(),
+    durationMs: integer('duration_ms'),
+    details: jsonb('details').$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+    receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('diagnostic_events_session_sequence_unique').on(table.sessionId, table.sequence),
+    index('diagnostic_events_account_created_idx').on(table.accountId, table.createdAt, table.id),
+    index('diagnostic_events_account_received_idx').on(table.accountId, table.receivedAt),
+    index('diagnostic_events_session_created_idx').on(table.sessionId, table.createdAt, table.id),
+    index('diagnostic_events_expires_idx').on(table.expiresAt),
+    check('diagnostic_events_sequence_check', sql`${table.sequence} between 1 and 100000`),
+    check('diagnostic_events_status_check', sql`${table.status} in ('info', 'success', 'warning', 'error')`),
+    check('diagnostic_events_stage_check', sql`${table.stage} in ('app', 'draft', 'capture', 'request', 'recognition', 'overlay', 'engine')`),
+    check('diagnostic_events_duration_check', sql`${table.durationMs} is null or ${table.durationMs} between 0 and 120000`),
+    check('diagnostic_events_details_check', sql`jsonb_typeof(${table.details}) = 'object'`),
+  ],
+);
+
 export const accountsRelations = relations(accounts, ({ many }) => ({
   analyses: many(analyses),
   analysisReviews: many(analysisReviews),
@@ -261,6 +338,8 @@ export const accountsRelations = relations(accounts, ({ many }) => ({
   quotaEvents: many(quotaEvents),
   idempotencyRecords: many(idempotencyRecords),
   billingEvents: many(billingEvents),
+  diagnosticSessions: many(diagnosticSessions),
+  diagnosticEvents: many(diagnosticEvents),
 }));
 
 export const analysesRelations = relations(analyses, ({ one, many }) => ({
@@ -273,8 +352,23 @@ export const analysisReviewsRelations = relations(analysisReviews, ({ one }) => 
   analysis: one(analyses, { fields: [analysisReviews.analysisId], references: [analyses.id] }),
 }));
 
+export const diagnosticSessionsRelations = relations(diagnosticSessions, ({ one, many }) => ({
+  account: one(accounts, { fields: [diagnosticSessions.accountId], references: [accounts.id] }),
+  events: many(diagnosticEvents),
+}));
+
+export const diagnosticEventsRelations = relations(diagnosticEvents, ({ one }) => ({
+  account: one(accounts, { fields: [diagnosticEvents.accountId], references: [accounts.id] }),
+  session: one(diagnosticSessions, {
+    fields: [diagnosticEvents.sessionId],
+    references: [diagnosticSessions.id],
+  }),
+}));
+
 export type Account = typeof accounts.$inferSelect;
 export type NewAccount = typeof accounts.$inferInsert;
 export type Analysis = typeof analyses.$inferSelect;
 export type AnalysisReview = typeof analysisReviews.$inferSelect;
 export type AdminAuditEvent = typeof adminAuditEvents.$inferSelect;
+export type DiagnosticSession = typeof diagnosticSessions.$inferSelect;
+export type DiagnosticEvent = typeof diagnosticEvents.$inferSelect;

@@ -153,6 +153,20 @@ Desktop analysis accepts the same in-memory image formats plus `sessionId`, `rev
 
 Admin review routes use the `x-admin-key` header. That key must remain server-side and must never be embedded in the admin browser bundle.
 
+### Desktop diagnostics
+
+| Method | Route | Purpose |
+| --- | --- | --- |
+| `POST` | `/v1/diagnostics/events` | Ingest an authenticated, consented batch of up to 20 structured desktop events |
+| `GET` | `/v1/admin/diagnostics/sessions` | List opted-in diagnostic sessions with server-side filters and pagination |
+| `GET` | `/v1/admin/diagnostics/sessions/:id?limit=&beforeSequence=` | Read one stable, keyset-paginated diagnostic timeline |
+
+The ingestion contract is strict and idempotent by event ID and session sequence. Session identity is immutable and account-scoped. Request bodies are limited to 128 KiB, ingestion to 20 requests per minute, and rolling storage to 10,000 events and 100 sessions per account per 24 hours. Temporary quota responses retain the desktop queue for a delayed retry.
+
+Accepted events contain app/session/build/mode metadata, bounded timing and capture decisions, request state, recognized/recommended hero IDs with slot/side/confidence/review metadata, the bounded set of hero slots actually visible in the overlay, orientation decisions, and controlled error codes. The schema rejects screenshots, images, raw GSI, player identities, Steam IDs, tokens, paths, error messages, stacks, and arbitrary JSON payloads.
+
+Sessions and events expire no later than 30 days after the session started. Expired data is hidden from admin queries immediately and removed in bounded background batches on startup and hourly; a remaining backlog schedules another bounded pass after five seconds, while cleanup failures retry after one minute. Operators should compare recognition events with acknowledged `overlay_state.visibleSlots` before requesting the separate local log from a user.
+
 ### Billing
 
 | Method | Route | Purpose |

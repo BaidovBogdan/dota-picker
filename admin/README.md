@@ -23,6 +23,8 @@ The console uses these protected server endpoints:
 - `DELETE /v1/admin/reviews/:id`
 - `GET /v1/admin/meta?rank=1..8`
 - `GET /v1/admin/system`
+- `GET /v1/admin/diagnostics/sessions?limit=&offset=&q=&appVersion=&mode=&status=&hasErrors=&from=&to=`
+- `GET /v1/admin/diagnostics/sessions/:id?limit=&beforeSequence=`
 - `POST /v1/admin/grants/pro-all`
 
 Account deletion, suspension, quota edits, session revocation and analysis retry are not exposed because protected mutation endpoints and action auditing are not implemented. The UI does not render placeholder controls for them.
@@ -61,3 +63,6 @@ Vite builds with `base: '/admin/'`. The backend serves the generated assets and 
 - System integration groups come from the backend audit response: connected, connectable now, and blocked pending schema or telemetry.
 - Admin API responses use `Cache-Control: no-store` and `Pragma: no-cache` so account and diagnostic data are not retained in the browser cache after logout.
 - The overview shows recent billing webhook and admin audit events. Full raw journals are not exposed until redaction, retention and pagination policies are defined.
+- Diagnostics lists only sessions uploaded after a user explicitly opted in. Local logs are never read by this page, and remote sessions expire after at most 30 days.
+- To investigate a draft, open its timeline and compare recognized slot/hero/side data with acknowledged `overlay_state.visibleSlots`, pick count, orientation source and ally group. Older events use a stable sequence cursor and preserve the total captured when the timeline was opened; refresh explicitly to include newer events. Request the user's separate local log only if the structured events are insufficient.
+- Diagnostics intentionally omits screenshots, image bytes, raw GSI, names, Steam IDs, tokens, file paths, error messages and stack traces. Do not add a raw-payload viewer that bypasses this contract.

@@ -2,6 +2,10 @@ import type {
   AdminAnalysesResponse,
   AdminAnalysesQuery,
   AdminGrantResult,
+  AdminDiagnosticSessionQuery,
+  AdminDiagnosticSessionResponse,
+  AdminDiagnosticSessionsQuery,
+  AdminDiagnosticSessionsResponse,
   AdminMeta,
   AdminOverview,
   AdminReviewsResponse,
@@ -124,6 +128,10 @@ export const adminApi = {
     request<AdminUsersResponse>(token, `/users${queryString(query)}`, { signal }),
   analyses: (token: string, query: AdminAnalysesQuery, signal?: AbortSignal) =>
     request<AdminAnalysesResponse>(token, `/analyses${queryString(query)}`, { signal }),
+  diagnosticSessions: (token: string, query: AdminDiagnosticSessionsQuery, signal?: AbortSignal) =>
+    request<AdminDiagnosticSessionsResponse>(token, `/diagnostics/sessions${queryString(query)}`, { signal }),
+  diagnosticSession: (token: string, sessionId: string, query: AdminDiagnosticSessionQuery, signal?: AbortSignal) =>
+    request<AdminDiagnosticSessionResponse>(token, `/diagnostics/sessions/${encodeURIComponent(sessionId)}${queryString(query)}`, { signal }),
   heroCatalog: (signal?: AbortSignal) =>
     publicRequest<HeroCatalogResponse>('/v1/heroes', { signal }),
   reviews: (token: string, query: AdminReviewsQuery, signal?: AbortSignal) =>

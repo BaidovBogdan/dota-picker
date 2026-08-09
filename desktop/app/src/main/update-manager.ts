@@ -116,8 +116,6 @@ export class UpdateManager {
   constructor(private readonly options: UpdateManagerOptions) {
     const { autoUpdater } = electronUpdater;
     this.updater = autoUpdater;
-    log.initialize({ spyRendererConsole: false });
-    log.transports.file.maxSize = 2 * 1024 * 1024;
     this.updateLog = log.scope('updates');
     this.updater.logger = this.updateLog;
     this.updater.autoDownload = false;

@@ -2,10 +2,12 @@ import { ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from 'electron';
 import { z } from 'zod';
 import {
   draftAllyGroupSchema,
+  overlayVisibleSlotsSchema,
   positionSchema,
   type DraftAllyGroup,
   type IpcResult,
   type OverlayState,
+  type OverlayVisibleSlot,
   type Position,
 } from '../shared/contracts.js';
 import { IPC } from '../shared/ipc-channels.js';
@@ -18,7 +20,7 @@ type OverlayIpcDependencies = {
   setPosition: (position: Position) => Promise<OverlayState>;
   setDraftAllyGroup: (allyGroup: DraftAllyGroup) => Promise<OverlayState>;
   hide: () => void;
-  presented: (presentationId: number) => void;
+  presented: (presentationId: number, visibleSlots: OverlayVisibleSlot[]) => void;
 };
 
 function ensureTrustedOverlaySender(
@@ -83,8 +85,8 @@ export function registerOverlayIpc(dependencies: OverlayIpcDependencies): void {
   register(IPC.overlayHide, none, dependencies, () => dependencies.hide());
   register(
     IPC.overlayPresented,
-    z.tuple([z.number().int().positive()]),
+    z.tuple([z.number().int().positive(), overlayVisibleSlotsSchema]),
     dependencies,
-    ([presentationId]) => dependencies.presented(presentationId),
+    ([presentationId, visibleSlots]) => dependencies.presented(presentationId, visibleSlots),
   );
 }

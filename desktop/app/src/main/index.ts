@@ -16,8 +16,10 @@ import log from 'electron-log/main';
 import { ApiClient } from './api-client.js';
 import { AssistantEngine } from './assistant-engine.js';
 import { DraftEngine } from './draft-engine.js';
+import { DiagnosticsReporter } from './diagnostics.js';
 import { DesktopError } from './errors.js';
 import { GsiReceiver } from './gsi.js';
+import { configureDesktopLogging, desktopLogFileName, isAutomatedTestRuntime } from './local-logger.js';
 import { registerIpc } from './ipc.js';
 import { registerOverlayIpc } from './overlay-ipc.js';
 import { createOverlayState } from './overlay-state.js';
@@ -34,6 +36,7 @@ import type {
   EngineState,
   OverlayShortcutStatus,
   OverlayState,
+  OverlayVisibleSlot,
   Position,
 } from '../shared/contracts.js';
 import { IPC } from '../shared/ipc-channels.js';
@@ -69,7 +72,7 @@ let quitting = false;
 let engine: AssistantEngine | null = null;
 let overwolfBridge: OverwolfBridge | null = null;
 let overlayShortcut: OverlayShortcutManager | null = null;
-let syncOverlayState: (() => Promise<void>) | null = null;
+let syncOverlayState: ((shouldPresent?: () => boolean) => Promise<void>) | null = null;
 let overlayAvailable = false;
 let overlayDesiredVisible = false;
 let overlayToggleGeneration = 0;
@@ -78,6 +81,8 @@ let shutdownComplete = false;
 let normalQuitPending = false;
 let updateManager: UpdateManager | null = null;
 let resumeEngineAfterFailedUpdate = false;
+let diagnosticsReporter: DiagnosticsReporter | null = null;
+let diagnosticsStopReason: 'quit' | 'update' | 'crash' = 'quit';
 
 const apiUrl = process.env.MAIN_VITE_API_URL ?? 'https://dota-picker-api.onrender.com/v1';
 const overwolfBridgePort = normalizeOverwolfBridgePort(
@@ -94,12 +99,11 @@ function brandIconPath(): string {
 
 function disposeRuntime(): Promise<void> {
   if (shutdownComplete) return Promise.resolve();
-  shutdownPromise ??= Promise.all([
-    Promise.resolve(engine?.dispose()),
-    Promise.resolve(overwolfBridge?.dispose()),
-  ])
-    .catch(() => undefined)
-    .then(() => {
+  shutdownPromise ??= (async () => {
+    await Promise.resolve(engine?.dispose()).catch(() => undefined);
+    await Promise.resolve(overwolfBridge?.dispose()).catch(() => undefined);
+    await Promise.resolve(diagnosticsReporter?.dispose(diagnosticsStopReason)).catch(() => undefined);
+  })().then(() => {
       shutdownComplete = true;
     });
   return shutdownPromise;
@@ -112,6 +116,7 @@ async function prepareForUpdateInstall(): Promise<void> {
 
 function takeOverForUpdateInstall(): void {
   quitting = true;
+  diagnosticsStopReason = 'update';
 }
 
 async function recoverAfterUpdateInstallFailure(canRestoreEngine: boolean): Promise<void> {
@@ -121,6 +126,7 @@ async function recoverAfterUpdateInstallFailure(canRestoreEngine: boolean): Prom
   normalQuitPending = false;
   shutdownPromise = null;
   shutdownComplete = false;
+  diagnosticsStopReason = 'quit';
   if (shouldRestoreEngine) await engine?.restore();
 }
 
@@ -226,6 +232,7 @@ function createOverlayWindow(): BrowserWindow {
     transparent: true,
     backgroundColor: '#00000000',
     alwaysOnTop: true,
+    focusable: false,
     skipTaskbar: true,
     resizable: false,
     minimizable: false,
@@ -241,6 +248,7 @@ function createOverlayWindow(): BrowserWindow {
       webSecurity: true,
       allowRunningInsecureContent: false,
       backgroundThrottling: true,
+      focusOnNavigation: false,
       spellcheck: false,
     },
   });
@@ -296,7 +304,7 @@ function toggleOverlay(): void {
     showWindow();
     return;
   }
-  void synchronize()
+  void synchronize(() => generation === overlayToggleGeneration && overlayDesiredVisible)
     .then(() => {
       if (generation !== overlayToggleGeneration || !overlayDesiredVisible) return;
       const currentWindow = overlayWindow;
@@ -388,6 +396,13 @@ function createTray(
 
 async function bootstrap(): Promise<void> {
   await app.whenReady();
+  const userData = app.getPath('userData');
+  configureDesktopLogging(userData, app.isPackaged);
+  const localLogPath = join(
+    userData,
+    'logs',
+    desktopLogFileName(app.isPackaged, isAutomatedTestRuntime()),
+  );
   startupLog.info('Electron runtime is ready', {
     durationMs: Math.round((performance.now() - processStartedAt) * 10) / 10,
   });
@@ -412,12 +427,23 @@ async function bootstrap(): Promise<void> {
   });
   session.defaultSession.setPermissionCheckHandler(() => false);
 
-  const userData = app.getPath('userData');
   const preferences = new PreferencesStore(join(userData, 'preferences.json'));
   const tokenVault = new TokenVault(join(userData, 'secure', 'session.bin'));
   const api = new ApiClient(apiUrl, tokenVault, (diagnostic) => {
     startupLog.info('Session bootstrap operation completed', diagnostic);
   });
+  const diagnosticsLog = log.scope('diagnostics');
+  diagnosticsReporter = new DiagnosticsReporter({
+    api,
+    queuePath: join(userData, 'diagnostics', 'queue.json'),
+    appVersion: app.getVersion(),
+    appBuild: `${app.getVersion()}+electron.${process.versions.electron}`,
+    platform: process.platform === 'darwin' || process.platform === 'linux'
+      ? process.platform
+      : 'win32',
+    logger: diagnosticsLog,
+  });
+  await diagnosticsReporter.start(await preferences.get());
   const gsi = new GsiReceiver(join(userData, 'gsi', 'token'));
 
   mainWindow = createWindow(preferences);
@@ -452,10 +478,25 @@ async function bootstrap(): Promise<void> {
   let overlayPresentationSequence = 0;
   let pendingOverlayPresentation: {
     id: number;
-    timeout: NodeJS.Timeout;
     resolve: () => void;
   } | null = null;
+  let pendingOverlayDelivery: {
+    id: number;
+    timeout: NodeJS.Timeout;
+    diagnostic: {
+      phase: OverlayState['phase'];
+      draftActive: boolean;
+      pickCount: number;
+      orientationRequired: boolean;
+      orientationSource: OverlayState['draftOrientation']['source'];
+      allyGroup: OverlayState['draftOrientation']['allyGroup'];
+    };
+    sentSlots: OverlayVisibleSlot[];
+    diagnosticKey: string;
+    recordDiagnostic: boolean;
+  } | null = null;
   let lastOverlayDiagnostic = '';
+  let lastOverlayDeliveryFailure = '';
   const getOverlayState = async (): Promise<OverlayState> => {
     if (!engine) throw new Error('Draft engine is unavailable');
     const currentPreferences = await preferences.get();
@@ -473,9 +514,8 @@ async function bootstrap(): Promise<void> {
     overlayAvailable = state.available;
     return state;
   };
-  const completeOverlayPresentation = (presentationId: number): void => {
+  const finishOverlayPresentation = (presentationId: number): void => {
     if (pendingOverlayPresentation?.id !== presentationId) return;
-    clearTimeout(pendingOverlayPresentation.timeout);
     const resolvePresentation = pendingOverlayPresentation.resolve;
     pendingOverlayPresentation = null;
     const window = overlayWindow;
@@ -484,9 +524,78 @@ async function bootstrap(): Promise<void> {
     }
     resolvePresentation();
   };
-  const publishOverlayState = (state: OverlayState, presentationId?: number): void => {
+  const recordOverlayDeliveryFailure = (code: string): void => {
+    if (quitting || lastOverlayDeliveryFailure === code) return;
+    lastOverlayDeliveryFailure = code;
+    overlayLog.warn('Overlay delivery failed', { code, recoverable: true });
+    diagnosticsReporter?.record({
+      type: 'engine_error',
+      status: 'error',
+      stage: 'engine',
+      durationMs: null,
+      details: { code, recoverable: true, stage: 'overlay' },
+    });
+  };
+  const cancelPendingOverlayDelivery = (): void => {
+    if (!pendingOverlayDelivery) return;
+    clearTimeout(pendingOverlayDelivery.timeout);
+    const deliveryId = pendingOverlayDelivery.id;
+    pendingOverlayDelivery = null;
+    finishOverlayPresentation(deliveryId);
+  };
+  const acknowledgeOverlayPresentation = (
+    presentationId: number,
+    visibleSlots: OverlayVisibleSlot[],
+  ): void => {
+    if (pendingOverlayDelivery?.id !== presentationId) return;
+    const delivery = pendingOverlayDelivery;
+    clearTimeout(delivery.timeout);
+    pendingOverlayDelivery = null;
     const window = overlayWindow;
-    if (!window || window.isDestroyed() || window.webContents.isDestroyed()) return;
+    if (!window || window.isDestroyed() || !window.isVisible()) {
+      if (overlayDesiredVisible) recordOverlayDeliveryFailure('OVERLAY_WINDOW_NOT_VISIBLE');
+      finishOverlayPresentation(presentationId);
+      return;
+    }
+    lastOverlayDeliveryFailure = '';
+    if (delivery.recordDiagnostic) {
+      lastOverlayDiagnostic = delivery.diagnosticKey;
+      overlayLog.info('Overlay state rendered', {
+        ...delivery.diagnostic,
+        sentSlots: delivery.sentSlots,
+        visibleSlots,
+      });
+      diagnosticsReporter?.record({
+        type: 'overlay_state',
+        status: delivery.diagnostic.phase === 'error'
+          ? 'error'
+          : delivery.diagnostic.phase === 'ready'
+            ? 'success'
+            : delivery.diagnostic.phase === 'quota'
+              ? 'warning'
+              : 'info',
+        stage: 'overlay',
+        durationMs: null,
+        details: {
+          ...delivery.diagnostic,
+          visibleSlots,
+        },
+      });
+    }
+    finishOverlayPresentation(presentationId);
+  };
+  const publishOverlayState = (state: OverlayState, presentationId?: number): boolean => {
+    const window = overlayWindow;
+    if (!window || window.isDestroyed() || window.webContents.isDestroyed()) {
+      recordOverlayDeliveryFailure('OVERLAY_RENDERER_UNAVAILABLE');
+      if (presentationId) finishOverlayPresentation(presentationId);
+      return false;
+    }
+    const sentSlots = state.picks.flatMap((pick) => pick.heroId === null ? [] : [{
+      slot: pick.slot,
+      side: pick.side,
+      heroId: pick.heroId,
+    }]);
     const diagnostic = {
       phase: state.phase,
       draftActive: state.draftActive,
@@ -495,18 +604,43 @@ async function bootstrap(): Promise<void> {
       orientationSource: state.draftOrientation.source,
       allyGroup: state.draftOrientation.allyGroup,
     };
-    const diagnosticKey = JSON.stringify(diagnostic);
-    if (diagnosticKey !== lastOverlayDiagnostic) {
-      lastOverlayDiagnostic = diagnosticKey;
-      overlayLog.info('Overlay state published', diagnostic);
+    const diagnosticKey = JSON.stringify({ ...diagnostic, sentSlots });
+    const recordDiagnostic = presentationId !== undefined || diagnosticKey !== lastOverlayDiagnostic;
+    const deliveryId = presentationId ?? (recordDiagnostic ? ++overlayPresentationSequence : undefined);
+    if (deliveryId) {
+      cancelPendingOverlayDelivery();
+      const timeout = setTimeout(() => {
+        if (pendingOverlayDelivery?.id !== deliveryId) return;
+        pendingOverlayDelivery = null;
+        recordOverlayDeliveryFailure('OVERLAY_RENDER_ACK_TIMEOUT');
+        finishOverlayPresentation(deliveryId);
+      }, presentationId ? 750 : 2_000);
+      timeout.unref?.();
+      pendingOverlayDelivery = {
+        id: deliveryId,
+        timeout,
+        diagnostic,
+        sentSlots,
+        diagnosticKey,
+        recordDiagnostic,
+      };
     }
-    if (presentationId) window.webContents.send(IPC.overlayChanged, state, presentationId);
-    else window.webContents.send(IPC.overlayChanged, state);
+    try {
+      if (deliveryId) window.webContents.send(IPC.overlayChanged, state, deliveryId);
+      else window.webContents.send(IPC.overlayChanged, state);
+    } catch {
+      cancelPendingOverlayDelivery();
+      recordOverlayDeliveryFailure('OVERLAY_RENDERER_GONE');
+      return false;
+    }
+    return true;
   };
   const broadcastOverlayState = async (): Promise<void> => {
     publishOverlayState(await getOverlayState());
   };
-  const prepareOverlayPresentation = async (): Promise<void> => {
+  const prepareOverlayPresentation = async (
+    shouldPresent: () => boolean = () => true,
+  ): Promise<void> => {
     const state = await getOverlayState();
     const window = overlayWindow;
     if (
@@ -520,19 +654,22 @@ async function bootstrap(): Promise<void> {
         'The overlay is not ready to be shown',
       );
     }
+    if (!state.available && !overlayPreview) {
+      throw new DesktopError('OVERLAY_UNAVAILABLE', 'The overlay has no available state');
+    }
+    if (!shouldPresent()) return;
     if (pendingOverlayPresentation) {
-      completeOverlayPresentation(pendingOverlayPresentation.id);
+      cancelPendingOverlayDelivery();
+      finishOverlayPresentation(pendingOverlayPresentation.id);
     }
     const presentationId = ++overlayPresentationSequence;
     window.webContents.setBackgroundThrottling(false);
+    raiseOverlayWindow(window);
+    window.showInactive();
+    raiseOverlayWindow(window);
     await new Promise<void>((resolvePresentation) => {
-      const timeout = setTimeout(
-        () => completeOverlayPresentation(presentationId),
-        750,
-      );
       pendingOverlayPresentation = {
         id: presentationId,
-        timeout,
         resolve: resolvePresentation,
       };
       publishOverlayState(state, presentationId);
@@ -546,6 +683,11 @@ async function bootstrap(): Promise<void> {
     return broadcastOverlayState();
   };
   syncOverlayState = prepareOverlayPresentation;
+  const activeOverlayWindow = overlayWindow;
+  activeOverlayWindow.webContents.on('render-process-gone', () => {
+    cancelPendingOverlayDelivery();
+    recordOverlayDeliveryFailure('OVERLAY_RENDERER_GONE');
+  });
   const loadHeroImages = (): Promise<void> => {
     if (heroImagesLoaded || Date.now() < heroImagesRetryAt) return Promise.resolve();
     heroImagesLoading ??= api.heroes()
@@ -594,13 +736,16 @@ async function bootstrap(): Promise<void> {
       void loadHeroImages();
     }
   };
-  const visionEngine = new DraftEngine(api, preferences, gsi, emitEngine);
+  const visionEngine = new DraftEngine(api, preferences, gsi, emitEngine, {
+    diagnostic: (event) => diagnosticsReporter?.record(event),
+  });
   const overwolfEngine = new OverwolfDraftEngine(
     api,
     preferences,
     overwolfBridge,
     emitEngine,
     overwolfLog,
+    (event) => diagnosticsReporter?.record(event),
   );
   engine = new AssistantEngine(
     preferences,
@@ -615,7 +760,8 @@ async function bootstrap(): Promise<void> {
     recoverAfterInstallFailure: () => recoverAfterUpdateInstallFailure(api.isAuthenticated()),
   });
   updateManager = updates;
-  api.setAuthenticationListener(async (authenticated) => {
+  api.setAuthenticationListener(async (authenticated, accountId) => {
+    await diagnosticsReporter?.applyAuthenticatedAccount(authenticated ? accountId : null);
     if (!authenticated) {
       overlayAvailable = false;
       if (!overlayPreview) hideOverlay();
@@ -656,8 +802,18 @@ async function bootstrap(): Promise<void> {
     overwolf: overwolfBridge,
     preferences,
     updates,
+    localLogPath,
     onPreferencesChanged: async (previous, current) => {
-      if (engine) await applyPreferenceEngineChanges(previous, current, engine);
+      let diagnosticsAppliedAtModeBoundary = false;
+      if (engine) {
+        await applyPreferenceEngineChanges(previous, current, engine, async () => {
+          diagnosticsAppliedAtModeBoundary = true;
+          await diagnosticsReporter?.applyPreferences(previous, current);
+        });
+      }
+      if (!diagnosticsAppliedAtModeBoundary) {
+        await diagnosticsReporter?.applyPreferences(previous, current);
+      }
       if (engine) trayController?.refresh(engine.getState());
       await broadcastVisibleOverlayState();
     },
@@ -756,7 +912,7 @@ async function bootstrap(): Promise<void> {
       return state;
     },
     hide: hideOverlay,
-    presented: completeOverlayPresentation,
+    presented: acknowledgeOverlayPresentation,
   });
   if (process.env.ELECTRON_RENDERER_URL) {
     await mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);

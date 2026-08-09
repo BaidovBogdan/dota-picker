@@ -27,6 +27,11 @@ const preferences: Preferences = {
     accepted: false,
     acceptedAt: null,
   },
+  diagnosticsConsent: {
+    accepted: false,
+    acceptedAt: null,
+    version: null,
+  },
 };
 
 const shortcut: OverlayShortcutStatus = {

@@ -9,6 +9,7 @@ import {
   RefreshCw,
   ScanSearch,
   Server,
+  Stethoscope,
   Users,
   X,
 } from 'lucide-react';
@@ -22,14 +23,19 @@ import {
 } from './api/client';
 import { Button, IconButton, Toast, UserAvatar } from './components/ui';
 import { AnalysesPage } from './pages/analyses';
+import { DiagnosticsPage } from './pages/diagnostics';
 import { MetaPage } from './pages/meta';
 import { OverviewPage } from './pages/overview';
 import { ReviewsPage } from './pages/reviews';
 import { SystemPage } from './pages/system';
 import { UsersPage } from './pages/users';
+import { mergeDiagnosticEvents } from './lib/diagnostics';
 import type {
   AdminAnalysesResponse,
   AdminAnalysesQuery,
+  AdminDiagnosticSessionResponse,
+  AdminDiagnosticSessionsQuery,
+  AdminDiagnosticSessionsResponse,
   AdminMeta,
   AdminOverview,
   AdminReviewsResponse,
@@ -50,6 +56,7 @@ type Resource<T> = {
 };
 
 const emptyResource = <T,>(): Resource<T> => ({ data: null, loading: true, error: null });
+const idleResource = <T,>(): Resource<T> => ({ data: null, loading: false, error: null });
 
 function sameQuery(left: object, right: object) {
   const leftValues = left as Record<string, unknown>;
@@ -62,6 +69,7 @@ const navigation = [
   { id: 'overview', label: 'Обзор', icon: LayoutDashboard },
   { id: 'users', label: 'Пользователи', icon: Users },
   { id: 'analyses', label: 'Проверки', icon: ScanSearch },
+  { id: 'diagnostics', label: 'Диагностика', icon: Stethoscope },
   { id: 'reviews', label: 'Отзывы', icon: MessageSquareText },
   { id: 'meta', label: 'Мета', icon: BarChart3 },
   { id: 'system', label: 'Система', icon: Activity },
@@ -143,6 +151,10 @@ export function App() {
   const [usersQuery, setUsersQuery] = useState<AdminUsersQuery>({ limit: 20, offset: 0 });
   const [analyses, setAnalyses] = useState<Resource<AdminAnalysesResponse>>(emptyResource);
   const [analysesQuery, setAnalysesQuery] = useState<AdminAnalysesQuery>({ limit: 20, offset: 0 });
+  const [diagnostics, setDiagnostics] = useState<Resource<AdminDiagnosticSessionsResponse>>(emptyResource);
+  const [diagnosticsQuery, setDiagnosticsQuery] = useState<AdminDiagnosticSessionsQuery>({ limit: 20, offset: 0 });
+  const [diagnosticSessionId, setDiagnosticSessionId] = useState<string | null>(null);
+  const [diagnosticSession, setDiagnosticSession] = useState<Resource<AdminDiagnosticSessionResponse>>(idleResource);
   const [heroCatalog, setHeroCatalog] = useState<Resource<HeroCatalogResponse>>(emptyResource);
   const [reviews, setReviews] = useState<Resource<AdminReviewsResponse>>(emptyResource);
   const [reviewsQuery, setReviewsQuery] = useState<AdminReviewsQuery>({ limit: 20, offset: 0 });
@@ -163,6 +175,9 @@ export function App() {
     setOverview(emptyResource());
     setUsers(emptyResource());
     setAnalyses(emptyResource());
+    setDiagnostics(emptyResource());
+    setDiagnosticSessionId(null);
+    setDiagnosticSession(idleResource());
     setHeroCatalog(emptyResource());
     setReviews(emptyResource());
     setMeta(emptyResource());
@@ -188,6 +203,7 @@ export function App() {
   const load = useCallback(async <T,>(
     setter: React.Dispatch<React.SetStateAction<Resource<T>>>,
     request: Promise<T>,
+    merge?: (current: T, incoming: T) => T,
   ) => {
     const requestId = ++requestCounter.current;
     latestRequests.current.set(setter, requestId);
@@ -195,7 +211,11 @@ export function App() {
     try {
       const data = await request;
       if (latestRequests.current.get(setter) !== requestId) return;
-      setter({ data, loading: false, error: null });
+      setter((current) => ({
+        data: merge && current.data ? merge(current.data, data) : data,
+        loading: false,
+        error: null,
+      }));
     } catch (requestError) {
       if (latestRequests.current.get(setter) !== requestId) return;
       if (requestError instanceof ApiError && requestError.status === 401) {
@@ -227,6 +247,29 @@ export function App() {
     return load(setHeroCatalog, adminApi.heroCatalog(signal));
   }, [load, session]);
 
+  const refreshDiagnostics = useCallback((signal?: AbortSignal) => {
+    if (!session) return Promise.resolve();
+    return load(setDiagnostics, adminApi.diagnosticSessions(session.token, diagnosticsQuery, signal));
+  }, [diagnosticsQuery, load, session]);
+
+  const refreshDiagnosticSession = useCallback((signal?: AbortSignal, beforeSequence?: number) => {
+    if (!session || !diagnosticSessionId) return Promise.resolve();
+    return load(
+      setDiagnosticSession,
+      adminApi.diagnosticSession(session.token, diagnosticSessionId, { limit: 500, beforeSequence }, signal),
+      beforeSequence !== undefined
+        ? (current, incoming) => ({
+            ...incoming,
+            events: mergeDiagnosticEvents(current.events, incoming.events),
+            pagination: {
+              ...incoming.pagination,
+              total: current.pagination.total,
+            },
+          })
+        : undefined,
+    );
+  }, [diagnosticSessionId, load, session]);
+
   const refreshReviews = useCallback((signal?: AbortSignal) => {
     if (!session) return Promise.resolve();
     return load(setReviews, adminApi.reviews(session.token, reviewsQuery, signal));
@@ -248,6 +291,19 @@ export function App() {
 
   const updateAnalysesQuery = useCallback((next: AdminAnalysesQuery) => {
     setAnalysesQuery((current) => sameQuery(current, next) ? current : next);
+  }, []);
+
+  const updateDiagnosticsQuery = useCallback((next: AdminDiagnosticSessionsQuery) => {
+    setDiagnosticsQuery((current) => sameQuery(current, next) ? current : next);
+  }, []);
+
+  const selectDiagnosticSession = useCallback((sessionId: string | null) => {
+    setDiagnosticSessionId((current) => {
+      if (current === sessionId) return current;
+      latestRequests.current.set(setDiagnosticSession, ++requestCounter.current);
+      setDiagnosticSession(sessionId ? emptyResource() : idleResource());
+      return sessionId;
+    });
   }, []);
 
   const updateReviewsQuery = useCallback((next: AdminReviewsQuery) => {
@@ -276,7 +332,7 @@ export function App() {
   }, [page, refreshAnalyses, session]);
 
   useEffect(() => {
-    if (!session || page !== 'analyses' || heroCatalog.data) return;
+    if (!session || (page !== 'analyses' && page !== 'diagnostics') || heroCatalog.data) return;
     const controller = new AbortController();
     void refreshHeroCatalog(controller.signal);
     return () => controller.abort();
@@ -288,6 +344,20 @@ export function App() {
     void refreshReviews(controller.signal);
     return () => controller.abort();
   }, [page, refreshReviews, session]);
+
+  useEffect(() => {
+    if (!session || page !== 'diagnostics') return;
+    const controller = new AbortController();
+    void refreshDiagnostics(controller.signal);
+    return () => controller.abort();
+  }, [page, refreshDiagnostics, session]);
+
+  useEffect(() => {
+    if (!session || page !== 'diagnostics' || !diagnosticSessionId) return;
+    const controller = new AbortController();
+    void refreshDiagnosticSession(controller.signal);
+    return () => controller.abort();
+  }, [diagnosticSessionId, page, refreshDiagnosticSession, session]);
 
   useEffect(() => {
     if (!session || page !== 'meta') return;
@@ -334,6 +404,11 @@ export function App() {
       if (!heroCatalog.data || heroCatalog.error) void refreshHeroCatalog();
     }
     if (page === 'reviews') void refreshReviews();
+    if (page === 'diagnostics') {
+      void refreshDiagnostics();
+      if (diagnosticSessionId) void refreshDiagnosticSession();
+      if (!heroCatalog.data || heroCatalog.error) void refreshHeroCatalog();
+    }
     if (page === 'meta') void refreshMeta();
     if (page === 'system') void refreshSystem();
   };
@@ -344,6 +419,8 @@ export function App() {
       ? users.loading
       : page === 'analyses'
         ? analyses.loading
+        : page === 'diagnostics'
+          ? diagnostics.loading || diagnosticSession.loading || heroCatalog.loading
         : page === 'reviews'
           ? reviews.loading
           : page === 'meta'
@@ -431,6 +508,10 @@ export function App() {
             />
           ) : null}
           {page === 'analyses' ? <AnalysesPage resource={analyses} heroCatalog={heroCatalog} initialQuery={analysesQuery} onRetry={() => { void refreshAnalyses(); if (!heroCatalog.data) void refreshHeroCatalog(); }} onHeroCatalogRetry={() => void refreshHeroCatalog()} onQueryChange={updateAnalysesQuery} /> : null}
+          {page === 'diagnostics' ? <DiagnosticsPage resource={diagnostics} detailResource={diagnosticSession} heroCatalog={heroCatalog} initialQuery={diagnosticsQuery} selectedSessionId={diagnosticSessionId} onSelectSession={selectDiagnosticSession} onRetry={() => void refreshDiagnostics()} onDetailRetry={() => void refreshDiagnosticSession()} onHeroCatalogRetry={() => void refreshHeroCatalog()} onLoadOlder={() => {
+            const cursor = diagnosticSession.data?.pagination.nextBeforeSequence;
+            if (cursor !== null && cursor !== undefined) void refreshDiagnosticSession(undefined, cursor);
+          }} onQueryChange={updateDiagnosticsQuery} /> : null}
           {page === 'reviews' ? (
             <ReviewsPage
               resource={reviews}

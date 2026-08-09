@@ -26,6 +26,8 @@ import { BillingService } from './modules/billing/billing.service.js';
 import { heroesRoutes } from './modules/heroes/heroes.routes.js';
 import { OpenDotaAdapter } from './modules/heroes/opendota.adapter.js';
 import { IdempotencyService } from './modules/idempotency/idempotency.service.js';
+import { diagnosticsRoutes } from './modules/diagnostics/diagnostics.routes.js';
+import { DiagnosticsService } from './modules/diagnostics/diagnostics.service.js';
 import { GeminiPhotoAdapter } from './modules/photo/gemini-photo.adapter.js';
 import { QuotaService } from './modules/quota/quota.service.js';
 import { RecommendationEngine } from './modules/recommendation/recommendation.engine.js';
@@ -83,7 +85,34 @@ export function buildApp(config: AppConfig = loadConfig()) {
   const photoAdapter = new GeminiPhotoAdapter(config.gemini);
   const billingService = new BillingService(db, config, quotaService);
   const reviewService = new ReviewService(db);
+  const diagnosticsService = new DiagnosticsService(db);
   const adminService = new AdminService(db, config, metaAdapter);
+  let diagnosticsCleanupRetryTimer: NodeJS.Timeout | null = null;
+  const scheduleDiagnosticsCleanup = (delayMs: number): void => {
+    if (config.nodeEnv === 'test' || diagnosticsCleanupRetryTimer) return;
+    diagnosticsCleanupRetryTimer = setTimeout(() => {
+      diagnosticsCleanupRetryTimer = null;
+      runDiagnosticsCleanup();
+    }, delayMs);
+    diagnosticsCleanupRetryTimer.unref();
+  };
+  const runDiagnosticsCleanup = (): void => {
+    void diagnosticsService.pruneExpired()
+      .then((backlogRemaining) => {
+        if (backlogRemaining) scheduleDiagnosticsCleanup(5_000);
+      })
+      .catch((error: unknown) => {
+        app.log.error({
+          err: error,
+          code: 'DIAGNOSTIC_RETENTION_CLEANUP_FAILED',
+        }, 'Diagnostic retention cleanup failed');
+        scheduleDiagnosticsCleanup(60_000);
+      });
+  };
+  const diagnosticsCleanupTimer = config.nodeEnv === 'test'
+    ? null
+    : setInterval(runDiagnosticsCleanup, 60 * 60 * 1_000);
+  diagnosticsCleanupTimer?.unref();
 
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
@@ -143,9 +172,16 @@ export function buildApp(config: AppConfig = loadConfig()) {
   app.register(billingRoutes({ config, billingService }), { prefix: '/v1/billing' });
   app.register(adminRoutes({ config, adminService }), { prefix: '/v1/admin' });
   app.register(reviewRoutes({ reviewService }), { prefix: '/v1' });
+  app.register(diagnosticsRoutes({ diagnosticsService }), { prefix: '/v1' });
   app.register(adminStaticPlugin);
 
+  app.addHook('onListen', async () => {
+    runDiagnosticsCleanup();
+  });
+
   app.addHook('onClose', async () => {
+    if (diagnosticsCleanupTimer) clearInterval(diagnosticsCleanupTimer);
+    if (diagnosticsCleanupRetryTimer) clearTimeout(diagnosticsCleanupRetryTimer);
     await pool.end();
   });
 

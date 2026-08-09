@@ -26,6 +26,7 @@ export class AssistantEngine {
   private readonly emit: (state: EngineState) => void;
   private activeMode: AssistantMode = 'vision';
   private transitionQueue: Promise<void> = Promise.resolve();
+  private disposePromise: Promise<void> | null = null;
 
   constructor(
     preferences: PreferencesStore,
@@ -44,6 +45,7 @@ export class AssistantEngine {
   }
 
   restore(): Promise<void> {
+    if (this.disposePromise) return this.disposePromise;
     return this.enqueueTransition(async () => {
       await this.syncMode();
       await this.active.restore();
@@ -51,6 +53,7 @@ export class AssistantEngine {
   }
 
   setEnabled(enabled: boolean): Promise<EngineState> {
+    if (this.disposePromise) return this.disposePromise.then(() => this.getState());
     return this.enqueueTransition(async () => {
       await this.syncMode();
       return this.active.setEnabled(enabled);
@@ -58,10 +61,12 @@ export class AssistantEngine {
   }
 
   suspend(): Promise<EngineState> {
+    if (this.disposePromise) return this.disposePromise.then(() => this.getState());
     return this.enqueueTransition(() => this.active.suspend());
   }
 
   retry(): Promise<EngineState> {
+    if (this.disposePromise) return this.disposePromise.then(() => this.getState());
     return this.enqueueTransition(async () => {
       await this.syncMode();
       return this.active.retry();
@@ -69,18 +74,24 @@ export class AssistantEngine {
   }
 
   refresh(force = false): Promise<EngineState> {
+    if (this.disposePromise) return this.disposePromise.then(() => this.getState());
     return this.enqueueTransition(async () => {
       await this.syncMode();
       return this.active.refresh(force);
     });
   }
 
-  switchMode(mode: AssistantMode): Promise<EngineState> {
+  switchMode(
+    mode: AssistantMode,
+    onSuspended?: () => void | Promise<void>,
+  ): Promise<EngineState> {
+    if (this.disposePromise) return this.disposePromise.then(() => this.getState());
     return this.enqueueTransition(async () => {
       if (mode === this.activeMode) return this.getState();
       const previous = this.active;
       const wasEnabled = previous.getState().enabled;
-      await previous.suspend();
+      await previous.suspend('mode_changed');
+      await onSuspended?.();
       this.activeMode = mode;
       const currentPreferences = await this.preferences.get();
       const hasConsent = mode === 'overwolf'
@@ -97,10 +108,12 @@ export class AssistantEngine {
   }
 
   useManualPositionForCurrentDraft(): void {
+    if (this.disposePromise) return;
     this.active.useManualPositionForCurrentDraft();
   }
 
   setManualAllyGroupForCurrentDraft(allyGroup: DraftAllyGroup): Promise<EngineState> {
+    if (this.disposePromise) return this.disposePromise.then(() => this.getState());
     return this.enqueueTransition(async () => {
       await this.syncMode();
       if (this.activeMode !== 'vision') return this.getState();
@@ -108,11 +121,20 @@ export class AssistantEngine {
     });
   }
 
-  async dispose(): Promise<void> {
-    await Promise.all([
-      this.vision.dispose(),
-      this.overwolf.dispose(),
-    ]);
+  dispose(): Promise<void> {
+    if (this.disposePromise) return this.disposePromise;
+    const operation = this.transitionQueue.then(async () => {
+      await Promise.all([
+        this.vision.dispose(),
+        this.overwolf.dispose(),
+      ]);
+    });
+    this.disposePromise = operation;
+    this.transitionQueue = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    return operation;
   }
 
   private get active(): EngineImplementation {

@@ -29,6 +29,11 @@ const defaults: Preferences = {
     accepted: false,
     acceptedAt: null,
   },
+  diagnosticsConsent: {
+    accepted: false,
+    acceptedAt: null,
+    version: null,
+  },
 };
 
 export class PreferencesStore {
@@ -56,6 +61,9 @@ export class PreferencesStore {
       overwolfConsent: parsedPatch.overwolfConsent
         ? { ...current.overwolfConsent, ...parsedPatch.overwolfConsent }
         : current.overwolfConsent,
+      diagnosticsConsent: parsedPatch.diagnosticsConsent
+        ? { ...current.diagnosticsConsent, ...parsedPatch.diagnosticsConsent }
+        : current.diagnosticsConsent,
       wishlist: parsedPatch.wishlist
         ? [...new Set(parsedPatch.wishlist)]
         : current.wishlist,

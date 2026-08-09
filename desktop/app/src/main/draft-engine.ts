@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import type { NativeImage } from 'electron';
-import log from 'electron-log/main';
 import type {
   Analysis,
   DraftAllyGroup,
@@ -12,6 +11,12 @@ import type { ApiClient } from './api-client.js';
 import { isRetryableAnalysisError } from './analysis-errors.js';
 import { DesktopError } from './errors.js';
 import {
+  createDraftFrameFingerprint,
+  draftFrameDistance,
+  draftFramesMatch,
+  type DraftFrameFingerprint,
+} from './draft-frame-fingerprint.js';
+import {
   GsiReceiver,
   resolveGsiHeroAllyGroup,
   resolveGsiHeroSignal,
@@ -21,6 +26,8 @@ import {
   type GsiTeam,
 } from './gsi.js';
 import type { PreferencesStore } from './preferences-store.js';
+import { scopedDesktopLogger } from './local-logger.js';
+import { safeDiagnosticErrorCode, type DiagnosticEventDraft } from './diagnostics.js';
 
 const captureIntervalMs = 5_000;
 const captureDebounceMs = 1_500;
@@ -29,7 +36,7 @@ const lastSeenPublishIntervalMs = 10_000;
 const windowPollIntervalsMs = [10_000, 20_000, 30_000] as const;
 const hashWatchThumbnailSize = { width: 320, height: 180 };
 const uploadThumbnailSize = { width: 1600, height: 900 };
-const visionLog = log.scope('vision');
+const visionLog = scopedDesktopLogger('vision');
 
 type DraftOrientation = {
   allyGroup: DraftAllyGroup;
@@ -40,6 +47,7 @@ type DraftEngineOptions = {
   captureDotaWindow?: (thumbnailSize: { width: number; height: number }) => Promise<NativeImage | null>;
   captureIntervalMs?: number;
   captureDebounceMs?: number;
+  diagnostic?: (event: DiagnosticEventDraft) => void;
 };
 const waitingMessages = {
   not_dota_draft: 'Не вижу экран выбора героев. Включите режим «Окно без рамки»',
@@ -48,55 +56,24 @@ const waitingMessages = {
   insufficient_enemy_picks: 'Ждём минимум два пика соперника',
   no_enemy_picks: 'Ждём первый пик соперника',
 } as const;
+type WaitingReason = keyof typeof waitingMessages;
+type DesktopAnalysisResponse = Awaited<ReturnType<ApiClient['analyzeDesktop']>>;
+
+function analysisDiagnostic(response: DesktopAnalysisResponse): {
+  analysisId?: string;
+  recommendationHeroIds?: number[];
+} {
+  if (response.status !== 'completed') return {};
+  return {
+    analysisId: response.analysis.id,
+    recommendationHeroIds: response.analysis.result?.recommendations
+      .slice(0, 3)
+      .map((recommendation) => recommendation.hero.id) ?? [],
+  };
+}
 
 function isDraftState(gameState: string): boolean {
   return gameState.includes('HERO_SELECTION') || gameState.includes('STRATEGY_TIME');
-}
-
-function imageHash(image: NativeImage): string {
-  const size = image.getSize();
-  const bandHeight = Math.max(1, Math.round(size.height * 0.22));
-  const sideWidth = Math.max(1, Math.round(size.width * 0.44));
-  const left = image.crop({ x: 0, y: 0, width: sideWidth, height: bandHeight })
-    .resize({ width: 24, height: 6, quality: 'good' });
-  const right = image.crop({
-    x: size.width - sideWidth,
-    y: 0,
-    width: sideWidth,
-    height: bandHeight,
-  }).resize({ width: 24, height: 6, quality: 'good' });
-  const pixels = Buffer.concat([left.toBitmap(), right.toBitmap()]);
-  const luminance: number[] = [];
-  for (let index = 0; index < pixels.length; index += 4) {
-    luminance.push(
-      pixels[index] * 0.0722
-      + pixels[index + 1] * 0.7152
-      + pixels[index + 2] * 0.2126,
-    );
-  }
-  const average = luminance.reduce((sum, value) => sum + value, 0) / Math.max(luminance.length, 1);
-  let hash = '';
-  for (let offset = 0; offset < luminance.length; offset += 4) {
-    let nibble = 0;
-    for (let bit = 0; bit < 4; bit += 1) {
-      if ((luminance[offset + bit] ?? 0) >= average) nibble |= 1 << (3 - bit);
-    }
-    hash += nibble.toString(16);
-  }
-  return hash;
-}
-
-function hashDistance(left: string, right: string): number {
-  let distance = 0;
-  const length = Math.min(left.length, right.length);
-  for (let index = 0; index < length; index += 1) {
-    let value = Number.parseInt(left[index], 16) ^ Number.parseInt(right[index], 16);
-    while (value) {
-      distance += value & 1;
-      value >>= 1;
-    }
-  }
-  return distance + Math.abs(left.length - right.length) * 4;
 }
 
 function analysisMatchesPreferences(
@@ -148,11 +125,11 @@ export class DraftEngine {
   private lastSeenPublishedAt = 0;
   private inDraft = false;
   private busy = false;
-  private lastHash: string | null = null;
+  private lastFingerprint: DraftFrameFingerprint | null = null;
   private lastCaptureAt = 0;
   private revision = 0;
   private sessionId = randomUUID();
-  private requestHash: string | null = null;
+  private requestFingerprint: DraftFrameFingerprint | null = null;
   private requestKey: string | null = null;
   private requestImage: Buffer | null = null;
   private requestAllyGroup: DraftAllyGroup | null = null;
@@ -167,6 +144,7 @@ export class DraftEngine {
   private retryRequested = false;
   private forceRefresh = false;
   private autoDetectPosition = true;
+  private requestAttempt = 0;
 
   constructor(
     private readonly api: ApiClient,
@@ -197,9 +175,11 @@ export class DraftEngine {
     });
   }
 
-  async suspend(): Promise<EngineState> {
+  async suspend(
+    reason: 'assistant_disabled' | 'mode_changed' = 'assistant_disabled',
+  ): Promise<EngineState> {
     return this.enqueueTransition(async () => {
-      await this.disable(false);
+      await this.disable(false, reason);
       return this.getState();
     });
   }
@@ -317,6 +297,17 @@ export class DraftEngine {
       await this.pollDotaWindow();
     } catch (error) {
       await this.gsi.stop();
+      this.reportDiagnostic({
+        type: 'engine_error',
+        status: 'error',
+        stage: 'engine',
+        durationMs: null,
+        details: {
+          code: safeDiagnosticErrorCode(error, 'ENGINE_START_FAILED'),
+          recoverable: true,
+          stage: 'engine',
+        },
+      });
       this.update({
         ...this.state,
         enabled: true,
@@ -326,13 +317,17 @@ export class DraftEngine {
     }
   }
 
-  private async disable(persist = true): Promise<void> {
+  private async disable(
+    persist = true,
+    reason: 'assistant_disabled' | 'mode_changed' = 'assistant_disabled',
+  ): Promise<void> {
     this.invalidateCapture();
     this.clearTimers();
     await this.gsi.stop();
+    if (this.inDraft) this.endDraftSession(reason);
     this.inDraft = false;
-    this.lastHash = null;
-    this.requestHash = null;
+    this.lastFingerprint = null;
+    this.requestFingerprint = null;
     this.requestKey = null;
     this.requestImage = null;
     this.requestAllyGroup = null;
@@ -397,7 +392,11 @@ export class DraftEngine {
     if (startingDraft) {
       this.startDraftSession();
     } else if (endingDraft) {
-      this.endDraftSession();
+      this.endDraftSession(
+        (this.state.recognition?.recognized.filter((pick) => pick.heroId !== null).length ?? 0) >= 10
+          ? 'completed'
+          : 'left_draft',
+      );
     }
     if (nextTeam !== undefined) this.localTeam = nextTeam;
     if (nextHero !== undefined) this.localHero = nextHero;
@@ -468,11 +467,11 @@ export class DraftEngine {
   private startDraftSession(): void {
     this.invalidateCapture();
     this.inDraft = true;
-    this.lastHash = null;
+    this.lastFingerprint = null;
     this.lastCaptureAt = 0;
     this.revision = 0;
     this.sessionId = randomUUID();
-    this.requestHash = null;
+    this.requestFingerprint = null;
     this.requestKey = null;
     this.requestImage = null;
     this.requestAllyGroup = null;
@@ -486,13 +485,28 @@ export class DraftEngine {
     this.localHero = null;
     this.automaticAllyGroup = null;
     this.manualAllyGroup = null;
+    this.requestAttempt = 0;
+    this.reportDiagnostic({
+      type: 'draft_started',
+      status: 'info',
+      stage: 'draft',
+      durationMs: null,
+      details: { draftSessionId: this.sessionId },
+    });
   }
 
-  private endDraftSession(): void {
+  private endDraftSession(reason: 'completed' | 'left_draft' | 'assistant_disabled' | 'mode_changed' | 'error'): void {
+    this.reportDiagnostic({
+      type: 'draft_ended',
+      status: reason === 'completed' ? 'success' : reason === 'error' ? 'error' : 'info',
+      stage: 'draft',
+      durationMs: null,
+      details: { reason },
+    });
     this.invalidateCapture();
     this.inDraft = false;
-    this.lastHash = null;
-    this.requestHash = null;
+    this.lastFingerprint = null;
+    this.requestFingerprint = null;
     this.requestKey = null;
     this.requestImage = null;
     this.requestAllyGroup = null;
@@ -523,12 +537,25 @@ export class DraftEngine {
   private async capture(): Promise<void> {
     if (!this.inDraft || this.busy) return;
     const generation = this.captureGeneration;
+    let requestStartedAt: number | null = null;
+    let requestRevision = this.revision;
     this.busy = true;
     try {
       const hashImage = await this.captureDotaWindow(hashWatchThumbnailSize);
       if (!this.isCurrentCapture(generation)) return;
       this.lastCaptureAt = Date.now();
       if (!hashImage) {
+        this.reportDiagnostic({
+          type: 'capture_decision',
+          status: 'warning',
+          stage: 'capture',
+          durationMs: null,
+          details: {
+            revision: this.revision,
+            distance: null,
+            decision: 'no_window',
+          },
+        });
         this.update({
           ...this.state,
           phase: 'waiting_for_dota',
@@ -537,8 +564,14 @@ export class DraftEngine {
         });
         return;
       }
-      const nextHash = imageHash(hashImage);
-      const unchanged = Boolean(this.lastHash && hashDistance(this.lastHash, nextHash) < 14);
+      const nextFingerprint = createDraftFrameFingerprint(hashImage);
+      const distance = this.lastFingerprint
+        ? draftFrameDistance(this.lastFingerprint, nextFingerprint)
+        : null;
+      const unchanged = Boolean(
+        this.lastFingerprint
+        && draftFramesMatch(this.lastFingerprint, nextFingerprint),
+      );
       const currentPreferences = await this.preferences.get();
       if (!this.isCurrentCapture(generation)) return;
       const orientation = this.getDraftOrientation();
@@ -551,8 +584,8 @@ export class DraftEngine {
       const orientationChanged = configuredAllyGroup !== this.requestAllyGroup;
       const retryingFailedFrame = unchanged
         && !orientationChanged
-        && this.requestHash !== null
-        && hashDistance(this.requestHash, nextHash) < 14
+        && this.requestFingerprint !== null
+        && draftFramesMatch(this.requestFingerprint, nextFingerprint)
         && this.requestKey !== null
         && !this.refreshRequested
         && !this.forceRefresh
@@ -562,6 +595,27 @@ export class DraftEngine {
         : null;
       const requestPosition = previousDetectedPosition ?? currentPreferences.position;
       const shouldDetectPosition = this.autoDetectPosition && previousDetectedPosition === null;
+      const captureDecision = retryingFailedFrame
+        ? 'retry' as const
+        : this.forceRefresh || orientationChanged
+          ? 'forced' as const
+          : unchanged
+            ? 'unchanged' as const
+            : 'changed' as const;
+      const captureRevision = captureDecision === 'changed' || captureDecision === 'forced'
+        ? Math.min(10_000, this.revision + 1)
+        : Math.min(10_000, this.revision);
+      this.reportDiagnostic({
+        type: 'capture_decision',
+        status: 'info',
+        stage: 'capture',
+        durationMs: null,
+        details: {
+          revision: captureRevision,
+          distance,
+          decision: captureDecision,
+        },
+      });
       if (unchanged && !orientationChanged && !retryingFailedFrame && !this.forceRefresh) {
         const hasCurrentAnalysis = analysisMatchesPreferences(
           this.state.latestAnalysis,
@@ -604,19 +658,22 @@ export class DraftEngine {
         this.retryRequested = false;
         this.forceRefresh = false;
       }
-      this.lastHash = nextHash;
+      this.lastFingerprint = nextFingerprint;
       this.lastCaptureAt = Date.now();
       if (!retryingFailedFrame) {
         if (!uploadImage) {
           throw new DesktopError('CAPTURE_STATE_INVALID', 'Не удалось подготовить кадр для анализа');
         }
         this.revision += 1;
-        this.requestHash = nextHash;
+        this.requestFingerprint = nextFingerprint;
         this.requestKey = randomUUID();
         this.requestImage = fitForUpload(uploadImage).toPNG();
         this.requestAllyGroup = configuredAllyGroup;
         this.requestOrientationSource = configuredOrientationSource;
         this.retryRequested = false;
+        this.requestAttempt = 1;
+      } else {
+        this.requestAttempt = Math.min(20, this.requestAttempt + 1);
       }
       this.update({
         ...this.state,
@@ -642,9 +699,25 @@ export class DraftEngine {
       if (!this.requestKey || !this.requestImage) {
         throw new DesktopError('CAPTURE_STATE_INVALID', 'Не удалось подготовить кадр для анализа');
       }
-      const response = this.liveAnalysisId && this.liveSessionToken
+      const activeAnalysisId = this.liveAnalysisId;
+      const activeLiveSessionToken = this.liveSessionToken;
+      const operation = activeAnalysisId && activeLiveSessionToken ? 'revise' as const : 'create' as const;
+      requestStartedAt = performance.now();
+      requestRevision = this.revision;
+      this.reportDiagnostic({
+        type: 'request_started',
+        status: 'info',
+        stage: 'request',
+        durationMs: null,
+        details: {
+          revision: requestRevision,
+          operation,
+          attempt: this.requestAttempt,
+        },
+      });
+      const response = activeAnalysisId && activeLiveSessionToken
         ? await this.api.reviseDesktop(
-            this.liveAnalysisId,
+            activeAnalysisId,
             this.requestImage,
             requestPosition,
             currentPreferences.rank,
@@ -654,7 +727,7 @@ export class DraftEngine {
             shouldDetectPosition,
             this.requestAllyGroup,
             this.requestOrientationSource,
-            this.liveSessionToken,
+            activeLiveSessionToken,
           )
         : await this.api.analyzeDesktop(
             this.requestImage,
@@ -671,6 +744,19 @@ export class DraftEngine {
       if (this.analyzingTimer) clearTimeout(this.analyzingTimer);
       this.analyzingTimer = null;
       if (response.revision !== this.revision) {
+        const latencyMs = Math.min(120_000, Math.round(performance.now() - requestStartedAt));
+        this.reportDiagnostic({
+          type: 'request_completed',
+          status: 'warning',
+          stage: 'request',
+          durationMs: latencyMs,
+          details: {
+            revision: response.revision,
+            outcome: 'stale',
+            latencyMs,
+            ...analysisDiagnostic(response),
+          },
+        });
         this.requestKey = null;
         this.requestImage = null;
         this.refreshRequested = true;
@@ -683,6 +769,54 @@ export class DraftEngine {
         });
         return;
       }
+      const latestFrame = await this.captureDotaWindow(hashWatchThumbnailSize);
+      if (!this.isCurrentCapture(generation)) return;
+      const responseFrameIsCurrent = Boolean(
+        latestFrame
+        && this.requestFingerprint
+        && draftFramesMatch(
+          this.requestFingerprint,
+          createDraftFrameFingerprint(latestFrame),
+        ),
+      );
+      if (!responseFrameIsCurrent) {
+        const latencyMs = Math.min(120_000, Math.round(performance.now() - requestStartedAt));
+        this.reportDiagnostic({
+          type: 'request_completed',
+          status: 'warning',
+          stage: 'request',
+          durationMs: latencyMs,
+          details: {
+            revision: response.revision,
+            outcome: 'stale',
+            latencyMs,
+            ...analysisDiagnostic(response),
+          },
+        });
+        if (response.status === 'completed') this.liveAnalysisId = response.analysis.id;
+        if (response.liveSession) this.liveSessionToken = response.liveSession.token;
+        this.requestFingerprint = null;
+        this.requestKey = null;
+        this.requestImage = null;
+        this.refreshRequested = true;
+        this.retryRequested = false;
+        this.forceRefresh = true;
+        this.lastCaptureAt = 0;
+        visionLog.info('Draft recognition discarded', {
+          reason: latestFrame ? 'frame_changed_during_request' : 'dota_window_unavailable',
+          revision: response.revision,
+          responseStatus: response.status,
+        });
+        this.update({
+          ...this.state,
+          phase: latestFrame ? 'watching_draft' : 'waiting_for_dota',
+          message: latestFrame
+            ? 'Пики изменились — проверяем свежий кадр'
+            : 'Окно Dota 2 не найдено. Используйте оконный режим без рамки',
+          dotaDetected: Boolean(latestFrame),
+        });
+        return;
+      }
       const recognition = this.autoDetectPosition
         ? {
             ...response.recognition,
@@ -691,11 +825,37 @@ export class DraftEngine {
         : { ...response.recognition, detectedPosition: null };
       this.reportRecognition(recognition);
       if (this.applyAutomaticOrientation(recognition)) {
+        const latencyMs = Math.min(120_000, Math.round(performance.now() - requestStartedAt));
+        this.reportDiagnostic({
+          type: 'request_completed',
+          status: 'warning',
+          stage: 'request',
+          durationMs: latencyMs,
+          details: {
+            revision: response.revision,
+            outcome: 'stale',
+            latencyMs,
+            ...analysisDiagnostic(response),
+          },
+        });
         this.requestKey = null;
         this.requestImage = null;
         return;
       }
       if (response.status === 'waiting') {
+        const latencyMs = Math.min(120_000, Math.round(performance.now() - requestStartedAt));
+        this.reportDiagnostic({
+          type: 'request_completed',
+          status: 'warning',
+          stage: 'request',
+          durationMs: latencyMs,
+          details: {
+            revision: response.revision,
+            outcome: 'waiting',
+            waitingReason: response.reason,
+            latencyMs,
+          },
+        });
         this.requestKey = null;
         this.requestImage = null;
         this.retryRequested = false;
@@ -706,7 +866,7 @@ export class DraftEngine {
           message: waitingMessages[response.reason],
           latestAnalysisId: this.state.latestAnalysisId,
           latestAnalysis: this.state.latestAnalysis,
-          recognition,
+          recognition: this.recognitionForWaitingState(response.reason, recognition),
         });
         return;
       }
@@ -716,6 +876,19 @@ export class DraftEngine {
       this.requestKey = null;
       this.requestImage = null;
       this.retryRequested = false;
+      const latencyMs = Math.min(120_000, Math.round(performance.now() - requestStartedAt));
+      this.reportDiagnostic({
+        type: 'request_completed',
+        status: 'success',
+        stage: 'request',
+        durationMs: latencyMs,
+        details: {
+          revision: response.revision,
+          outcome: 'completed',
+          latencyMs,
+          ...analysisDiagnostic(response),
+        },
+      });
       this.update({
         ...this.state,
         phase: refreshQueuedDuringAnalysis ? 'watching_draft' : 'ready',
@@ -730,11 +903,39 @@ export class DraftEngine {
       this.analyzingTimer = null;
       const liveSessionInvalid = error instanceof DesktopError
         && error.code === 'DESKTOP_LIVE_SESSION_INVALID';
+      const retryable = liveSessionInvalid || isRetryableAnalysisError(error);
+      this.reportDiagnostic({
+        type: 'engine_error',
+        status: 'error',
+        stage: 'engine',
+        durationMs: null,
+        details: {
+          code: safeDiagnosticErrorCode(error),
+          recoverable: retryable,
+          stage: requestStartedAt === null ? 'capture' : 'request',
+        },
+      });
+      if (requestStartedAt !== null) {
+        const latencyMs = Math.min(120_000, Math.round(performance.now() - requestStartedAt));
+        this.reportDiagnostic({
+          type: 'request_completed',
+          status: 'error',
+          stage: 'request',
+          durationMs: latencyMs,
+          details: {
+            revision: requestRevision,
+            outcome: 'error',
+            latencyMs,
+            errorCode: safeDiagnosticErrorCode(error),
+            recoverable: retryable,
+          },
+        });
+      }
       if (liveSessionInvalid) {
         this.liveAnalysisId = null;
         this.liveSessionToken = null;
         this.sessionId = randomUUID();
-        this.requestHash = null;
+        this.requestFingerprint = null;
         this.requestKey = null;
         this.requestImage = null;
         this.refreshRequested = true;
@@ -756,7 +957,6 @@ export class DraftEngine {
         this.requestImage = null;
       }
       const refreshQueuedDuringAnalysis = !isQuota && this.refreshRequested;
-      const retryable = isRetryableAnalysisError(error);
       if (!isQuota && !refreshQueuedDuringAnalysis && !retryable) {
         this.requestKey = null;
         this.requestImage = null;
@@ -799,6 +999,26 @@ export class DraftEngine {
       };
     }
     return null;
+  }
+
+  private recognitionForWaitingState(
+    reason: WaitingReason,
+    recognition: NonNullable<EngineState['recognition']>,
+  ): EngineState['recognition'] {
+    if (reason !== 'insufficient_enemy_picks' && reason !== 'no_enemy_picks') {
+      return recognition;
+    }
+    if (this.state.latestAnalysis || this.getDraftOrientation()) {
+      return this.state.recognition;
+    }
+    return {
+      ...recognition,
+      recognized: recognition.recognized.map((pick) => ({
+        ...pick,
+        side: 'unknown' as const,
+        needsReview: true,
+      })),
+    };
   }
 
   private applyAutomaticOrientation(
@@ -866,6 +1086,35 @@ export class DraftEngine {
           && pick.heroId !== null
         )),
     });
+    this.reportDiagnostic({
+      type: 'recognition_result',
+      status: recognition.quality === 'clear' && needsReview === 0 ? 'success' : 'warning',
+      stage: 'recognition',
+      durationMs: null,
+      details: {
+        revision: this.revision,
+        quality: recognition.quality,
+        model: recognition.model?.trim().slice(0, 80) || null,
+        recognizedCount: recognition.recognized.length,
+        needsReviewCount: needsReview,
+        slots: recognition.recognized.map((pick) => ({
+          slot: pick.slot,
+          side: pick.side,
+          visualGroup: pick.visualGroup ?? null,
+          heroId: pick.heroId,
+          confidence: pick.confidence,
+          needsReview: pick.needsReview,
+        })),
+      },
+    });
+  }
+
+  private reportDiagnostic(event: DiagnosticEventDraft): void {
+    try {
+      this.options.diagnostic?.(event);
+    } catch {
+      return;
+    }
   }
 
   private async captureDotaWindow(thumbnailSize: { width: number; height: number }): Promise<NativeImage | null> {

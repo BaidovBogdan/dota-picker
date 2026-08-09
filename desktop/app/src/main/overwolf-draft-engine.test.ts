@@ -6,6 +6,7 @@ import type {
   Preferences,
 } from '../shared/contracts.ts';
 import type { ApiClient } from './api-client.ts';
+import type { DiagnosticEventDraft } from './diagnostics.ts';
 import { DesktopError } from './errors.ts';
 import type { OverwolfBridge } from './overwolf-bridge.ts';
 import {
@@ -222,6 +223,7 @@ function createHarness(
     assistantMode: 'overwolf',
     captureConsent: { accepted: false, acceptedAt: null },
     overwolfConsent: { accepted: true, acceptedAt: new Date().toISOString() },
+    diagnosticsConsent: { accepted: false, acceptedAt: null, version: null },
   };
   const preferences = {
     get: async () => structuredClone(preferencesValue),
@@ -236,14 +238,16 @@ function createHarness(
     reviseOverwolf,
   } as unknown as ApiClient;
   const bridge = new FakeBridge();
+  const diagnostics: DiagnosticEventDraft[] = [];
   const engine = new OverwolfDraftEngine(
     api,
     preferences,
     bridge as unknown as OverwolfBridge,
     () => undefined,
     { info: () => undefined, warn: () => undefined, error: () => undefined },
+    (event) => diagnostics.push(structuredClone(event)),
   );
-  return { bridge, engine };
+  return { bridge, diagnostics, engine };
 }
 
 describe('normalizeOverwolfDraft', () => {
@@ -406,6 +410,66 @@ describe('OverwolfDraftEngine lifecycle', () => {
       engine.getState().recognition?.recognized.map((entry) => [entry.side, entry.heroId]),
       [['ally', 1], ['enemy', 14], ['enemy', 26]],
     );
+    await engine.dispose();
+  });
+
+  it('emits privacy-safe recognition and request diagnostics', async () => {
+    const { bridge, diagnostics, engine } = createHarness(async () => analysisResponse('analysis-1'));
+    await engine.setEnabled(true);
+    bridge.emitSnapshot(snapshot({ pseudoMatchId: 'diagnostic-match' }));
+    await waitFor(() => engine.getState().phase === 'ready');
+
+    const recognition = diagnostics.find((event) => event.type === 'recognition_result');
+    const requestStarted = diagnostics.find((event) => event.type === 'request_started');
+    const requestCompleted = diagnostics.find((event) => event.type === 'request_completed');
+    assert.ok(recognition?.type === 'recognition_result');
+    assert.ok(requestStarted?.type === 'request_started');
+    assert.ok(requestCompleted?.type === 'request_completed');
+    assert.equal(recognition.details.revision, requestStarted.details.revision);
+    assert.equal(requestCompleted.details.revision, requestStarted.details.revision);
+    assert.deepEqual(
+      recognition.details.slots.map((slot) => [slot.side, slot.heroId]),
+      [['ally', 1], ['enemy', 14], ['enemy', 26]],
+    );
+    const serialized = JSON.stringify(diagnostics);
+    for (const forbidden of ['playerName', 'steamId', 'token', 'rawGsi', 'screenshot', 'image']) {
+      assert.equal(serialized.includes(forbidden), false);
+    }
+    await engine.dispose();
+  });
+
+  it('marks a complete confirmed draft as completed when gameplay starts', async () => {
+    const { bridge, diagnostics, engine } = createHarness(async () => analysisResponse('analysis-1'));
+    const complete = snapshot({ pseudoMatchId: 'completed-match' });
+    complete.draft.picks = [
+      ...[1, 25, 27, 28, 29].map((heroId, slot) => ({
+        heroId,
+        heroName: null,
+        team: 2 as const,
+        slot,
+        confirmed: true,
+      })),
+      ...[14, 26, 30, 31, 32].map((heroId, slot) => ({
+        heroId,
+        heroName: null,
+        team: 3 as const,
+        slot,
+        confirmed: true,
+      })),
+    ];
+    await engine.setEnabled(true);
+    bridge.emitSnapshot(complete);
+    await waitFor(() => engine.getState().draftActive);
+    bridge.emitSnapshot({
+      ...complete,
+      sequence: complete.sequence + 1,
+      game: { ...complete.game, matchState: 'DOTA_GAMERULES_STATE_GAME_IN_PROGRESS' },
+    });
+    await waitFor(() => !engine.getState().draftActive);
+
+    const ended = diagnostics.find((event) => event.type === 'draft_ended');
+    assert.ok(ended?.type === 'draft_ended');
+    assert.equal(ended.details.reason, 'completed');
     await engine.dispose();
   });
 

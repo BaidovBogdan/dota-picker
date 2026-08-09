@@ -26,6 +26,7 @@ import {
 } from './api-schemas.js';
 import { DesktopError } from './errors.js';
 import type { TokenVault } from './token-vault.js';
+import type { DiagnosticBatch } from './diagnostics.js';
 
 const emptyResponseSchema = z.object({ success: z.literal(true) });
 
@@ -54,12 +55,16 @@ export type ApiClientDiagnostic = {
 export class ApiClient {
   private accessToken: string | null = null;
   private sessionAuthenticated = false;
+  private authenticatedAccountId: string | null = null;
   private authenticationBlocked = false;
   private authGeneration = 0;
   private authMutationQueue: Promise<void> = Promise.resolve();
   private authenticatedAuthQueue: Promise<void> = Promise.resolve();
   private refreshPromise: { generation: number; promise: Promise<AuthPayload> } | null = null;
-  private authenticationListener: ((authenticated: boolean) => void | Promise<void>) | null = null;
+  private authenticationListener: ((
+    authenticated: boolean,
+    accountId: string | null,
+  ) => void | Promise<void>) | null = null;
   private readonly authenticatedRequests = new Set<AbortController>();
   private readonly baseUrl: URL;
 
@@ -78,8 +83,12 @@ export class ApiClient {
     return this.sessionAuthenticated;
   }
 
+  getAuthenticatedAccountId(): string | null {
+    return this.sessionAuthenticated ? this.authenticatedAccountId : null;
+  }
+
   setAuthenticationListener(
-    listener: (authenticated: boolean) => void | Promise<void>,
+    listener: (authenticated: boolean, accountId: string | null) => void | Promise<void>,
   ): void {
     this.authenticationListener = listener;
   }
@@ -302,6 +311,23 @@ export class ApiClient {
   async deleteReview(id: string): Promise<void> {
     await this.request(`account/reviews/${encodeURIComponent(id)}`, emptyResponseSchema, {
       method: 'DELETE',
+    });
+  }
+
+  async uploadDiagnostics(input: DiagnosticBatch): Promise<{
+    accepted: number;
+    duplicate: number;
+    retainedUntil: string;
+  }> {
+    return this.request('diagnostics/events', z.object({
+      accepted: z.number().int().min(0).max(20),
+      duplicate: z.number().int().min(0).max(20),
+      retainedUntil: z.string().datetime(),
+    }), {
+      method: 'POST',
+      body: JSON.stringify(input),
+      headers: { 'content-type': 'application/json' },
+      timeoutMs: 15_000,
     });
   }
 
@@ -539,7 +565,9 @@ export class ApiClient {
         throw new DesktopError('AUTH_STATE_CHANGED', 'Состояние сессии изменилось');
       }
       this.accessToken = auth.accessToken;
-      if (!this.sessionAuthenticated) {
+      const accountChanged = this.authenticatedAccountId !== auth.account.id;
+      this.authenticatedAccountId = auth.account.id;
+      if (!this.sessionAuthenticated || accountChanged) {
         this.sessionAuthenticated = true;
         this.notifyAuthenticationChanged(true);
       }
@@ -552,6 +580,7 @@ export class ApiClient {
     this.authGeneration += 1;
     this.accessToken = null;
     this.sessionAuthenticated = false;
+    this.authenticatedAccountId = null;
     for (const controller of this.authenticatedRequests) controller.abort();
     this.authenticatedRequests.clear();
     if (notify) this.notifyAuthenticationChanged(false);
@@ -578,7 +607,10 @@ export class ApiClient {
 
   private notifyAuthenticationChanged(authenticated: boolean): void {
     try {
-      const result = this.authenticationListener?.(authenticated);
+      const result = this.authenticationListener?.(
+        authenticated,
+        authenticated ? this.authenticatedAccountId : null,
+      );
       if (result) void Promise.resolve(result).catch(() => undefined);
     } catch {
       return;

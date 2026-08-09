@@ -4,6 +4,7 @@ import {
   ArrowSquareOutIcon,
   CheckCircleIcon,
   EyeIcon,
+  FolderOpenIcon,
   KeyboardIcon,
   MonitorIcon,
   MoonIcon,
@@ -581,6 +582,30 @@ export function SettingsPage() {
             checked={preferences.minimizeToTray}
             onChange={(value) => update('minimizeToTray', value)}
           />
+          <SettingToggle
+            icon={<ShieldCheckIcon size={18} weight="duotone" />}
+            title={text('Помогать находить ошибки', 'Help diagnose problems')}
+            description={text(
+              'Отправлять безопасные технические события, связанные с ID аккаунта Counterpick',
+              'Send privacy-safe technical events linked to your Counterpick account ID',
+            )}
+            checked={preferences.diagnosticsConsent.accepted}
+            onChange={(accepted) => update('diagnosticsConsent', {
+              accepted,
+              acceptedAt: accepted ? new Date().toISOString() : null,
+              version: accepted ? 1 : null,
+            })}
+          />
+          <p className="privacy-panel__note">
+            {text(
+              'Только с вашего разрешения сервер связывает события с ID аккаунта Counterpick и получает платформу, версию и сборку приложения, режим ассистента, случайные ID диагностической сессии, события и анализа, время, этап, статус и длительность обработки, номер ревизии, решение и расстояние проверки изменений, причины ожидания, ID распознанных и рекомендованных героев, сторону, слот, confidence, модель, признак ручной проверки, состояние overlay, количество пиков и безопасный код ошибки. Для диагностики overlay также передаются ID и слоты героев, которые действительно были видны в overlay, необходимость определения стороны, источник определения и группа союзников слева или справа. Скриншоты, имена игроков, Steam ID, токены, сырой GSI, изображения, пути, тексты и stack trace ошибок не отправляются. Сервер хранит события не более 30 дней. Выключение сразу удаляет неотправленную очередь и прекращает будущую отправку; локальный журнал остаётся на этом устройстве.',
+              'Only with your permission, the server links events to your Counterpick account ID and receives the platform, app version and build, assistant mode, random diagnostic session, event, and analysis IDs, processing time, stage, status, and duration, revision, change-check decision and distance, waiting reasons, recognized and recommended hero IDs, side, slot, confidence, model, review flag, overlay state, pick count, and a safe error code. Overlay diagnostics also include the hero IDs and slots actually visible in the overlay, whether orientation was required, its source, and the left or right ally group. Screenshots, player names, Steam IDs, tokens, raw GSI, images, file paths, error text, and stack traces are never sent. Server events are retained for no more than 30 days. Turning this off immediately deletes the unsent queue and stops future uploads; the local log remains on this device.',
+            )}
+          </p>
+          <Button variant="secondary" onClick={() => desktop.app.openLocalLogs()}>
+            <FolderOpenIcon size={16} weight="duotone" aria-hidden />
+            {text('Открыть папку локальных логов', 'Open local log folder')}
+          </Button>
           <div className="privacy-panel__status">
             <span className={preferences.captureConsent.accepted ? 'is-accepted' : ''}>
               <ShieldCheckIcon size={19} weight="duotone" aria-hidden />

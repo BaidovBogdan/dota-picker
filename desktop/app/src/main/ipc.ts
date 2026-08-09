@@ -1,3 +1,5 @@
+import { promises as fs } from 'node:fs';
+import { dirname } from 'node:path';
 import { app, dialog, ipcMain, shell, type BrowserWindow, type IpcMainInvokeEvent } from 'electron';
 import log from 'electron-log/main';
 import { z } from 'zod';
@@ -40,6 +42,7 @@ type Dependencies = {
   onPreferencesChanged?: (previous: Preferences, current: Preferences) => void | Promise<void>;
   getOverlayShortcut: () => OverlayShortcutStatus;
   setOverlayShortcut: (shortcut: string) => Promise<OverlayShortcutStatus>;
+  localLogPath: string;
 };
 
 function ensureTrustedSender(event: IpcMainInvokeEvent, window: BrowserWindow | null): void {
@@ -288,6 +291,17 @@ export function registerIpc(dependencies: Dependencies): void {
   });
   register(IPC.appOpenExternal, z.tuple([externalUrlSchema]), dependencies.getWindow, async ([url]) => {
     await shell.openExternal(url);
+  });
+  register(IPC.appOpenLocalLogs, none, dependencies.getWindow, async () => {
+    const directory = dirname(dependencies.localLogPath);
+    await fs.mkdir(directory, { recursive: true });
+    try {
+      await fs.access(dependencies.localLogPath);
+      shell.showItemInFolder(dependencies.localLogPath);
+    } catch {
+      const error = await shell.openPath(directory);
+      if (error) throw new DesktopError('LOCAL_LOG_FOLDER_UNAVAILABLE', error);
+    }
   });
   register(IPC.appInfo, none, dependencies.getWindow, () => ({
     version: app.getVersion(),
