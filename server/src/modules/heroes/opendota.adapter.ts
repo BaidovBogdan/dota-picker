@@ -36,6 +36,7 @@ const PAIR_CACHE_FRESH_MS = 15 * 60 * 1_000;
 const PAIR_CACHE_RETRY_MS = 60 * 1_000;
 const PAIR_CACHE_STALE_MS = 24 * 60 * 60 * 1_000;
 const PAIR_CACHE_MAX_ENTRIES = 256;
+const PAIR_FOREGROUND_WAIT_MS = 1_500;
 const PAIR_QUERY_TIMEOUT_MS = 5_000;
 const BUILD_SAMPLE_LIMIT = 400;
 const BUILD_TUPLE_SIZE = 3;
@@ -179,10 +180,13 @@ type DraftPairSnapshot = {
 };
 
 type DraftPairCacheEntry = {
-  value: DraftPairSnapshot;
+  value: Map<number, DraftPairStat>;
+  scope: DraftPairScope;
   freshUntil: number;
   staleUntil: number;
 };
+
+type DraftPairRelation = 'matchup' | 'synergy';
 
 export type OpenDotaDiagnostic = {
   operation: 'hero-detail-refresh';
@@ -203,7 +207,7 @@ export class OpenDotaAdapter {
   private readonly positionCache = new Map<string, MetaPositionCacheEntry>();
   private readonly positionPending = new Map<string, Promise<MetaPositionSnapshot>>();
   private readonly pairCache = new Map<string, DraftPairCacheEntry>();
-  private readonly pairPending = new Map<string, Promise<DraftPairSnapshot>>();
+  private readonly pairPending = new Map<string, Promise<void>>();
 
   public constructor(
     private readonly config: AppConfig['openDota'],
@@ -532,59 +536,222 @@ export class OpenDotaAdapter {
   ): Promise<DraftPairSnapshot> {
     const normalizedEnemies = [...new Set(enemyIds)].toSorted((left, right) => left - right);
     const normalizedAllies = [...new Set(allyIds)].toSorted((left, right) => left - right);
-    const key = `${patch}:${rank ?? 'all'}:${normalizedEnemies.join(',')}:${normalizedAllies.join(',')}`;
-    const now = Date.now();
-    const cached = this.getCachedDraftPair(key);
-    if (cached && cached.freshUntil > now) {
-      return cached.value;
+    if (normalizedEnemies.length === 0 && normalizedAllies.length === 0) {
+      return this.emptyDraftPairSnapshot(patch, rank, 'ready');
     }
 
+    const now = Date.now();
+    const missingEnemies: number[] = [];
+    const missingAllies: number[] = [];
+    const pendingRequests = new Set<Promise<void>>();
+
+    for (const selectedId of normalizedEnemies) {
+      this.collectDraftPairRefresh(
+        patch,
+        rank,
+        'matchup',
+        selectedId,
+        now,
+        missingEnemies,
+        pendingRequests,
+      );
+    }
+    for (const selectedId of normalizedAllies) {
+      this.collectDraftPairRefresh(
+        patch,
+        rank,
+        'synergy',
+        selectedId,
+        now,
+        missingAllies,
+        pendingRequests,
+      );
+    }
+
+    if (missingEnemies.length > 0 || missingAllies.length > 0) {
+      const keys = [
+        ...missingEnemies.map((selectedId) => (
+          this.draftPairCacheKey(patch, rank, 'matchup', selectedId)
+        )),
+        ...missingAllies.map((selectedId) => (
+          this.draftPairCacheKey(patch, rank, 'synergy', selectedId)
+        )),
+      ];
+      const request = this.refreshDraftPairEntries(
+        patch,
+        rank,
+        missingEnemies,
+        missingAllies,
+      ).finally(() => {
+        for (const key of keys) {
+          if (this.pairPending.get(key) === request) this.pairPending.delete(key);
+        }
+      });
+      for (const key of keys) this.pairPending.set(key, request);
+      pendingRequests.add(request);
+    }
+
+    await this.waitForDraftPairRefresh(pendingRequests);
+    return this.composeDraftPairSnapshot(patch, rank, normalizedEnemies, normalizedAllies);
+  }
+
+  private async waitForDraftPairRefresh(requests: Set<Promise<void>>): Promise<void> {
+    if (requests.size === 0) return;
+    let timeout: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        Promise.allSettled(requests),
+        new Promise<void>((resolve) => {
+          timeout = setTimeout(resolve, PAIR_FOREGROUND_WAIT_MS);
+        }),
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+  }
+
+  private collectDraftPairRefresh(
+    patch: string,
+    rank: RankBracket | undefined,
+    relation: DraftPairRelation,
+    selectedId: number,
+    now: number,
+    missing: number[],
+    pendingRequests: Set<Promise<void>>,
+  ) {
+    const key = this.draftPairCacheKey(patch, rank, relation, selectedId);
+    const cached = this.getCachedDraftPair(key);
+    if (cached && cached.freshUntil > now) return;
     const pending = this.pairPending.get(key);
     if (pending) {
-      return pending;
+      pendingRequests.add(pending);
+      return;
     }
+    missing.push(selectedId);
+  }
 
-    const request = this.loadDraftPairSnapshot(patch, rank, normalizedEnemies, normalizedAllies)
-      .then((value) => {
-        const loadedAt = Date.now();
-        this.cacheDraftPair(key, {
-          value,
-          freshUntil: loadedAt + Math.max(this.config.cacheTtlMs, PAIR_CACHE_FRESH_MS),
-          staleUntil: loadedAt + Math.max(this.config.cacheStaleMs, PAIR_CACHE_STALE_MS),
-        });
-        return value;
-      })
-      .catch(() => {
-        const failedAt = Date.now();
-        if (cached && cached.staleUntil > failedAt) {
-          const staleValue = {
-            ...cached.value,
-            scope: {
-              ...cached.value.scope,
-              isStale: true,
-            },
-          };
+  private async refreshDraftPairEntries(
+    patch: string,
+    rank: RankBracket | undefined,
+    enemyIds: number[],
+    allyIds: number[],
+  ): Promise<void> {
+    const selections = [
+      ...enemyIds.map((selectedId) => ({ relation: 'matchup' as const, selectedId })),
+      ...allyIds.map((selectedId) => ({ relation: 'synergy' as const, selectedId })),
+    ];
+    try {
+      const snapshot = await this.loadDraftPairSnapshot(patch, rank, enemyIds, allyIds);
+      const loadedAt = Date.now();
+      for (const selection of selections) {
+        const source = selection.relation === 'matchup'
+          ? snapshot.matchupByEnemy
+          : snapshot.synergyByAlly;
+        this.cacheDraftPair(
+          this.draftPairCacheKey(patch, rank, selection.relation, selection.selectedId),
+          {
+            value: new Map(source.get(selection.selectedId) ?? []),
+            scope: { ...snapshot.scope },
+            freshUntil: loadedAt + Math.max(this.config.cacheTtlMs, PAIR_CACHE_FRESH_MS),
+            staleUntil: loadedAt + Math.max(this.config.cacheStaleMs, PAIR_CACHE_STALE_MS),
+          },
+        );
+      }
+    } catch {
+      const failedAt = Date.now();
+      const unavailableScope = this.emptyDraftPairSnapshot(
+        patch,
+        rank,
+        'unavailable',
+      ).scope;
+      for (const selection of selections) {
+        const key = this.draftPairCacheKey(
+          patch,
+          rank,
+          selection.relation,
+          selection.selectedId,
+        );
+        const cached = this.pairCache.get(key);
+        if (
+          cached?.scope.availability === 'ready'
+          && cached.staleUntil > failedAt
+        ) {
           this.cacheDraftPair(key, {
-            value: staleValue,
+            value: cached.value,
+            scope: { ...cached.scope, isStale: true },
             freshUntil: Math.min(failedAt + PAIR_CACHE_RETRY_MS, cached.staleUntil),
             staleUntil: cached.staleUntil,
           });
-          return staleValue;
+          continue;
         }
-        const unavailable = this.emptyDraftPairSnapshot(patch, rank, 'unavailable');
         this.cacheDraftPair(key, {
-          value: unavailable,
+          value: new Map(),
+          scope: { ...unavailableScope },
           freshUntil: failedAt + PAIR_CACHE_RETRY_MS,
           staleUntil: failedAt + PAIR_CACHE_RETRY_MS,
         });
-        return unavailable;
-      })
-      .finally(() => {
-        this.pairPending.delete(key);
-      });
+      }
+    }
+  }
 
-    this.pairPending.set(key, request);
-    return request;
+  private composeDraftPairSnapshot(
+    patch: string,
+    rank: RankBracket | undefined,
+    enemyIds: number[],
+    allyIds: number[],
+  ): DraftPairSnapshot {
+    const enemyEntries = enemyIds.map((selectedId) => ({
+      selectedId,
+      entry: this.getCachedDraftPair(
+        this.draftPairCacheKey(patch, rank, 'matchup', selectedId),
+      ),
+    }));
+    const allyEntries = allyIds.map((selectedId) => ({
+      selectedId,
+      entry: this.getCachedDraftPair(
+        this.draftPairCacheKey(patch, rank, 'synergy', selectedId),
+      ),
+    }));
+    const entries = [...enemyEntries, ...allyEntries];
+    const now = Date.now();
+    const availableEntries = entries.flatMap(({ entry }) => (
+      entry?.scope.availability === 'ready' && entry.staleUntil > now ? [entry] : []
+    ));
+    const scopeEntries = entries.flatMap(({ entry }) => entry ? [entry] : []);
+    const snapshot = this.emptyDraftPairSnapshot(
+      patch,
+      rank,
+      availableEntries.length === entries.length ? 'ready' : 'unavailable',
+    );
+    snapshot.scope = {
+      ...snapshot.scope,
+      fetchedAt: scopeEntries
+        .map((entry) => entry.scope.fetchedAt)
+        .toSorted()[0] ?? snapshot.scope.fetchedAt,
+      isStale: availableEntries.some(
+        (entry) => entry.scope.isStale || entry.freshUntil <= now,
+      ),
+    };
+    for (const { selectedId, entry } of enemyEntries) {
+      if (entry?.scope.availability === 'ready' && entry.staleUntil > now) {
+        snapshot.matchupByEnemy.set(selectedId, new Map(entry.value));
+      }
+    }
+    for (const { selectedId, entry } of allyEntries) {
+      if (entry?.scope.availability === 'ready' && entry.staleUntil > now) {
+        snapshot.synergyByAlly.set(selectedId, new Map(entry.value));
+      }
+    }
+    return snapshot;
+  }
+
+  private draftPairCacheKey(
+    patch: string,
+    rank: RankBracket | undefined,
+    relation: DraftPairRelation,
+    selectedId: number,
+  ): string {
+    return `${patch}:${rank ?? 'all'}:${relation}:${selectedId}`;
   }
 
   private getCachedDraftPair(key: string) {
@@ -620,7 +787,7 @@ export class OpenDotaAdapter {
     const allyArray = `ARRAY[${allyIds.join(',')}]::integer[]`;
     const rankPredicate = rank ? `average_rank = ${rank}` : 'TRUE';
     const branches = [
-      [
+      ...(enemyIds.length > 0 ? [[
         "SELECT 'matchup'::text AS relation, selected_id, candidate_id,",
         'NOT pub.radiant_win AS candidate_won, FLOOR(pub.avg_rank_tier / 10)::int AS average_rank',
         'FROM public_matches pub',
@@ -630,8 +797,7 @@ export class OpenDotaAdapter {
         `WHERE mp.patch = '${patchLiteral}'`,
         `AND pub.radiant_team && ${enemyArray}`,
         `AND selected_id = ANY(${enemyArray})`,
-      ].join(' '),
-      [
+      ].join(' '), [
         "SELECT 'matchup'::text AS relation, selected_id, candidate_id,",
         'pub.radiant_win AS candidate_won, FLOOR(pub.avg_rank_tier / 10)::int AS average_rank',
         'FROM public_matches pub',
@@ -641,7 +807,7 @@ export class OpenDotaAdapter {
         `WHERE mp.patch = '${patchLiteral}'`,
         `AND pub.dire_team && ${enemyArray}`,
         `AND selected_id = ANY(${enemyArray})`,
-      ].join(' '),
+      ].join(' ')] : []),
       ...(allyIds.length > 0
         ? [
             [

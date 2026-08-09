@@ -25,7 +25,7 @@ import { registerOverlayIpc } from './overlay-ipc.js';
 import { createOverlayState } from './overlay-state.js';
 import { OverlayShortcutManager } from './overlay-shortcut.js';
 import { overlayWindowPosition } from './overlay-window-position.js';
-import { Win32NoActivateOverlay } from './win32-no-activate.js';
+import { applyWindowsNoActivateStyle } from './win32-no-activate.js';
 import { normalizeOverwolfBridgePort, OverwolfBridge } from './overwolf-bridge.js';
 import { OverwolfDraftEngine } from './overwolf-draft-engine.js';
 import { PreferencesStore } from './preferences-store.js';
@@ -233,7 +233,7 @@ function createOverlayWindow(): BrowserWindow {
     transparent: true,
     backgroundColor: '#00000000',
     alwaysOnTop: true,
-    focusable: false,
+    focusable: true,
     skipTaskbar: true,
     resizable: false,
     minimizable: false,
@@ -255,9 +255,7 @@ function createOverlayWindow(): BrowserWindow {
   });
 
   window.setMenuBarVisibility(false);
-  const noActivateOverlay = Win32NoActivateOverlay.attach(window);
-  if (!noActivateOverlay) window.setFocusable(true);
-  window.once('closed', () => noActivateOverlay?.dispose());
+  if (!applyWindowsNoActivateStyle(window)) window.setFocusable(false);
   raiseOverlayWindow(window);
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', (event) => event.preventDefault());
@@ -856,7 +854,7 @@ async function bootstrap(): Promise<void> {
       }
       const phase = engine?.getState().phase;
       if (phase === 'error' || phase === 'quota') await engine?.retry();
-      else await engine?.refresh();
+      else await engine?.refresh(true);
       const state = await getOverlayState();
       publishOverlayState(state);
       return state;

@@ -18,6 +18,7 @@ import { recognitionOutputSchema } from './photo.schemas.js';
 
 const allowedMimeTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const MAX_VISION_REQUEST_MS = 15_000;
+const MAX_VISION_OUTPUT_TOKENS = 2_048;
 const AUTO_ACCEPT_CONFIDENCE = 0.91;
 const recognitionJsonSchema = z.toJSONSchema(recognitionOutputSchema);
 Reflect.deleteProperty(recognitionJsonSchema, '$schema');
@@ -37,6 +38,13 @@ const completeVisualSlotKeys = new Set(
 
 type GeminiClient = {
   generateContent(parameters: GenerateContentParameters): Promise<GenerateContentResponse>;
+};
+
+type GeminiPhotoDiagnostic = {
+  failureKind: 'empty_response' | 'invalid_json' | 'invalid_schema';
+  finishReason: string | null;
+  outputTokenCount: number | null;
+  model: string;
 };
 
 function normalizeName(value: string) {
@@ -66,6 +74,7 @@ export class GeminiPhotoAdapter implements PhotoRecognizer {
   public constructor(
     private readonly config: Pick<AppConfig['gemini'], 'apiKey' | 'visionModel' | 'timeoutMs'>,
     client?: GeminiClient,
+    private readonly diagnostic?: (diagnostic: GeminiPhotoDiagnostic) => void,
   ) {
     if (client) {
       this.client = client;
@@ -192,7 +201,7 @@ export class GeminiPhotoAdapter implements PhotoRecognizer {
         config: {
           responseMimeType: 'application/json',
           responseJsonSchema: recognitionJsonSchema,
-          maxOutputTokens: 768,
+          maxOutputTokens: MAX_VISION_OUTPUT_TOKENS,
           seed: 17,
           thinkingConfig: {
             thinkingLevel: ThinkingLevel.MINIMAL,
@@ -200,19 +209,19 @@ export class GeminiPhotoAdapter implements PhotoRecognizer {
         },
       });
       if (!response.text) {
-        throw new AppError(422, 'IMAGE_RECOGNITION_FAILED', 'The image could not be recognized');
+        throw this.invalidResponse(response, 'empty_response', 'The image could not be recognized');
       }
 
       let output: unknown;
       try {
         output = JSON.parse(response.text);
       } catch {
-        throw new AppError(422, 'IMAGE_RECOGNITION_FAILED', 'The recognition response was invalid');
+        throw this.invalidResponse(response, 'invalid_json', 'The recognition response was invalid');
       }
 
       const parsed = recognitionOutputSchema.safeParse(output);
       if (!parsed.success) {
-        throw new AppError(422, 'IMAGE_RECOGNITION_FAILED', 'The recognition response was invalid');
+        throw this.invalidResponse(response, 'invalid_schema', 'The recognition response was invalid');
       }
       const selectedCandidate = visionInput.candidates.find(
         (candidate) => candidate.id === parsed.data.selectedCandidate,
@@ -381,5 +390,27 @@ export class GeminiPhotoAdapter implements PhotoRecognizer {
         provider: 'Gemini',
       });
     }
+  }
+
+  private invalidResponse(
+    response: GenerateContentResponse,
+    failureKind: GeminiPhotoDiagnostic['failureKind'],
+    message: string,
+  ): AppError {
+    const candidate = response.candidates?.[0];
+    const diagnostic: GeminiPhotoDiagnostic = {
+      failureKind,
+      finishReason: candidate?.finishReason ?? null,
+      outputTokenCount: response.usageMetadata?.candidatesTokenCount
+        ?? candidate?.tokenCount
+        ?? null,
+      model: response.modelVersion ?? this.config.visionModel,
+    };
+    try {
+      this.diagnostic?.(diagnostic);
+    } catch (error) {
+      void error;
+    }
+    return new AppError(422, 'IMAGE_RECOGNITION_FAILED', message, diagnostic);
   }
 }

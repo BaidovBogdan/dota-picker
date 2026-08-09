@@ -45,6 +45,14 @@ const emptyState: OverlayState = {
 
 const positions: Position[] = [1, 2, 3, 4, 5];
 type Language = OverlayState['language'];
+type PendingAction = 'refresh' | Position | DraftAllyGroup | null;
+
+export function isOverlayRefreshVisible(
+  engineRefreshing: boolean,
+  pending: PendingAction,
+): boolean {
+  return engineRefreshing || pending === 'refresh';
+}
 
 function text(language: Language, russian: string, english: string): string {
   return language === 'en' ? english : russian;
@@ -327,11 +335,13 @@ export function OverlayPage() {
     state: emptyState,
     presentationId: null as number | null,
   });
-  const [pending, setPending] = useState<'refresh' | Position | DraftAllyGroup | null>(null);
+  const [pending, setPending] = useState<PendingAction>(null);
   const [actionError, setActionError] = useState<ActionFailure | null>(null);
   const state = renderFrame.state;
   const bridge = useMemo(overlayBridge, []);
-  const refreshing = state.available && (pending !== null || state.refreshing);
+  const actionPending = pending !== null;
+  const refreshing = state.available && isOverlayRefreshVisible(state.refreshing, pending);
+  const controlsPending = actionPending || state.refreshing;
   const visiblePicks = state.available ? state.picks : [];
   const visibleRecommendations = state.available ? state.recommendations : [];
   const allies = visiblePicks.filter((pick) => pick.side === 'ally');
@@ -471,7 +481,7 @@ export function OverlayPage() {
             <button
               className="draft-overlay__orientation-swap"
               type="button"
-              disabled={!state.available || refreshing}
+              disabled={!state.available || controlsPending}
               aria-label={text(state.language, 'Поменять стороны команд', 'Swap team sides')}
               title={text(state.language, 'Исправить сторону команды', 'Correct your team side')}
               onClick={() => {
@@ -500,7 +510,7 @@ export function OverlayPage() {
           {state.draftOrientation.required ? (
             <DraftOrientationPrompt
               language={state.language}
-              pending={pending !== null}
+              pending={controlsPending}
               onSelect={(allyGroup) => void runAction(
                 allyGroup,
                 (currentBridge) => currentBridge.setDraftAllyGroup(allyGroup),
@@ -547,7 +557,7 @@ export function OverlayPage() {
                   aria-label={`${text(state.language, 'Позиция', 'Position')} ${position}`}
                   aria-pressed={state.available && state.position === position}
                   title={`${text(state.language, 'Играть на позиции', 'Play position')} ${position}`}
-                  disabled={!state.available || refreshing}
+                  disabled={!state.available || controlsPending}
                   onClick={() => void runAction(position, (currentBridge) => currentBridge.setPosition(position))}
                 >
                   {position}
@@ -565,7 +575,7 @@ export function OverlayPage() {
                   : state.draftActive
                     ? text(state.language, 'Проверить новые пики', 'Check for new picks')
                     : text(state.language, 'Доступно во время драфта', 'Available during the draft')}
-              disabled={!state.available || !state.draftActive || refreshing}
+              disabled={!state.available || !state.draftActive || controlsPending}
               onClick={() => void runAction('refresh', (currentBridge) => currentBridge.refresh())}
             >
               <ArrowsClockwiseIcon size={13} weight="bold" aria-hidden />
@@ -576,7 +586,7 @@ export function OverlayPage() {
               <RecommendationCard
                 recommendation={recommendation}
                 index={index}
-                position={state.position}
+                position={state.analysisPosition ?? state.position}
                 language={state.language}
                 available={state.available}
                 key={recommendation?.heroId ?? `empty-${index}`}

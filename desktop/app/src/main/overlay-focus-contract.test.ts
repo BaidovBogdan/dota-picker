@@ -9,14 +9,18 @@ test('keeps the overlay interactive while presenting it without initial activati
   const end = source.indexOf('\nfunction toggleOverlay()', start);
   const createOverlayWindow = source.slice(start, end);
 
-  assert.equal(createOverlayWindow.includes('focusable: false'), true);
-  assert.equal(createOverlayWindow.includes('Win32NoActivateOverlay.attach(window)'), true);
-  assert.equal(createOverlayWindow.includes('window.setFocusable(true)'), true);
+  assert.equal(createOverlayWindow.includes('focusable: true'), true);
+  assert.equal(
+    createOverlayWindow.includes('if (!applyWindowsNoActivateStyle(window)) window.setFocusable(false)'),
+    true,
+  );
+  assert.equal(createOverlayWindow.includes('Win32NoActivateOverlay'), false);
   assert.equal(createOverlayWindow.includes('focusOnNavigation: false'), true);
   assert.equal(createOverlayWindow.includes('window.showInactive();'), false);
   assert.equal(source.includes('window.showInactive();'), true);
   assert.equal(createOverlayWindow.includes('setIgnoreMouseEvents(true'), false);
-  assert.match(nativeSource, /WM_MOUSEACTIVATE\s*=\s*0x0021/);
-  assert.match(nativeSource, /MA_NOACTIVATE\s*=\s*3/);
-  assert.match(nativeSource, /message === WM_MOUSEACTIVATE/);
+  assert.match(nativeSource, /WS_EX_NOACTIVATE\s*=\s*0x08000000n/);
+  assert.match(nativeSource, /SetWindowLongPtrW/);
+  assert.equal(nativeSource.includes('koffi.register'), false);
+  assert.equal(nativeSource.includes('SetWindowSubclass'), false);
 });

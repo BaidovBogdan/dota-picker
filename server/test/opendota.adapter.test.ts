@@ -37,6 +37,7 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -135,6 +136,217 @@ describe('OpenDotaAdapter', () => {
     );
     expect(pairQueries[0]).toContain('average_rank = 7');
     expect(requestedUrls.some((url) => url.includes('/matchups'))).toBe(false);
+  });
+
+  it('reuses selected-hero pair rows across sequential live draft revisions', async () => {
+    const pairQueries: string[] = [];
+    const batches = [
+      { matchup: [1, 2], synergy: [] },
+      { matchup: [], synergy: [11] },
+      { matchup: [3], synergy: [] },
+      { matchup: [], synergy: [12] },
+      { matchup: [1, 2, 3], synergy: [11, 12] },
+    ];
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
+      if (url.endsWith('/constants/patch')) {
+        return json([{ id: 60, name: '7.41', date: '2026-03-24T00:50:59.580Z' }]);
+      }
+      if (url.includes('/explorer?sql=')) {
+        const sql = new URL(url).searchParams.get('sql') ?? '';
+        if (!sql.includes('WITH pair_observations')) return json({ rows: positionRows });
+        pairQueries.push(sql);
+        const batch = batches[pairQueries.length - 1];
+        if (!batch) throw new Error('Unexpected pair query');
+        return json({
+          rows: [
+            ...batch.matchup.map((selectedId) => ({
+              relation: 'matchup',
+              selected_id: selectedId,
+              candidate_id: 99,
+              patch_games: selectedId * 100,
+              patch_wins: selectedId * 60,
+              rank_games: selectedId * 40,
+              rank_wins: selectedId * 25,
+            })),
+            ...batch.synergy.map((selectedId) => ({
+              relation: 'synergy',
+              selected_id: selectedId,
+              candidate_id: 99,
+              patch_games: selectedId * 100,
+              patch_wins: selectedId * 60,
+              rank_games: selectedId * 40,
+              rank_wins: selectedId * 25,
+            })),
+          ],
+        });
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const incremental = new OpenDotaAdapter(config);
+    await incremental.getSnapshot(7, [1, 2], [], []);
+    await incremental.getSnapshot(7, [1, 2], [11], []);
+    await incremental.getSnapshot(7, [1, 2, 3], [11], []);
+    const incrementalResult = await incremental.getSnapshot(7, [1, 2, 3], [11, 12], []);
+
+    expect(pairQueries).toHaveLength(4);
+    expect(pairQueries[0]).toContain('ARRAY[1,2]::integer[]');
+    expect(pairQueries[0]).not.toContain("SELECT 'synergy'::text");
+    expect(pairQueries[1]).toContain('ARRAY[11]::integer[]');
+    expect(pairQueries[1]).not.toContain("SELECT 'matchup'::text");
+    expect(pairQueries[2]).toContain('ARRAY[3]::integer[]');
+    expect(pairQueries[2]).not.toContain("SELECT 'synergy'::text");
+    expect(pairQueries[3]).toContain('ARRAY[12]::integer[]');
+    expect(pairQueries[3]).not.toContain("SELECT 'matchup'::text");
+
+    const full = new OpenDotaAdapter(config);
+    const fullResult = await full.getSnapshot(7, [1, 2, 3], [11, 12], []);
+    expect(pairQueries).toHaveLength(5);
+    expect(pairQueries[4]).toContain('ARRAY[1,2,3]::integer[]');
+    expect(pairQueries[4]).toContain('ARRAY[11,12]::integer[]');
+    expect(incrementalResult.matchupByEnemy).toEqual(fullResult.matchupByEnemy);
+    expect(incrementalResult.synergyByAlly).toEqual(fullResult.synergyByAlly);
+    expect(incrementalResult.pairScope).toMatchObject({
+      patch: '7.41',
+      rank: 7,
+      availability: 'ready',
+      isStale: false,
+    });
+  });
+
+  it('bounds the live wait and completes missing pair rows in the background', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-10T00:00:00.000Z'));
+    let pairQueries = 0;
+    let resolveDelayedPair: ((response: Response) => void) | undefined;
+    const delayedPair = new Promise<Response>((resolve) => {
+      resolveDelayedPair = resolve;
+    });
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
+      if (url.endsWith('/constants/patch')) {
+        return json([{ id: 60, name: '7.41', date: '2026-03-24T00:50:59.580Z' }]);
+      }
+      if (url.includes('/explorer?sql=')) {
+        const sql = new URL(url).searchParams.get('sql') ?? '';
+        if (!sql.includes('WITH pair_observations')) return json({ rows: positionRows });
+        pairQueries += 1;
+        if (pairQueries === 2) return delayedPair;
+        return json({
+          rows: [{
+            relation: 'matchup',
+            selected_id: 1,
+            candidate_id: 99,
+            patch_games: 100,
+            patch_wins: 60,
+            rank_games: 40,
+            rank_wins: 25,
+          }],
+        });
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const adapter = new OpenDotaAdapter(config);
+
+    await adapter.getSnapshot(7, [1], [], []);
+    const foreground = adapter.getSnapshot(7, [1, 2], [], []);
+    await vi.waitFor(() => expect(pairQueries).toBe(2));
+    await vi.advanceTimersByTimeAsync(1_500);
+    const partial = await foreground;
+
+    expect(partial.matchupByEnemy.get(1)?.get(99)?.patchGames).toBe(100);
+    expect(partial.matchupByEnemy.has(2)).toBe(false);
+    expect(partial.pairScope).toMatchObject({
+      availability: 'unavailable',
+      isStale: false,
+    });
+
+    const background = [...(adapter as unknown as {
+      pairPending: Map<string, Promise<void>>;
+    }).pairPending.values()][0];
+    expect(background).toBeDefined();
+    resolveDelayedPair?.(json({
+      rows: [{
+        relation: 'matchup',
+        selected_id: 2,
+        candidate_id: 99,
+        patch_games: 200,
+        patch_wins: 120,
+        rank_games: 80,
+        rank_wins: 50,
+      }],
+    }));
+    await background;
+
+    const complete = await adapter.getSnapshot(7, [1, 2], [], []);
+    expect(pairQueries).toBe(2);
+    expect(complete.matchupByEnemy.get(1)?.get(99)?.patchGames).toBe(100);
+    expect(complete.matchupByEnemy.get(2)?.get(99)?.patchGames).toBe(200);
+    expect(complete.pairScope).toMatchObject({
+      availability: 'ready',
+      isStale: false,
+    });
+  });
+
+  it('serves expired pair rows as stale while their refresh remains pending', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-10T00:00:00.000Z'));
+    let pairQueries = 0;
+    const pendingPair = new Promise<Response>(() => undefined);
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
+      if (url.endsWith('/constants/patch')) {
+        return json([{ id: 60, name: '7.41', date: '2026-03-24T00:50:59.580Z' }]);
+      }
+      if (url.includes('/explorer?sql=')) {
+        const sql = new URL(url).searchParams.get('sql') ?? '';
+        if (!sql.includes('WITH pair_observations')) return json({ rows: positionRows });
+        pairQueries += 1;
+        if (pairQueries === 2) return pendingPair;
+        return json({
+          rows: [{
+            relation: 'matchup',
+            selected_id: 1,
+            candidate_id: 99,
+            patch_games: 100,
+            patch_wins: 60,
+            rank_games: 40,
+            rank_wins: 25,
+          }],
+        });
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const adapter = new OpenDotaAdapter(config);
+
+    await adapter.getSnapshot(7, [1], [], []);
+    await vi.advanceTimersByTimeAsync(15 * 60 * 1_000 + 1);
+    const foreground = adapter.getSnapshot(7, [1], [], []);
+    await vi.waitFor(() => expect(pairQueries).toBe(2));
+    await vi.advanceTimersByTimeAsync(1_500);
+    const stale = await foreground;
+
+    expect(stale.matchupByEnemy.get(1)?.get(99)?.patchGames).toBe(100);
+    expect(stale.pairScope).toMatchObject({
+      availability: 'ready',
+      isStale: true,
+    });
   });
 
   it('bounds the draft-pair cache and refreshes recent entries in LRU order', async () => {

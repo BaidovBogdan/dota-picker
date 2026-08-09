@@ -31,6 +31,7 @@ import { safeDiagnosticErrorCode, type DiagnosticEventDraft } from './diagnostic
 
 const captureIntervalMs = 5_000;
 const captureDebounceMs = 1_500;
+const maximumRecognitionAttempts = 2;
 const gsiFreshnessMs = 20_000;
 const lastSeenPublishIntervalMs = 10_000;
 const windowPollIntervalsMs = [10_000, 20_000, 30_000] as const;
@@ -96,6 +97,18 @@ function fitForUpload(image: NativeImage): NativeImage {
     width: Math.max(1, Math.round(size.width * scale)),
     height: Math.max(1, Math.round(size.height * scale)),
     quality: 'better',
+  });
+}
+
+function fitForFingerprint(image: NativeImage): NativeImage {
+  const size = image.getSize();
+  if (
+    size.width === hashWatchThumbnailSize.width
+    && size.height === hashWatchThumbnailSize.height
+  ) return image;
+  return image.resize({
+    ...hashWatchThumbnailSize,
+    quality: 'good',
   });
 }
 
@@ -432,12 +445,17 @@ export class DraftEngine {
       return;
     }
     const hasCurrentAnalysis = this.state.latestAnalysis !== null;
-    const phase = this.busy
+    const preserveActivePhase = this.busy
+      || this.refreshRequested
+      || this.retryRequested
+      || this.state.phase === 'error'
+      || this.state.phase === 'quota';
+    const phase = preserveActivePhase
       ? this.state.phase
       : hasCurrentAnalysis
         ? 'ready'
         : 'watching_draft';
-    const message = this.busy
+    const message = preserveActivePhase
       ? this.state.message
       : hasCurrentAnalysis
         ? 'Контрпики готовы — следим за новыми пиками'
@@ -524,6 +542,12 @@ export class DraftEngine {
 
   private scheduleCapture(): void {
     if (!this.inDraft || this.busy || this.captureTimer) return;
+    if (
+      (this.state.phase === 'error' || this.state.phase === 'quota')
+      && !this.refreshRequested
+      && !this.retryRequested
+      && !this.forceRefresh
+    ) return;
     const intervalMs = this.options.captureIntervalMs ?? captureIntervalMs;
     const debounceMs = this.options.captureDebounceMs ?? captureDebounceMs;
     const waitForRateLimit = Math.max(0, intervalMs - (Date.now() - this.lastCaptureAt));
@@ -658,14 +682,15 @@ export class DraftEngine {
         this.retryRequested = false;
         this.forceRefresh = false;
       }
-      this.lastFingerprint = nextFingerprint;
       this.lastCaptureAt = Date.now();
       if (!retryingFailedFrame) {
         if (!uploadImage) {
           throw new DesktopError('CAPTURE_STATE_INVALID', 'Не удалось подготовить кадр для анализа');
         }
+        const submittedFingerprint = createDraftFrameFingerprint(fitForFingerprint(uploadImage));
+        this.lastFingerprint = submittedFingerprint;
         this.revision += 1;
-        this.requestFingerprint = nextFingerprint;
+        this.requestFingerprint = submittedFingerprint;
         this.requestKey = randomUUID();
         this.requestImage = fitForUpload(uploadImage).toPNG();
         this.requestAllyGroup = configuredAllyGroup;
@@ -673,6 +698,7 @@ export class DraftEngine {
         this.retryRequested = false;
         this.requestAttempt = 1;
       } else {
+        this.lastFingerprint = this.requestFingerprint;
         this.requestAttempt = Math.min(20, this.requestAttempt + 1);
       }
       this.update({
@@ -903,7 +929,12 @@ export class DraftEngine {
       this.analyzingTimer = null;
       const liveSessionInvalid = error instanceof DesktopError
         && error.code === 'DESKTOP_LIVE_SESSION_INVALID';
-      const retryable = liveSessionInvalid || isRetryableAnalysisError(error);
+      const recognitionRetryAvailable = error instanceof DesktopError
+        && error.code === 'IMAGE_RECOGNITION_FAILED'
+        && this.requestAttempt < maximumRecognitionAttempts;
+      const retryable = liveSessionInvalid
+        || recognitionRetryAvailable
+        || isRetryableAnalysisError(error);
       this.reportDiagnostic({
         type: 'engine_error',
         status: 'error',
@@ -964,13 +995,20 @@ export class DraftEngine {
       this.retryRequested = !refreshQueuedDuringAnalysis
         && this.requestKey !== null
         && retryable;
+      const retryingFailedFrame = this.retryRequested;
       this.update({
         ...this.state,
-        phase: isQuota ? 'quota' : refreshQueuedDuringAnalysis ? 'watching_draft' : 'error',
+        phase: isQuota
+          ? 'quota'
+          : refreshQueuedDuringAnalysis || retryingFailedFrame
+            ? 'watching_draft'
+            : 'error',
         message: isQuota
           ? 'Лимит попыток исчерпан'
           : refreshQueuedDuringAnalysis
             ? 'Перезапускаем анализ с новыми настройками'
+            : retryingFailedFrame
+              ? 'Повторяем распознавание свежего кадра'
             : error instanceof Error
               ? error.message
               : 'Не удалось проанализировать драфт',

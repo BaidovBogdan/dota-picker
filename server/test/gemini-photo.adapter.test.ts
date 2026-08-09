@@ -186,7 +186,7 @@ describe('GeminiPhotoAdapter', () => {
       model: config.visionModel,
       config: {
         responseMimeType: 'application/json',
-        maxOutputTokens: 768,
+        maxOutputTokens: 2_048,
       },
     });
     expect(JSON.stringify(request?.contents)).toContain('Anti-Mage, Axe');
@@ -764,7 +764,7 @@ describe('GeminiPhotoAdapter', () => {
     ]);
   });
 
-  it('keeps the all-pick team bars in slot order and ignores grid portraits', async () => {
+  it('keeps a complete ten-pick all-pick response in slot order', async () => {
     const generateContent = vi
       .fn<(parameters: GenerateContentParameters) => Promise<GenerateContentResponse>>()
       .mockResolvedValue(response({
@@ -803,6 +803,13 @@ describe('GeminiPhotoAdapter', () => {
           },
           {
             sourceRegion: 'team_pick_slot',
+            side: 'ally',
+            slot: 4,
+            heroName: 'Queen of Pain',
+            confidence: 0.93,
+          },
+          {
+            sourceRegion: 'team_pick_slot',
             side: 'enemy',
             slot: 0,
             heroName: 'Templar Assassin',
@@ -836,13 +843,6 @@ describe('GeminiPhotoAdapter', () => {
             heroName: 'Pangolier',
             confidence: 0.92,
           },
-          {
-            sourceRegion: 'hero_selection_grid',
-            side: 'enemy',
-            slot: 1,
-            heroName: 'Venomancer',
-            confidence: 0.99,
-          },
         ],
     }));
     const adapter = new GeminiPhotoAdapter(config, { generateContent });
@@ -865,6 +865,7 @@ describe('GeminiPhotoAdapter', () => {
       { side: 'unknown', visualGroup: 'left', slot: 1, heroId: 73 },
       { side: 'unknown', visualGroup: 'left', slot: 2, heroId: 25 },
       { side: 'unknown', visualGroup: 'left', slot: 3, heroId: 34 },
+      { side: 'unknown', visualGroup: 'left', slot: 4, heroId: 39 },
       { side: 'unknown', visualGroup: 'right', slot: 0, heroId: 46 },
       { side: 'unknown', visualGroup: 'right', slot: 1, heroId: 54 },
       { side: 'unknown', visualGroup: 'right', slot: 2, heroId: 1 },
@@ -886,12 +887,20 @@ describe('GeminiPhotoAdapter', () => {
   });
 
   it('rejects malformed model output without exposing it', async () => {
+    const diagnostics: unknown[] = [];
     const generateContent = vi
       .fn<(parameters: GenerateContentParameters) => Promise<GenerateContentResponse>>()
       .mockResolvedValue({
         text: '{not-json',
+        candidates: [{ finishReason: 'MAX_TOKENS', tokenCount: 2_048 }],
+        usageMetadata: { candidatesTokenCount: 2_048 },
+        modelVersion: 'gemini-3.5-flash-lite-001',
       } as GenerateContentResponse);
-    const adapter = new GeminiPhotoAdapter(config, { generateContent });
+    const adapter = new GeminiPhotoAdapter(
+      config,
+      { generateContent },
+      (diagnostic) => diagnostics.push(diagnostic),
+    );
 
     await expect(
       adapter.recognize(testImage, 'image/jpeg', heroes),
@@ -899,6 +908,19 @@ describe('GeminiPhotoAdapter', () => {
       statusCode: 422,
       code: 'IMAGE_RECOGNITION_FAILED',
       message: 'The recognition response was invalid',
+      details: {
+        failureKind: 'invalid_json',
+        finishReason: 'MAX_TOKENS',
+        outputTokenCount: 2_048,
+        model: 'gemini-3.5-flash-lite-001',
+      },
     });
+    expect(diagnostics).toEqual([{
+      failureKind: 'invalid_json',
+      finishReason: 'MAX_TOKENS',
+      outputTokenCount: 2_048,
+      model: 'gemini-3.5-flash-lite-001',
+    }]);
+    expect(JSON.stringify(diagnostics)).not.toContain('{not-json');
   });
 });

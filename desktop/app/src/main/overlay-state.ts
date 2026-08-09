@@ -40,10 +40,15 @@ function recommendations(
 ): OverlayRecommendation[] {
   if (!available) return [];
   const analysis = state.latestAnalysis;
+  const revalidating = state.draftActive && (
+    state.refreshPending
+    || state.phase === 'recognizing'
+    || state.phase === 'analyzing'
+  );
   if (
     !analysis
-    || analysis.input.position !== position
     || (analysis.input.rank ?? null) !== preferences.rank
+    || (!revalidating && analysis.input.position !== position)
   ) {
     return [];
   }

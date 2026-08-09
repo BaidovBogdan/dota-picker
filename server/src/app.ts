@@ -82,7 +82,9 @@ export function buildApp(config: AppConfig = loadConfig()) {
     recommendationEngine,
   );
   const idempotencyService = new IdempotencyService(db, config.idempotencyTtlMs, config.idempotencyLeaseMs);
-  const photoAdapter = new GeminiPhotoAdapter(config.gemini);
+  const photoAdapter = new GeminiPhotoAdapter(config.gemini, undefined, (diagnostic) => {
+    app.log.warn(diagnostic, 'Gemini photo recognition response rejected');
+  });
   const billingService = new BillingService(db, config, quotaService);
   const reviewService = new ReviewService(db);
   const diagnosticsService = new DiagnosticsService(db);

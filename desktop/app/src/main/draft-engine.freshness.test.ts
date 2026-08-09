@@ -7,6 +7,7 @@ import type { ApiClient } from './api-client.js';
 import type { DiagnosticEventDraft } from './diagnostics.js';
 import { DraftEngine } from './draft-engine.js';
 import { draftImage } from './draft-frame-fingerprint.fixture.js';
+import { DesktopError } from './errors.js';
 import type { GsiPayload, GsiReceiver } from './gsi.js';
 import type { PreferencesStore } from './preferences-store.js';
 
@@ -119,9 +120,10 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
 
 function createEngine(
   api: ApiClient,
-  capture: () => NativeImage,
+  capture: (thumbnailSize: { width: number; height: number }) => NativeImage,
   emissions: EngineState[] = [],
   diagnostics: DiagnosticEventDraft[] = [],
+  gsiListeners: Array<(payload: GsiPayload) => void> = [],
 ) {
   const preferencesValue: Preferences = {
     theme: 'system',
@@ -144,13 +146,14 @@ function createEngine(
   } as unknown as PreferencesStore;
   const gsi = {
     start: async (listener: (payload: GsiPayload) => void) => {
+      gsiListeners.push(listener);
       listener({ map: { game_state: 'DOTA_GAMERULES_STATE_HERO_SELECTION' } });
       return { installed: true, configPath: null };
     },
     stop: async () => undefined,
   } as unknown as GsiReceiver;
   return new DraftEngine(api, preferences, gsi, (state) => emissions.push(state), {
-    captureDotaWindow: async () => capture(),
+    captureDotaWindow: async (thumbnailSize) => capture(thumbnailSize),
     captureIntervalMs: 25,
     captureDebounceMs: 1,
     diagnostic: (event) => diagnostics.push(structuredClone(event)),
@@ -179,6 +182,111 @@ describe('DraftEngine frame freshness', () => {
       assert.ok(recognitionEvent?.type === 'recognition_result');
       assert.equal(capture.details.revision, request.details.revision);
       assert.equal(recognitionEvent.details.revision, request.details.revision);
+    } finally {
+      await engine.dispose();
+    }
+  });
+
+  it('correlates freshness with the submitted upload instead of the earlier watch capture', async () => {
+    const watchImage = draftImage([11, 22, 0, 0, 0, 0, 0, 0, 0, 0]);
+    const submittedImageSource = draftImage([11, 22, 0, 0, 0, 33, 44, 0, 0, 0]);
+    const fingerprintResizes: Array<Parameters<NativeImage['resize']>[0]> = [];
+    const submittedImage = new Proxy(submittedImageSource, {
+      get(target, property, receiver) {
+        if (property !== 'resize') return Reflect.get(target, property, receiver);
+        return (options: Parameters<NativeImage['resize']>[0]) => {
+          fingerprintResizes.push(options);
+          return target.resize(options);
+        };
+      },
+    });
+    let captures = 0;
+    let requests = 0;
+    const api = {
+      analyzeDesktop: async (...arguments_: unknown[]) => {
+        requests += 1;
+        return completedResponse('submitted-frame-analysis', [33, 44], arguments_[4] as number);
+      },
+    } as unknown as ApiClient;
+    const engine = createEngine(api, () => {
+      captures += 1;
+      return captures === 1 ? watchImage : submittedImage;
+    });
+
+    try {
+      await engine.setEnabled(true);
+      await waitFor(() => engine.getState().latestAnalysisId === 'submitted-frame-analysis');
+      assert.equal(requests, 1);
+      assert.deepEqual(fingerprintResizes, [{ width: 320, height: 180, quality: 'good' }]);
+      assert.deepEqual(
+        engine.getState().recognition?.recognized.map((pick) => pick.heroId),
+        [11, 22, 33, 44],
+      );
+    } finally {
+      await engine.dispose();
+    }
+  });
+
+  it('retries one stable recognition failure with the same request and then succeeds', async () => {
+    const image = draftImage([11, 22, 0, 0, 0, 33, 44, 0, 0, 0]);
+    const requestKeys: unknown[] = [];
+    const diagnostics: DiagnosticEventDraft[] = [];
+    const api = {
+      analyzeDesktop: async (...arguments_: unknown[]) => {
+        requestKeys.push(arguments_[5]);
+        if (requestKeys.length === 1) {
+          throw new DesktopError(
+            'IMAGE_RECOGNITION_FAILED',
+            'The recognition response was invalid',
+            422,
+          );
+        }
+        return completedResponse('retried-analysis', [33, 44], arguments_[4] as number);
+      },
+    } as unknown as ApiClient;
+    const engine = createEngine(api, () => image, [], diagnostics);
+
+    try {
+      await engine.setEnabled(true);
+      await waitFor(() => engine.getState().latestAnalysisId === 'retried-analysis');
+      assert.equal(requestKeys.length, 2);
+      assert.equal(requestKeys[1], requestKeys[0]);
+      assert.deepEqual(
+        diagnostics
+          .filter((event) => event.type === 'request_started')
+          .map((event) => event.type === 'request_started' ? event.details.attempt : null),
+        [1, 2],
+      );
+    } finally {
+      await engine.dispose();
+    }
+  });
+
+  it('bounds repeated recognition failures and keeps GSI from masking the error', async () => {
+    const image = draftImage([11, 22, 0, 0, 0, 33, 44, 0, 0, 0]);
+    const gsiListeners: Array<(payload: GsiPayload) => void> = [];
+    let requests = 0;
+    const api = {
+      analyzeDesktop: async () => {
+        requests += 1;
+        throw new DesktopError(
+          'IMAGE_RECOGNITION_FAILED',
+          'The recognition response was invalid',
+          422,
+        );
+      },
+    } as unknown as ApiClient;
+    const engine = createEngine(api, () => image, [], [], gsiListeners);
+
+    try {
+      await engine.setEnabled(true);
+      await waitFor(() => requests === 2 && engine.getState().phase === 'error');
+      gsiListeners[0]?.({ map: { game_state: 'DOTA_GAMERULES_STATE_HERO_SELECTION' } });
+      assert.equal(engine.getState().phase, 'error');
+      assert.equal(engine.getState().refreshPending, false);
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      assert.equal(requests, 2);
+      assert.equal(engine.getState().phase, 'error');
     } finally {
       await engine.dispose();
     }

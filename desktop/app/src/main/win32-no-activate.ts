@@ -1,36 +1,20 @@
 import { createRequire } from 'node:module';
 import type { BrowserWindow } from 'electron';
 import log from 'electron-log/main';
-import type { LibraryHandle, TypeObject } from 'koffi';
 
-const WM_MOUSEACTIVATE = 0x0021;
-const MA_NOACTIVATE = 3;
-const SUBCLASS_ID = 0x43504f56;
+const GWL_EXSTYLE = -20;
+const WS_EX_NOACTIVATE = 0x08000000n;
+const SWP_NOSIZE = 0x0001;
+const SWP_NOMOVE = 0x0002;
+const SWP_NOZORDER = 0x0004;
+const SWP_NOACTIVATE = 0x0010;
+const SWP_FRAMECHANGED = 0x0020;
+const styleRefreshFlags = SWP_NOSIZE
+  | SWP_NOMOVE
+  | SWP_NOZORDER
+  | SWP_NOACTIVATE
+  | SWP_FRAMECHANGED;
 const requireModule = createRequire(import.meta.url);
-
-type NativeInteger = number | bigint;
-
-type Win32NoActivateApi = {
-  library: LibraryHandle;
-  callbackType: TypeObject;
-  setWindowSubclass: (
-    windowHandle: bigint,
-    callback: bigint,
-    subclassId: number,
-    referenceData: number,
-  ) => number;
-  removeWindowSubclass: (
-    windowHandle: bigint,
-    callback: bigint,
-    subclassId: number,
-  ) => number;
-  defSubclassProc: (
-    windowHandle: bigint | null,
-    message: number,
-    wParam: NativeInteger,
-    lParam: NativeInteger,
-  ) => NativeInteger;
-};
 
 function nativeHandle(window: BrowserWindow): bigint {
   const handle = window.getNativeWindowHandle();
@@ -39,131 +23,60 @@ function nativeHandle(window: BrowserWindow): bigint {
     : BigInt(handle.readUInt32LE(0));
 }
 
-function loadApi(): { api: Win32NoActivateApi; koffi: typeof import('koffi') } | null {
-  if (process.platform !== 'win32') return null;
+export function applyWindowsNoActivateStyle(window: BrowserWindow): boolean {
+  if (process.platform !== 'win32' || window.isDestroyed()) return false;
   try {
     const koffi = requireModule('koffi') as typeof import('koffi');
-    const library = koffi.load('comctl32.dll');
-    const callbackType = koffi.proto(
-      '__stdcall',
-      'CounterpickOverlaySubclassProc',
-      'intptr',
-      ['void *', 'uint32', 'uintptr', 'intptr', 'uintptr', 'uintptr'],
-    );
-    return {
-      koffi,
-      api: {
-        library,
-        callbackType,
-        setWindowSubclass: library.func(
-          '__stdcall',
-          'SetWindowSubclass',
-          'int',
-          ['void *', koffi.pointer(callbackType), 'uintptr', 'uintptr'],
-        ) as Win32NoActivateApi['setWindowSubclass'],
-        removeWindowSubclass: library.func(
-          '__stdcall',
-          'RemoveWindowSubclass',
-          'int',
-          ['void *', koffi.pointer(callbackType), 'uintptr'],
-        ) as Win32NoActivateApi['removeWindowSubclass'],
-        defSubclassProc: library.func(
-          '__stdcall',
-          'DefSubclassProc',
-          'intptr',
-          ['void *', 'uint32', 'uintptr', 'intptr'],
-        ) as Win32NoActivateApi['defSubclassProc'],
-      },
-    };
+    const user32 = koffi.load('user32.dll');
+    try {
+      const getWindowLongPtr = user32.func(
+        '__stdcall',
+        'GetWindowLongPtrW',
+        'intptr',
+        ['void *', 'int'],
+      ) as (windowHandle: bigint, index: number) => number | bigint;
+      const setWindowLongPtr = user32.func(
+        '__stdcall',
+        'SetWindowLongPtrW',
+        'intptr',
+        ['void *', 'int', 'intptr'],
+      ) as (windowHandle: bigint, index: number, value: bigint) => number | bigint;
+      const setWindowPos = user32.func(
+        '__stdcall',
+        'SetWindowPos',
+        'int',
+        ['void *', 'void *', 'int', 'int', 'int', 'int', 'uint32'],
+      ) as (
+        windowHandle: bigint,
+        insertAfter: null,
+        x: number,
+        y: number,
+        width: number,
+        height: number,
+        flags: number,
+      ) => number;
+      const windowHandle = nativeHandle(window);
+      const currentStyle = BigInt(getWindowLongPtr(windowHandle, GWL_EXSTYLE));
+      const nextStyle = currentStyle | WS_EX_NOACTIVATE;
+      if (nextStyle !== currentStyle) {
+        setWindowLongPtr(windowHandle, GWL_EXSTYLE, nextStyle);
+      }
+      const appliedStyle = BigInt(getWindowLongPtr(windowHandle, GWL_EXSTYLE));
+      if ((appliedStyle & WS_EX_NOACTIVATE) === 0n) {
+        log.error('Windows rejected the no-activate overlay style');
+        return false;
+      }
+      if (!setWindowPos(windowHandle, null, 0, 0, 0, 0, styleRefreshFlags)) {
+        log.error('Windows rejected the no-activate overlay style refresh');
+        return false;
+      }
+      log.info('Windows no-activate overlay style applied');
+      return true;
+    } finally {
+      user32.unload();
+    }
   } catch (error) {
-    log.error('Could not load the Windows no-activate integration', error);
-    return null;
-  }
-}
-
-export class Win32NoActivateOverlay {
-  private disposed = false;
-
-  static attach(window: BrowserWindow): Win32NoActivateOverlay | null {
-    const loaded = loadApi();
-    if (!loaded || window.isDestroyed()) return null;
-    const { api, koffi } = loaded;
-    let callbackPointer: bigint | null = null;
-    let activationLogged = false;
-    const callback = (
-      windowHandle: bigint | null,
-      message: number,
-      wParam: NativeInteger,
-      lParam: NativeInteger,
-    ): NativeInteger => {
-      if (message === WM_MOUSEACTIVATE) {
-        if (!activationLogged) {
-          activationLogged = true;
-          setImmediate(() => log.info('Windows overlay mouse activation suppressed'));
-        }
-        return MA_NOACTIVATE;
-      }
-      try {
-        return api.defSubclassProc(windowHandle, message, wParam, lParam);
-      } catch (error) {
-        log.error('Windows overlay subclass dispatch failed', error);
-        return 0;
-      }
-    };
-
-    try {
-      callbackPointer = koffi.register(callback, koffi.pointer(api.callbackType));
-      if (!api.setWindowSubclass(nativeHandle(window), callbackPointer, SUBCLASS_ID, 0)) {
-        koffi.unregister(callbackPointer);
-        callbackPointer = null;
-        api.library.unload();
-        log.error('Windows rejected the no-activate overlay subclass');
-        return null;
-      }
-      log.info('Windows no-activate overlay subclass attached');
-      return new Win32NoActivateOverlay(window, api, koffi, callbackPointer);
-    } catch (error) {
-      if (callbackPointer !== null) koffi.unregister(callbackPointer);
-      try {
-        api.library.unload();
-      } catch (unloadError) {
-        log.warn('Could not unload the failed Windows no-activate integration', unloadError);
-      }
-      log.error('Could not attach the Windows no-activate overlay subclass', error);
-      return null;
-    }
-  }
-
-  private constructor(
-    private readonly window: BrowserWindow,
-    private readonly api: Win32NoActivateApi,
-    private readonly koffi: typeof import('koffi'),
-    private readonly callbackPointer: bigint,
-  ) {}
-
-  dispose(): void {
-    if (this.disposed) return;
-    this.disposed = true;
-    if (!this.window.isDestroyed()) {
-      try {
-        if (!this.api.removeWindowSubclass(
-          nativeHandle(this.window),
-          this.callbackPointer,
-          SUBCLASS_ID,
-        )) {
-          log.warn('Windows did not remove the no-activate overlay subclass');
-          return;
-        }
-      } catch (error) {
-        log.warn('Could not remove the Windows no-activate overlay subclass', error);
-        return;
-      }
-    }
-    this.koffi.unregister(this.callbackPointer);
-    try {
-      this.api.library.unload();
-    } catch (error) {
-      log.warn('Could not unload the Windows no-activate integration', error);
-    }
+    log.error('Could not apply the Windows no-activate overlay style', error);
+    return false;
   }
 }

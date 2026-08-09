@@ -128,6 +128,54 @@ describe('createOverlayState position resolution', () => {
     assert.equal(state.recommendations.length, 0);
   });
 
+  it('keeps the previous position result visible while a new position is refreshing', () => {
+    const refreshing = engineState(null, 3);
+    refreshing.phase = 'watching_draft';
+    refreshing.refreshPending = true;
+    const state = createOverlayState(
+      refreshing,
+      { ...preferences, position: 2 },
+      shortcut,
+      new Map(),
+      true,
+    );
+
+    assert.equal(state.position, 2);
+    assert.equal(state.analysisPosition, 3);
+    assert.equal(state.refreshing, true);
+    assert.equal(state.recommendations.length, 1);
+  });
+
+  it('hides the previous position result when revalidation is no longer active', () => {
+    const state = createOverlayState(
+      engineState(null, 3),
+      { ...preferences, position: 2 },
+      shortcut,
+      new Map(),
+      true,
+    );
+
+    assert.equal(state.position, 2);
+    assert.equal(state.analysisPosition, 3);
+    assert.equal(state.refreshing, false);
+    assert.equal(state.recommendations.length, 0);
+  });
+
+  it('does not reuse a result from another rank during position revalidation', () => {
+    const refreshing = engineState(null, 3);
+    refreshing.phase = 'recognizing';
+    const state = createOverlayState(
+      refreshing,
+      { ...preferences, position: 2, rank: 1 },
+      shortcut,
+      new Map(),
+      true,
+    );
+
+    assert.equal(state.refreshing, true);
+    assert.equal(state.recommendations.length, 0);
+  });
+
   it('keeps unknown visual groups hidden and requests one overlay confirmation', () => {
     const unresolved = engineState(null, 3);
     unresolved.latestAnalysis = null;
