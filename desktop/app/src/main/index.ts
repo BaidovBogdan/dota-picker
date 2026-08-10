@@ -25,7 +25,7 @@ import { registerOverlayIpc } from './overlay-ipc.js';
 import { createOverlayState } from './overlay-state.js';
 import { OverlayShortcutManager } from './overlay-shortcut.js';
 import { overlayWindowPosition } from './overlay-window-position.js';
-import { applyWindowsNoActivateStyle } from './win32-no-activate.js';
+import { installWindowsNoActivate } from './win32-no-activate.js';
 import { normalizeOverwolfBridgePort, OverwolfBridge } from './overwolf-bridge.js';
 import { OverwolfDraftEngine } from './overwolf-draft-engine.js';
 import { PreferencesStore } from './preferences-store.js';
@@ -233,7 +233,7 @@ function createOverlayWindow(): BrowserWindow {
     transparent: true,
     backgroundColor: '#00000000',
     alwaysOnTop: true,
-    focusable: true,
+    focusable: false,
     skipTaskbar: true,
     resizable: false,
     minimizable: false,
@@ -255,7 +255,7 @@ function createOverlayWindow(): BrowserWindow {
   });
 
   window.setMenuBarVisibility(false);
-  if (!applyWindowsNoActivateStyle(window)) window.setFocusable(false);
+  installWindowsNoActivate(window);
   raiseOverlayWindow(window);
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', (event) => event.preventDefault());

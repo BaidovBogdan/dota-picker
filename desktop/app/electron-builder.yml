@@ -8,6 +8,8 @@ files:
 extraResources:
   - from: ../../client/assets/brand/counterpick-icon.png
     to: brand/counterpick-icon.png
+  - from: native/noactivate/build/Release/counterpick_noactivate.node
+    to: native/counterpick_noactivate.node
 asar: true
 asarUnpack:
   - node_modules/@koromix/koffi-win32-x64/win32_x64/koffi.node

@@ -1,6 +1,6 @@
 {
   "name": "@counterpick/desktop",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "private": true,
   "author": "Counterpick",
   "description": "Counterpick desktop companion for Dota 2",
@@ -10,9 +10,10 @@
     "dev": "electron-vite dev",
     "start": "electron-vite preview",
     "test": "tsx --test src/main/*.test.ts",
+    "build:native": "node-gyp rebuild --directory native/noactivate",
     "typecheck:shell": "tsc --noEmit -p tsconfig.shell.json",
     "typecheck": "tsc --noEmit",
-    "build": "npm run typecheck && npm test && electron-vite build",
+    "build": "npm run build:native && npm run typecheck && npm test && electron-vite build",
     "verify:packaging": "node scripts/verify-packaging.mjs",
     "verify:dist": "node scripts/verify-packaging.mjs --dist",
     "package": "npm run build && npm run verify:packaging && electron-builder --dir",
@@ -48,6 +49,7 @@
     "electron": "^43.2.0",
     "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
+    "node-gyp": "^11.4.2",
     "tsx": "^4.23.11",
     "typescript": "^7.0.2",
     "vite": "^7.0.6"
