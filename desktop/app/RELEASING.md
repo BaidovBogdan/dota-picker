@@ -1,21 +1,22 @@
 # Выпуск Counterpick Desktop
 
-Обновления публикуются отдельно от приватного исходного кода. Приложение читает только публичные артефакты из `BaidovBogdan/counterpick-releases`.
+Исходный код и Windows-релизы публикуются в публичном репозитории `BaidovBogdan/dota-picker`. Приложение читает update metadata и установщик из GitHub Releases этого же репозитория.
 
 ## Однократная настройка
 
-1. Создайте публичный GitHub-репозиторий `BaidovBogdan/counterpick-releases` с README и основной веткой `main`.
-2. Создайте fine-grained personal access token только для этого репозитория. Дайте ему право `Contents: Read and write` и задайте срок действия.
-3. В приватном репозитории `BaidovBogdan/dota-picker` откройте `Settings → Secrets and variables → Actions` и добавьте секрет `COUNTERPICK_RELEASES_TOKEN`.
-4. Первый установщик с поддержкой обновлений установите вручную. Автообновление начнёт работать со следующей, более высокой версии.
+1. Оставьте `BaidovBogdan/dota-picker` публичным и разрешите workflow `Desktop Release` право `Contents: write`.
+2. Сохраните секрет `COUNTERPICK_RELEASES_TOKEN` до успешной публикации `0.1.18`: только этот переходный релиз зеркалируется в прежний `BaidovBogdan/counterpick-releases`.
+3. После успешного переходного релиза старый репозиторий можно архивировать, но нельзя удалять его релиз `0.1.18`: установленные версии до `0.1.18` получают обновление через него.
 
-Для production включите ruleset, ограничивающий создание тегов `v*`, и immutable releases в публичном release-репозитории. Если над исходниками будут работать другие участники, храните release-токен в GitHub Environment с ручным approval.
+Для production включите ruleset, ограничивающий создание тегов `v*`, и immutable releases в `dota-picker`. Если над исходниками будут работать другие участники, защитите release workflow через GitHub Environment с ручным approval.
 
-Токен нужен только GitHub Actions для загрузки трёх файлов релиза. В приложение и установщик он не попадает.
+GitHub Releases в `dota-picker` зарезервированы для стабильных desktop-релизов Counterpick. Не публикуйте backend или другие компоненты как отдельный stable latest release без desktop `latest.yml`: electron-updater читает общий `/releases/latest` этого репозитория. Backend продолжает развёртываться из исходного кода и не требует GitHub Release.
+
+Встроенного release-токена в приложении и установщике нет. Основной релиз использует ограниченный `GITHUB_TOKEN`; старый fine-grained token нужен только для однократного зеркала `0.1.18`.
 
 ## Текущий подготовленный релиз
 
-В `desktop/app/package.json` и `package-lock.json` указана версия `0.1.17`. Локальная Windows-сборка выполняет typecheck, тесты, production build, проверку packaging-контракта, NSIS-сборку и проверку готовых артефактов:
+В `desktop/app/package.json` и `package-lock.json` указана версия `0.1.18`. Локальная Windows-сборка выполняет typecheck, тесты, production build, проверку packaging-контракта, NSIS-сборку и проверку готовых артефактов:
 
 ```powershell
 cd desktop/app
@@ -23,10 +24,10 @@ npm ci
 npm run dist:win
 ```
 
-Для `0.1.17` ожидаются:
+Для `0.1.18` ожидаются:
 
-- `release/Counterpick-0.1.17-x64.exe`
-- `release/Counterpick-0.1.17-x64.exe.blockmap`
+- `release/Counterpick-0.1.18-x64.exe`
+- `release/Counterpick-0.1.18-x64.exe.blockmap`
 - `release/latest.yml`
 - `release/win-unpacked/` с Electron-локалями только `en-US.pak` и `ru.pak`
 

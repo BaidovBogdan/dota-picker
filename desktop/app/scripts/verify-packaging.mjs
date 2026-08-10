@@ -45,6 +45,10 @@ expect(
   builderConfig.includes('installerLanguages:\n    - en_US\n    - ru_RU\n'),
   'NSIS installer languages must contain English and Russian',
 );
+expect(builderConfig.includes('provider: github'), 'desktop update provider must be GitHub');
+expect(builderConfig.includes('owner: BaidovBogdan'), 'desktop update owner changed');
+expect(builderConfig.includes('repo: dota-picker'), 'desktop updates must use the unified dota-picker repository');
+expect(!builderConfig.includes('counterpick-releases'), 'legacy release repository must not remain in the desktop package');
 expect(builderConfig.includes('include: installer/installer.nsh'), 'custom NSIS include is not configured');
 expect(installerScript.includes(`!define OVERWOLF_INSTALLER_URL "${officialInstallerUrl}"`), 'official Overwolf installer URL changed');
 expect(installerScript.includes(`!define OVERWOLF_FALLBACK_URL "${officialFallbackUrl}"`), 'official Overwolf fallback URL changed');
@@ -99,10 +103,11 @@ if (verifyDist) {
   const latestPath = join(releaseDirectory, 'latest.yml');
   const unpackedDirectory = join(releaseDirectory, 'win-unpacked');
   const localesDirectory = join(unpackedDirectory, 'locales');
-  const [installerBytes, blockmapBytes, latest, localeEntries, unpackedBytes] = await Promise.all([
+  const [installerBytes, blockmapBytes, latest, appUpdate, localeEntries, unpackedBytes] = await Promise.all([
     fileSize(installerPath),
     fileSize(blockmapPath),
     readText(latestPath),
+    readText(join(unpackedDirectory, 'resources', 'app-update.yml')),
     readdir(localesDirectory),
     directorySize(unpackedDirectory),
   ]);
@@ -112,6 +117,10 @@ if (verifyDist) {
   expect(latest.includes(`version: ${packageJson.version}`), 'latest.yml version differs from package version');
   expect(latest.includes(`url: ${installerName}`), 'latest.yml installer URL differs from the expected artifact');
   expect(/(?:^|\n)\s*sha512:\s*\S+/.test(latest), 'latest.yml does not contain a SHA-512 checksum');
+  expect(appUpdate.includes('provider: github'), 'packaged update provider is not GitHub');
+  expect(appUpdate.includes('owner: BaidovBogdan'), 'packaged update owner changed');
+  expect(appUpdate.includes('repo: dota-picker'), 'packaged app does not use the unified update repository');
+  expect(!appUpdate.includes('counterpick-releases'), 'packaged app still uses the legacy update repository');
   expect(
     localeEntries.toSorted().join(',') === ['en-US.pak', 'ru.pak'].join(','),
     `unexpected Electron locales: ${localeEntries.toSorted().join(', ')}`,

@@ -6,7 +6,7 @@ on:
       - v*.*.*
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: desktop-release
@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   release-windows:
-    runs-on: windows-latest
+    runs-on: windows-2022
     defaults:
       run:
         shell: pwsh
@@ -26,7 +26,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
-          node-version: 24
+          node-version: 24.18.1
           cache: npm
           cache-dependency-path: desktop/app/package-lock.json
       - name: Verify release version
@@ -47,13 +47,10 @@ jobs:
       - name: Check existing public release
         id: published
         env:
-          GH_TOKEN: ${{ secrets.COUNTERPICK_RELEASES_TOKEN }}
-          RELEASE_REPOSITORY: BaidovBogdan/counterpick-releases
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
-            throw "COUNTERPICK_RELEASES_TOKEN is not configured"
-          }
           $version = $env:RELEASE_VERSION
           $releaseJson = gh release view $env:GITHUB_REF_NAME `
             --repo $env:RELEASE_REPOSITORY `
@@ -115,13 +112,10 @@ jobs:
       - name: Publish public update release
         if: steps.published.outputs.exists != 'true'
         env:
-          GH_TOKEN: ${{ secrets.COUNTERPICK_RELEASES_TOKEN }}
-          RELEASE_REPOSITORY: BaidovBogdan/counterpick-releases
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
-            throw "COUNTERPICK_RELEASES_TOKEN is not configured"
-          }
           $visibility = gh repo view $env:RELEASE_REPOSITORY --json visibility --jq '.visibility'
           if ($visibility -ne 'PUBLIC') {
             throw "$env:RELEASE_REPOSITORY must be public"
@@ -156,4 +150,67 @@ jobs:
             --target main `
             --title "Counterpick $version" `
             --notes "A new Counterpick version is ready with the latest fixes and improvements." `
+            --latest
+      - name: Publish transition release to legacy update channel
+        if: steps.release.outputs.version == '0.1.18'
+        env:
+          PRIMARY_TOKEN: ${{ github.token }}
+          LEGACY_TOKEN: ${{ secrets.COUNTERPICK_RELEASES_TOKEN }}
+          PRIMARY_RELEASE_REPOSITORY: ${{ github.repository }}
+          LEGACY_RELEASE_REPOSITORY: BaidovBogdan/counterpick-releases
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:LEGACY_TOKEN)) {
+            throw "COUNTERPICK_RELEASES_TOKEN is required for the 0.1.18 transition release"
+          }
+          $version = $env:RELEASE_VERSION
+          $expected = @(
+            "Counterpick-$version-x64.exe",
+            "Counterpick-$version-x64.exe.blockmap",
+            "latest.yml"
+          )
+          $env:GH_TOKEN = $env:LEGACY_TOKEN
+          $legacyJson = gh release view $env:GITHUB_REF_NAME `
+            --repo $env:LEGACY_RELEASE_REPOSITORY `
+            --json isDraft,isPrerelease,assets 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            $legacy = $legacyJson | ConvertFrom-Json
+            if ($legacy.isDraft -or $legacy.isPrerelease) {
+              throw "Existing legacy transition release must be stable and published"
+            }
+            $legacyAssets = @{}
+            foreach ($asset in $legacy.assets) {
+              $legacyAssets[$asset.name] = $asset
+            }
+            foreach ($name in $expected) {
+              if (-not $legacyAssets.ContainsKey($name) -or [long]$legacyAssets[$name].size -le 0) {
+                throw "Existing legacy transition release is missing a valid asset: $name"
+              }
+            }
+            exit 0
+          }
+          $bridgeDirectory = Join-Path $env:RUNNER_TEMP "counterpick-transition-$version"
+          New-Item -ItemType Directory -Path $bridgeDirectory -Force | Out-Null
+          $env:GH_TOKEN = $env:PRIMARY_TOKEN
+          foreach ($name in $expected) {
+            gh release download $env:GITHUB_REF_NAME `
+              --repo $env:PRIMARY_RELEASE_REPOSITORY `
+              --pattern $name `
+              --dir $bridgeDirectory `
+              --clobber
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not download primary release asset: $name"
+            }
+          }
+          $assets = @(
+            (Resolve-Path (Join-Path $bridgeDirectory "Counterpick-$version-x64.exe")).Path
+            (Resolve-Path (Join-Path $bridgeDirectory "Counterpick-$version-x64.exe.blockmap")).Path
+            (Resolve-Path (Join-Path $bridgeDirectory "latest.yml")).Path
+          )
+          $env:GH_TOKEN = $env:LEGACY_TOKEN
+          gh release create $env:GITHUB_REF_NAME @assets `
+            --repo $env:LEGACY_RELEASE_REPOSITORY `
+            --target main `
+            --title "Counterpick $version" `
+            --notes "Transition release: installed Counterpick versions receive 0.1.18 here, then future updates come from BaidovBogdan/dota-picker." `
             --latest

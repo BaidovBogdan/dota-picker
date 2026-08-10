@@ -19,7 +19,7 @@ electronLanguages:
 publish:
   provider: github
   owner: BaidovBogdan
-  repo: counterpick-releases
+  repo: dota-picker
   private: false
 win:
   executableName: Counterpick
