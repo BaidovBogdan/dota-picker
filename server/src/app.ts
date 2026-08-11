@@ -1,4 +1,5 @@
 import cors from '@fastify/cors';
+import compress from '@fastify/compress';
 import helmet from '@fastify/helmet';
 import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
@@ -24,6 +25,9 @@ import { OtpService } from './modules/auth/otp.service.js';
 import { billingRoutes } from './modules/billing/billing.routes.js';
 import { BillingService } from './modules/billing/billing.service.js';
 import { heroesRoutes } from './modules/heroes/heroes.routes.js';
+import {
+  PostgresDraftSnapshotRepository,
+} from './modules/heroes/draft-snapshot.repository.js';
 import { OpenDotaAdapter } from './modules/heroes/opendota.adapter.js';
 import { IdempotencyService } from './modules/idempotency/idempotency.service.js';
 import { diagnosticsRoutes } from './modules/diagnostics/diagnostics.routes.js';
@@ -63,17 +67,22 @@ export function buildApp(config: AppConfig = loadConfig()) {
     app.log.warn('Static OTP verification is enabled in production pre-launch mode');
   }
 
-  const { db, pool } = createDatabase(config.databaseUrl);
+  const { db, pool, getPoolMetrics } = createDatabase(config.databaseUrl, config.database);
   const quotaService = new QuotaService(db, config.quota);
   const otpService = new OtpService(db, config);
   const authService = new AuthService(db, config, otpService);
-  const metaAdapter = new OpenDotaAdapter(config.openDota, (diagnostic) => {
-    if (diagnostic.outcome === 'fallback') {
-      app.log.warn(diagnostic, 'OpenDota hero detail refresh used a fallback');
-      return;
-    }
-    app.log.info(diagnostic, 'OpenDota hero detail refresh completed');
-  });
+  const draftSnapshotRepository = new PostgresDraftSnapshotRepository(db);
+  const metaAdapter = new OpenDotaAdapter(
+    config.openDota,
+    (diagnostic) => {
+      if (diagnostic.outcome === 'fallback') {
+        app.log.warn(diagnostic, 'OpenDota hero detail refresh used a fallback');
+        return;
+      }
+      app.log.info(diagnostic, 'OpenDota hero detail refresh completed');
+    },
+    draftSnapshotRepository,
+  );
   const recommendationEngine = new RecommendationEngine();
   const analysisService = new AnalysisService(
     db,
@@ -88,7 +97,7 @@ export function buildApp(config: AppConfig = loadConfig()) {
   const billingService = new BillingService(db, config, quotaService);
   const reviewService = new ReviewService(db);
   const diagnosticsService = new DiagnosticsService(db);
-  const adminService = new AdminService(db, config, metaAdapter);
+  const adminService = new AdminService(db, config, metaAdapter, getPoolMetrics);
   let diagnosticsCleanupRetryTimer: NodeJS.Timeout | null = null;
   const scheduleDiagnosticsCleanup = (delayMs: number): void => {
     if (config.nodeEnv === 'test' || diagnosticsCleanupRetryTimer) return;
@@ -115,6 +124,46 @@ export function buildApp(config: AppConfig = loadConfig()) {
     ? null
     : setInterval(runDiagnosticsCleanup, 60 * 60 * 1_000);
   diagnosticsCleanupTimer?.unref();
+  let idempotencyCleanupRetryTimer: NodeJS.Timeout | null = null;
+  const scheduleIdempotencyCleanup = (delayMs: number): void => {
+    if (config.nodeEnv === 'test' || idempotencyCleanupRetryTimer) return;
+    idempotencyCleanupRetryTimer = setTimeout(() => {
+      idempotencyCleanupRetryTimer = null;
+      runIdempotencyCleanup();
+    }, delayMs);
+    idempotencyCleanupRetryTimer.unref();
+  };
+  const runIdempotencyCleanup = (): void => {
+    if (config.nodeEnv === 'test') return;
+    void idempotencyService.pruneExpired()
+      .then((backlogRemaining) => {
+        if (backlogRemaining) scheduleIdempotencyCleanup(5_000);
+      })
+      .catch((error: unknown) => {
+        app.log.error({
+          err: error,
+          code: 'IDEMPOTENCY_RETENTION_CLEANUP_FAILED',
+        }, 'Idempotency retention cleanup failed');
+        scheduleIdempotencyCleanup(60_000);
+      });
+  };
+  const idempotencyCleanupTimer = config.nodeEnv === 'test'
+    ? null
+    : setInterval(runIdempotencyCleanup, 60 * 60 * 1_000);
+  idempotencyCleanupTimer?.unref();
+  const runDraftSnapshotPrewarm = (): void => {
+    if (config.nodeEnv === 'test') return;
+    void metaAdapter.prewarmDraftSnapshots().catch((error: unknown) => {
+      app.log.warn(
+        { err: error, code: 'DRAFT_SNAPSHOT_PREWARM_FAILED' },
+        'Draft snapshot prewarm failed',
+      );
+    });
+  };
+  const draftSnapshotPrewarmTimer = config.nodeEnv === 'test'
+    ? null
+    : setInterval(runDraftSnapshotPrewarm, 15 * 60 * 1_000);
+  draftSnapshotPrewarmTimer?.unref();
 
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
@@ -130,6 +179,7 @@ export function buildApp(config: AppConfig = loadConfig()) {
     },
   });
   app.register(helmet, { contentSecurityPolicy: false });
+  app.register(compress, { encodings: ['br', 'gzip', 'deflate'], threshold: 1_024 });
   app.register(rateLimit, { max: 120, timeWindow: '1 minute' });
   app.register(multipart, {
     limits: { files: 1, fields: 0, fileSize: config.maxImageBytes },
@@ -155,7 +205,12 @@ export function buildApp(config: AppConfig = loadConfig()) {
   app.register(adminApiCachePlugin);
   app.register(authPlugin, { config, db });
   app.register(errorPlugin);
-  app.register(healthRoutes(db), { prefix: '/health' });
+  app.register(healthRoutes(
+    db,
+    config.nodeEnv === 'test'
+      ? undefined
+      : () => draftSnapshotRepository.hasReadySnapshot(),
+  ), { prefix: '/health' });
   app.register(authRoutes({ config, authService, quotaService }), { prefix: '/v1/auth' });
   app.register(accountRoutes({
     authService,
@@ -179,11 +234,16 @@ export function buildApp(config: AppConfig = loadConfig()) {
 
   app.addHook('onListen', async () => {
     runDiagnosticsCleanup();
+    runIdempotencyCleanup();
+    runDraftSnapshotPrewarm();
   });
 
   app.addHook('onClose', async () => {
     if (diagnosticsCleanupTimer) clearInterval(diagnosticsCleanupTimer);
     if (diagnosticsCleanupRetryTimer) clearTimeout(diagnosticsCleanupRetryTimer);
+    if (idempotencyCleanupTimer) clearInterval(idempotencyCleanupTimer);
+    if (idempotencyCleanupRetryTimer) clearTimeout(idempotencyCleanupRetryTimer);
+    if (draftSnapshotPrewarmTimer) clearInterval(draftSnapshotPrewarmTimer);
     await pool.end();
   });
 

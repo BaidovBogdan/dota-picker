@@ -270,8 +270,28 @@ export type Analysis = {
   createdAt: string;
 };
 
-export type HistoryPage = {
-  items: Analysis[];
+export type HistorySummary = {
+  id: string;
+  source: Exclude<AnalysisSource, 'desktop'>;
+  input: {
+    position: Position | null;
+    rank?: number | null;
+    enemyHeroIds: number[];
+  } | null;
+  result: {
+    patch: string | null;
+    recommendations: Array<{
+      hero: Hero;
+      score: number;
+      confidence: Confidence;
+    }>;
+  } | null;
+  createdAt: string;
+};
+
+export type HistorySummaryPage = {
+  view: 'summary';
+  items: HistorySummary[];
   nextCursor: string | null;
 };
 
@@ -282,7 +302,11 @@ export type PositionStat = {
   wins: number;
   winRate: number;
   isApproximate: boolean;
-  method: 'lane_role' | 'lane_role_farm_priority';
+  method:
+    | 'lane_role'
+    | 'lane_role_farm_priority'
+    | 'lane_role_scenario'
+    | 'lane_role_scenario_approximation';
 };
 
 export type MetaResponse = {
@@ -412,7 +436,7 @@ export type NativeBridge = {
     history: (input?: {
       cursor?: string | null;
       limit?: number;
-    }) => Promise<HistoryPage | { items: Analysis[]; nextCursor?: string | null }>;
+    }) => Promise<HistorySummaryPage>;
     analysis: (id: string) => Promise<Analysis | { analysis: Analysis }>;
     heroes: () => Promise<Hero[] | { heroes: Hero[] }>;
     meta: (input: { position: Position; rank?: number | null }) => Promise<MetaResponse>;

@@ -1,5 +1,35 @@
 export type RankBracket = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
 
+export type DraftDataPopulationId = 'ranked_all_pick' | 'public_all_pick';
+
+export type DraftDataSource =
+  | 'opendota_public_matches_explorer_positions'
+  | 'opendota_public_matches_lane_roles';
+
+export type DraftDataPopulation = {
+  id: DraftDataPopulationId;
+  version: 1;
+  audience: 'opendota_recent_public_sample';
+  lobbyTypes: number[];
+  gameModes: number[];
+  minimumMatches: number;
+};
+
+export type DraftDataHealth = {
+  snapshotId: string | null;
+  snapshotVersion: 1;
+  source: DraftDataSource;
+  population: DraftDataPopulation;
+  fallbackFrom: DraftDataPopulationId | null;
+  matchCount: number;
+  minimumMatches: number;
+  rankMatchCounts: Partial<Record<RankBracket, number>>;
+  generatedAt: string | null;
+  expiresAt: string | null;
+  availability: 'ready' | 'collecting' | 'unavailable';
+  isStale: boolean;
+};
+
 export type HeroMeta = {
   id: number;
   name: string;
@@ -12,6 +42,11 @@ export type HeroMeta = {
   picks: number;
   wins: number;
   winRate: number;
+  statisticsScope?: 'rank' | 'all_ranks' | undefined;
+};
+
+export type DraftSnapshotHero = HeroMeta & {
+  rankStats: Partial<Record<RankBracket, { picks: number; wins: number }>>;
 };
 
 export type DraftPairStat = {
@@ -26,10 +61,11 @@ export type DraftPairScope = {
   patch: string;
   rank: RankBracket | null;
   rankFilter: 'average_match_rank' | 'all_ranks';
-  window: 'current_patch';
+  window: 'current_patch' | 'rolling_recent_public_matches';
   fetchedAt: string;
   isStale: boolean;
-  availability: 'ready' | 'unavailable';
+  availability: 'ready' | 'collecting' | 'unavailable';
+  dataHealth?: DraftDataHealth | undefined;
 };
 
 export type MetaSnapshot = {
@@ -41,6 +77,7 @@ export type MetaSnapshot = {
   pairScope: DraftPairScope | null;
   matchupBaselineByHero?: Map<number, number>;
   positionMeta?: MetaPositionSnapshot;
+  dataHealth?: DraftDataHealth | undefined;
 };
 
 export type PatchMeta = {
@@ -94,7 +131,11 @@ export type HeroDetail = {
 
 export type HeroPosition = 1 | 2 | 3 | 4 | 5;
 
-export type HeroPositionMethod = 'lane_role' | 'lane_role_farm_priority';
+export type HeroPositionMethod =
+  | 'lane_role'
+  | 'lane_role_farm_priority'
+  | 'lane_role_scenario'
+  | 'lane_role_scenario_approximation';
 
 export type HeroPositionStat = {
   heroId: number;
@@ -112,10 +153,14 @@ export type MetaPositionSnapshot = {
   patch: string;
   rank: RankBracket | null;
   rankFilter: 'average_match_rank' | 'all_ranks';
-  window: 'current_patch_30d';
+  window:
+    | 'current_patch_30d'
+    | 'current_patch_parsed_lane_roles'
+    | 'rolling_lane_role_scenarios';
   minimumGames: number;
   fetchedAt: string;
   isStale: boolean;
   availability: MetaPositionAvailability;
   positionStats: HeroPositionStat[];
+  dataHealth?: DraftDataHealth | undefined;
 };

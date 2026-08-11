@@ -158,6 +158,10 @@ describe('DraftEngine GSI orientation', () => {
           allyGroup,
           source: 'gsi_player_hero',
         });
+        assert.deepEqual(
+          engine.getState().recognition?.recognized.map((pick) => pick.side),
+          allyGroup === 'left' ? ['ally', 'enemy'] : ['enemy', 'ally'],
+        );
       } finally {
         await engine.dispose();
       }
@@ -185,6 +189,10 @@ describe('DraftEngine GSI orientation', () => {
         allyGroup: 'right',
         source: 'manual_confirmation',
       });
+      assert.deepEqual(
+        engine.getState().recognition?.recognized.map((pick) => pick.side),
+        ['enemy', 'ally'],
+      );
 
       emitGsi({ map: { game_state: 'DOTA_GAMERULES_STATE_GAME_IN_PROGRESS' } });
       assert.equal(engine.getState().draftOrientation, null);

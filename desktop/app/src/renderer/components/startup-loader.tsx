@@ -1,23 +1,30 @@
-import { CheckIcon } from '@phosphor-icons/react';
-import type { CSSProperties } from 'react';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
+import startupLoaderVideo from '../assets/startup-loader-ping-pong.webm';
 import { useI18n } from '../i18n';
 import { BrandMark } from './brand-mark';
 
 export type StartupPhase = 'preferences' | 'session' | 'route';
 
 const phaseOrder: StartupPhase[] = ['preferences', 'session', 'route'];
+const startupMediaFallbackMs = 12_000;
 
-export function StartupLoader({ phase }: { phase: StartupPhase }) {
+export function StartupLoader({
+  phase,
+  onCycleComplete,
+}: {
+  phase: StartupPhase;
+  onCycleComplete?: () => void;
+}) {
   const { text } = useI18n();
   const [takingLonger, setTakingLonger] = useState(false);
+  const [mediaState, setMediaState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const cycleCompleteRef = useRef(false);
+  const onCycleCompleteRef = useRef(onCycleComplete);
   const activeIndex = phaseOrder.indexOf(phase);
-  const [visualIndex, setVisualIndex] = useState(() => Math.max(0, activeIndex - 1));
   const stages = [
     {
       key: 'preferences' as const,
-      label: text('Настройки', 'Preferences'),
       title: text('Настраиваем Counterpick', 'Preparing Counterpick'),
       description: text(
         'Применяем сохранённые язык, тему и параметры ассистента.',
@@ -26,7 +33,6 @@ export function StartupLoader({ phase }: { phase: StartupPhase }) {
     },
     {
       key: 'session' as const,
-      label: text('Сессия', 'Session'),
       title: text('Подключаем аккаунт', 'Connecting your account'),
       description: text(
         'Безопасно восстанавливаем сессию и проверяем доступ к анализам.',
@@ -35,7 +41,6 @@ export function StartupLoader({ phase }: { phase: StartupPhase }) {
     },
     {
       key: 'route' as const,
-      label: text('Интерфейс', 'Interface'),
       title: text('Открываем рабочее пространство', 'Opening your workspace'),
       description: text(
         'Подготавливаем выбранный раздел и его интерфейс.',
@@ -44,15 +49,21 @@ export function StartupLoader({ phase }: { phase: StartupPhase }) {
     },
   ];
   const activeStage = stages[activeIndex] ?? stages[0];
-  const stageRailStyle = {
-    '--startup-progress': `${visualIndex / (phaseOrder.length - 1)}`,
-    '--startup-runner-position': `${(visualIndex + 0.5) * (100 / phaseOrder.length)}%`,
-  } as CSSProperties;
+
+  const completeCycle = useCallback(() => {
+    if (cycleCompleteRef.current) return;
+    cycleCompleteRef.current = true;
+    onCycleCompleteRef.current?.();
+  }, []);
 
   useEffect(() => {
-    const frame = window.requestAnimationFrame(() => setVisualIndex(activeIndex));
-    return () => window.cancelAnimationFrame(frame);
-  }, [activeIndex]);
+    onCycleCompleteRef.current = onCycleComplete;
+  }, [onCycleComplete]);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(completeCycle, startupMediaFallbackMs);
+    return () => window.clearTimeout(timeout);
+  }, [completeCycle]);
 
   useEffect(() => {
     setTakingLonger(false);
@@ -75,33 +86,31 @@ export function StartupLoader({ phase }: { phase: StartupPhase }) {
             )}`
           : ''}
       </span>
-      <div className="startup-loader__visual" aria-hidden>
-        <span className="startup-loader__halo" />
-        <span className="startup-loader__orbit" />
-        <span className="startup-loader__mark">
+      <div className={`startup-loader__media startup-loader__media--${mediaState}`} aria-hidden>
+        <span className="startup-loader__media-fallback">
           <BrandMark />
         </span>
+        <video
+          className="startup-loader__video"
+          src={startupLoaderVideo}
+          autoPlay
+          muted
+          playsInline
+          preload="auto"
+          disablePictureInPicture
+          onCanPlay={() => setMediaState('ready')}
+          onEnded={completeCycle}
+          onError={() => {
+            setMediaState('error');
+            completeCycle();
+          }}
+        />
+        <span className="startup-loader__media-shade" />
       </div>
       <div className="startup-loader__copy">
         <span>COUNTERPICK</span>
-        <div className="startup-loader__copy-panels">
-          {stages.map((stage, index) => (
-            <div
-              key={stage.key}
-              className={`startup-loader__copy-panel ${
-                index === activeIndex
-                  ? 'startup-loader__copy-panel--active'
-                  : index < activeIndex
-                    ? 'startup-loader__copy-panel--past'
-                    : 'startup-loader__copy-panel--next'
-              }`}
-              aria-hidden={index !== activeIndex}
-            >
-              <h1 id={`startup-loader-title-${stage.key}`}>{stage.title}</h1>
-              <p id={`startup-loader-description-${stage.key}`}>{stage.description}</p>
-            </div>
-          ))}
-        </div>
+        <h1 id={`startup-loader-title-${activeStage.key}`}>{activeStage.title}</h1>
+        <p id={`startup-loader-description-${activeStage.key}`}>{activeStage.description}</p>
         <small
           className={`startup-loader__delay${takingLonger ? ' startup-loader__delay--visible' : ''}`}
           aria-hidden={!takingLonger}
@@ -112,28 +121,6 @@ export function StartupLoader({ phase }: { phase: StartupPhase }) {
           )}
         </small>
       </div>
-      <ol
-        className="startup-loader__stages"
-        style={stageRailStyle}
-        aria-label={text('Этапы запуска', 'Startup stages')}
-      >
-        <li className="startup-loader__runner" aria-hidden />
-        {stages.map((stage, index) => {
-          const state = index < activeIndex ? 'complete' : index === activeIndex ? 'active' : 'pending';
-          return (
-            <li
-              key={stage.key}
-              className={`startup-loader__stage startup-loader__stage--${state}`}
-              aria-current={state === 'active' ? 'step' : undefined}
-            >
-              <span className="startup-loader__stage-marker" aria-hidden>
-                {state === 'complete' ? <CheckIcon size={15} weight="bold" /> : null}
-              </span>
-              <span>{stage.label}</span>
-            </li>
-          );
-        })}
-      </ol>
     </section>
   );
 }

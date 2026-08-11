@@ -39,7 +39,7 @@ export default function MetaCatalogScreen() {
   const { t } = useTranslation();
   const query = useQuery({
     queryKey: ['meta-snapshot', sessionUserId, rank],
-    queryFn: () => getMetaSnapshot(rank),
+    queryFn: ({ signal }) => getMetaSnapshot(rank, signal),
     enabled: Boolean(sessionUserId),
     staleTime: (currentQuery) => {
       if (isMetaSnapshotIncomplete(currentQuery.state.data)) return 0;

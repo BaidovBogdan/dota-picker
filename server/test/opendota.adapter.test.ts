@@ -42,6 +42,43 @@ afterEach(() => {
 });
 
 describe('OpenDotaAdapter', () => {
+  it('falls back to all-rank hero statistics when a requested rank is sparse', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
+      if (url.endsWith('/heroStats')) {
+        return json([{
+          id: 1,
+          name: 'npc_dota_hero_test',
+          localized_name: 'Test',
+          primary_attr: 'agi',
+          attack_type: 'Ranged',
+          roles: ['Carry'],
+          img: '/test.png',
+          icon: '/test-icon.png',
+          pub_pick: 1_000,
+          pub_win: 520,
+          '7_pick': 29,
+          '7_win': 22,
+        }]);
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const adapter = new OpenDotaAdapter(config);
+
+    await expect(adapter.getHeroes(7)).resolves.toEqual([
+      expect.objectContaining({
+        picks: 1_000,
+        wins: 520,
+        statisticsScope: 'all_ranks',
+      }),
+    ]);
+  });
+
   it('loads current-patch matchup and synergy rows with split indexed branches and caches the snapshot', async () => {
     const requestedSql: string[] = [];
     const requestedUrls: string[] = [];

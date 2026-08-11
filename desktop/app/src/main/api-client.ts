@@ -3,7 +3,7 @@ import type {
   Account,
   Analysis,
   BillingStatus,
-  HistoryPage,
+  HistorySummaryPage,
   Hero,
   OtpChallenge,
   Position,
@@ -20,7 +20,7 @@ import {
   billingResponseSchema,
   desktopAnalysisResponseSchema,
   heroSchema,
-  historyResponseSchema,
+  historySummaryResponseSchema,
   otpChallengeSchema,
   quotaSchema,
 } from './api-schemas.js';
@@ -240,12 +240,16 @@ export class ApiClient {
     }
   }
 
-  async history(input?: { cursor?: string | null; limit?: number }): Promise<HistoryPage> {
+  async history(input?: { cursor?: string | null; limit?: number }): Promise<HistorySummaryPage> {
     const query = new URLSearchParams();
     if (input?.cursor) query.set('cursor', input.cursor);
     if (input?.limit) query.set('limit', String(input.limit));
+    query.set('view', 'summary');
     const suffix = query.size ? `?${query}` : '';
-    return this.request(`analyses/history${suffix}`, historyResponseSchema) as Promise<HistoryPage>;
+    return this.request(
+      `analyses/history${suffix}`,
+      historySummaryResponseSchema,
+    ) as Promise<HistorySummaryPage>;
   }
 
   async analysis(id: string): Promise<{ analysis: Analysis }> {

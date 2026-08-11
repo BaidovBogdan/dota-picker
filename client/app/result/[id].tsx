@@ -2,7 +2,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { useQuery } from '@tanstack/react-query';
 import { Image } from 'expo-image';
 import { type Href, router, Stack, useLocalSearchParams } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Platform, Pressable, View } from 'react-native';
 
 import { MessageState } from '@/components/feedback/states';
@@ -17,6 +17,8 @@ import { heroById } from '@/data/heroes';
 import { useDraftAccessGuard } from '@/hooks/use-draft-access';
 import { localizeStoredText, useTranslation } from '@/i18n';
 import { nativeHeaderOptions } from '@/navigation/native-header';
+import { getServerAnalysis } from '@/services/api/dota';
+import { isSummaryHistoryRecord } from '@/services/history-records';
 import { getAnalysisReview } from '@/services/api/reviews';
 import { useAppStore } from '@/store/app-store';
 import { shape } from '@/theme/tokens';
@@ -32,23 +34,46 @@ const recommendationLabelKey = (label: string) => {
 
 export default function ResultScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const result = useAppStore((state) => state.history.find((item) => item.id === id));
+  const storedResult = useAppStore((state) => state.history.find((item) => item.id === id));
   const sessionUserId = useAppStore((state) => state.session?.userId);
   const resetDraft = useAppStore((state) => state.resetDraft);
   const isRemoteBootstrapPending = useAppStore((state) => state.isRemoteBootstrapPending);
   const draftAccess = useDraftAccessGuard();
   const { colors } = useAppTheme();
   const { t, locale } = useTranslation();
-  const analysisId = result?.serverId ?? result?.id ?? id;
+  const analysisId = storedResult?.serverId ?? storedResult?.id ?? id;
+  const needsDetail = isSummaryHistoryRecord(storedResult);
+  const detailQuery = useQuery({
+    queryKey: ['analysis-detail', sessionUserId, analysisId],
+    queryFn: ({ signal }) => getServerAnalysis(analysisId, signal),
+    enabled: Boolean(sessionUserId && needsDetail),
+    retry: 1,
+  });
+  const result = detailQuery.data ?? storedResult;
+  const isLoadingDetail = Boolean(
+    needsDetail && sessionUserId && !detailQuery.data && detailQuery.isPending,
+  );
+  const detailLoadFailed = Boolean(
+    needsDetail && sessionUserId && !detailQuery.data && detailQuery.isError,
+  );
+
+  useEffect(() => {
+    if (!detailQuery.data || !sessionUserId) return;
+    const store = useAppStore.getState();
+    if (store.session?.userId === sessionUserId) store.mergeHistory([detailQuery.data]);
+  }, [detailQuery.data, sessionUserId]);
+
   const reviewQuery = useQuery({
     queryKey: ['review', sessionUserId, analysisId],
     queryFn: () => getAnalysisReview(analysisId),
-    enabled: Boolean(sessionUserId && result?.source === 'server'),
+    enabled: Boolean(
+      sessionUserId && result?.source === 'server' && !isSummaryHistoryRecord(result),
+    ),
   });
   const showFeedbackAction =
     result?.source === 'server' && !reviewQuery.isPending && reviewQuery.data == null;
 
-  if (!result) {
+  if (!result || (needsDetail && !detailQuery.data && !sessionUserId)) {
     return (
       <>
         <Stack.Screen
@@ -70,6 +95,56 @@ export default function ResultScreen() {
                   actionLabel: t('nav.draft'),
                   onAction: () => router.replace('/(tabs)' as const),
                 })}
+          />
+        </Screen>
+      </>
+    );
+  }
+
+  if (isLoadingDetail) {
+    return (
+      <>
+        <Stack.Screen
+          options={{
+            ...nativeHeaderOptions(colors),
+            title: t('result.title'),
+            headerLargeTitleEnabled: false,
+            headerBackButtonDisplayMode: 'minimal',
+          }}
+        />
+        <Screen nativeHeader>
+          <MessageState
+            title={t('result.syncing')}
+            message={t('common.loading')}
+            icon="sync-outline"
+          />
+        </Screen>
+      </>
+    );
+  }
+
+  if (detailLoadFailed) {
+    return (
+      <>
+        <Stack.Screen
+          options={{
+            ...nativeHeaderOptions(colors),
+            title: t('result.title'),
+            headerLargeTitleEnabled: false,
+            headerBackButtonDisplayMode: 'minimal',
+          }}
+        />
+        <Screen nativeHeader>
+          <MessageState
+            title={t('errors.network')}
+            message={
+              detailQuery.error instanceof Error ? detailQuery.error.message : t('errors.network')
+            }
+            icon="cloud-offline-outline"
+            actionLabel={t('common.retry')}
+            onAction={() => {
+              void detailQuery.refetch();
+            }}
           />
         </Screen>
       </>
@@ -439,8 +514,14 @@ const evidenceSourceLabel = (source: string, t: Translator) => {
   if (source === 'opendota_current_patch_rank_pairs') return t('result.source.patchRank');
   if (source === 'opendota_current_patch_all_ranks_pairs')
     return t('result.source.currentPatchAllRanks');
+  if (source === 'opendota_recent_public_rank_pairs') return t('result.source.recentRank');
+  if (source === 'opendota_recent_public_all_ranks_pairs')
+    return t('result.source.recentAllRanks');
   if (source === 'team_composition_only') return t('result.source.teamComposition');
   if (source === 'opendota_current_patch_30d_position') return t('result.source.currentPatch');
+  if (source === 'opendota_current_patch_parsed_position') return t('result.source.currentPatch');
+  if (source === 'opendota_rolling_lane_role_scenarios')
+    return t('result.source.rollingPositions');
   if (source === 'opendota_rank_hero_stats') return t('result.source.rank');
   if (source === 'opendota_rolling_all_ranks' || source === 'opendota_public_hero_stats')
     return t('result.source.allRanks');

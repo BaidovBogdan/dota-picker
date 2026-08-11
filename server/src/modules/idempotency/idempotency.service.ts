@@ -4,11 +4,15 @@ import { idempotencyRecords } from '../../db/schema.js';
 import { createOpaqueToken, sha256, stableStringify } from '../../lib/crypto.js';
 import { ConflictError } from '../../lib/errors.js';
 
+const cleanupBatchLimit = 500;
+
 export type IdempotencyClaim =
   | { kind: 'acquired'; id: string; leaseToken: string; resourceId: string | null }
   | { kind: 'completed'; response: Record<string, unknown> };
 
 export class IdempotencyService {
+  private cleanupPromise: Promise<boolean> | null = null;
+
   public constructor(
     private readonly db: Database,
     private readonly ttlMs: number,
@@ -22,42 +26,65 @@ export class IdempotencyService {
     request: unknown,
   ): Promise<IdempotencyClaim> {
     const now = new Date();
-    await this.db.delete(idempotencyRecords).where(and(
-      eq(idempotencyRecords.accountId, accountId),
-      eq(idempotencyRecords.endpoint, endpoint),
-      eq(idempotencyRecords.key, key),
-      lte(idempotencyRecords.expiresAt, now),
-    ));
-
     const requestHash = sha256(stableStringify(request));
     const leaseToken = createOpaqueToken();
-    const [record] = await this.db
-      .insert(idempotencyRecords)
-      .values({
-        accountId,
-        endpoint,
-        key,
-        requestHash,
-        leaseToken,
-        leaseExpiresAt: new Date(now.getTime() + this.leaseMs),
-        expiresAt: new Date(now.getTime() + this.ttlMs),
-      })
-      .onConflictDoNothing({
-        target: [idempotencyRecords.accountId, idempotencyRecords.endpoint, idempotencyRecords.key],
-      })
-      .returning({ id: idempotencyRecords.id, resourceId: idempotencyRecords.resourceId });
+    const createRecord = async (token: string) => {
+      const [record] = await this.db
+        .insert(idempotencyRecords)
+        .values({
+          accountId,
+          endpoint,
+          key,
+          requestHash,
+          leaseToken: token,
+          leaseExpiresAt: new Date(now.getTime() + this.leaseMs),
+          expiresAt: new Date(now.getTime() + this.ttlMs),
+        })
+        .onConflictDoNothing({
+          target: [idempotencyRecords.accountId, idempotencyRecords.endpoint, idempotencyRecords.key],
+        })
+        .returning({ id: idempotencyRecords.id, resourceId: idempotencyRecords.resourceId });
+      return record;
+    };
+    const record = await createRecord(leaseToken);
 
     if (record) {
       return { kind: 'acquired', id: record.id, leaseToken, resourceId: record.resourceId };
     }
 
-    const [existing] = await this.db.select().from(idempotencyRecords).where(and(
+    let [existing] = await this.db.select().from(idempotencyRecords).where(and(
       eq(idempotencyRecords.accountId, accountId),
       eq(idempotencyRecords.endpoint, endpoint),
       eq(idempotencyRecords.key, key),
     )).limit(1);
     if (!existing) {
       throw new ConflictError('REQUEST_IN_PROGRESS', 'The request state changed; retry shortly');
+    }
+    if (existing.expiresAt.getTime() <= now.getTime()) {
+      const [deleted] = await this.db.delete(idempotencyRecords).where(and(
+        eq(idempotencyRecords.id, existing.id),
+        lte(idempotencyRecords.expiresAt, now),
+      )).returning({ id: idempotencyRecords.id });
+      if (deleted) {
+        const retryLeaseToken = createOpaqueToken();
+        const retried = await createRecord(retryLeaseToken);
+        if (retried) {
+          return {
+            kind: 'acquired',
+            id: retried.id,
+            leaseToken: retryLeaseToken,
+            resourceId: retried.resourceId,
+          };
+        }
+      }
+      [existing] = await this.db.select().from(idempotencyRecords).where(and(
+        eq(idempotencyRecords.accountId, accountId),
+        eq(idempotencyRecords.endpoint, endpoint),
+        eq(idempotencyRecords.key, key),
+      )).limit(1);
+      if (!existing) {
+        throw new ConflictError('REQUEST_IN_PROGRESS', 'The request state changed; retry shortly');
+      }
     }
     if (existing.requestHash !== requestHash) {
       throw new ConflictError('IDEMPOTENCY_KEY_REUSED', 'Idempotency key was already used with a different request');
@@ -123,11 +150,40 @@ export class IdempotencyService {
     return result?.value ?? 0;
   }
 
+  public pruneExpired(now = new Date()): Promise<boolean> {
+    if (this.cleanupPromise) return this.cleanupPromise;
+    const operation = this.deleteExpired(now).finally(() => {
+      if (this.cleanupPromise === operation) this.cleanupPromise = null;
+    });
+    this.cleanupPromise = operation;
+    return operation;
+  }
+
   public async abort(id: string, leaseToken: string): Promise<void> {
     await this.db.delete(idempotencyRecords).where(and(
       eq(idempotencyRecords.id, id),
       eq(idempotencyRecords.leaseToken, leaseToken),
       eq(idempotencyRecords.status, 'in_progress'),
     ));
+  }
+
+  private async deleteExpired(now: Date): Promise<boolean> {
+    const result = await this.db.execute(sql`
+      with expired as (
+        select ${idempotencyRecords.id}
+        from ${idempotencyRecords}
+        where ${idempotencyRecords.expiresAt} <= ${now}
+        order by ${idempotencyRecords.expiresAt}, ${idempotencyRecords.id}
+        limit ${cleanupBatchLimit}
+      ), deleted as (
+        delete from ${idempotencyRecords}
+        using expired
+        where ${idempotencyRecords.id} = expired.id
+        returning ${idempotencyRecords.id}
+      )
+      select count(*)::int as deleted_count from deleted
+    `);
+    const deletedCount = Number(result.rows[0]?.deleted_count ?? 0);
+    return deletedCount === cleanupBatchLimit;
   }
 }

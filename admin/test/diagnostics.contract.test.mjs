@@ -76,7 +76,7 @@ test('older diagnostic pages are merged once and kept chronological', async () =
 test('diagnostic detail pagination follows the server keyset cursor', async () => {
   const app = await readFile(appUrl, 'utf8');
 
-  assert.match(app, /\{ limit: 500, beforeSequence \}/);
+  assert.match(app, /\{ limit: 200, beforeSequence \}/);
   assert.match(app, /pagination\.nextBeforeSequence/);
   assert.match(app, /beforeSequence !== undefined/);
   assert.match(app, /total: current\.pagination\.total/);

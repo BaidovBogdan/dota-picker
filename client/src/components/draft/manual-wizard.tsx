@@ -93,7 +93,7 @@ function useHeroesQuery() {
   const sessionUserId = useAppStore((state) => state.session?.userId);
   return useQuery({
     queryKey: ['heroes', sessionUserId],
-    queryFn: getHeroes,
+    queryFn: ({ signal }) => getHeroes(signal),
     staleTime: 30 * 60 * 1000,
   });
 }

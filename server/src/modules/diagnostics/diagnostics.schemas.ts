@@ -236,7 +236,7 @@ export const adminDiagnosticsQuerySchema = z.object({
 });
 
 export const adminDiagnosticsDetailQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(1_000).default(500),
+  limit: z.coerce.number().int().min(1).max(250).default(100),
   beforeSequence: z.coerce.number().int().min(1).max(100_000).optional(),
 });
 

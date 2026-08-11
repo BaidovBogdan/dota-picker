@@ -62,11 +62,16 @@ function recommendations(analysis: AdminAnalysis) {
   return analysis.result?.recommendations ?? [];
 }
 
-function accountLabel(analysis: AdminAnalysis) {
+type AnalysisIdentity = Pick<
+  AdminAnalysis,
+  'account' | 'status' | 'revision' | 'durationMs' | 'durationKind'
+>;
+
+function accountLabel(analysis: Pick<AdminAnalysis, 'account'>) {
   return analysis.account.email ?? `Гость ${analysis.account.id.slice(0, 8)}`;
 }
 
-function durationLabel(analysis: AdminAnalysis) {
+function durationLabel(analysis: AnalysisIdentity) {
   if (analysis.durationKind === 'in_progress') return 'В процессе';
   const value = formatDuration(analysis.durationMs);
   return analysis.durationKind === 'session_to_latest_revision'
@@ -74,7 +79,7 @@ function durationLabel(analysis: AdminAnalysis) {
     : `${analysis.status === 'failed' ? 'До ошибки' : 'До результата'}: ${value}`;
 }
 
-function durationTitle(analysis: AdminAnalysis) {
+function durationTitle(analysis: AnalysisIdentity) {
   if (analysis.durationKind === 'session_to_latest_revision') return 'От создания до последней ревизии';
   if (analysis.durationKind === 'in_progress') return 'Состояние';
   return analysis.status === 'failed' ? 'От создания до ошибки' : 'От создания до результата';
@@ -139,16 +144,24 @@ function RecommendationCard({ recommendation }: { recommendation: AdminAnalysisR
 
 export function AnalysesPage({
   resource,
+  detailResource,
   heroCatalog,
   initialQuery,
+  selectedId,
+  onSelect,
   onRetry,
+  onDetailRetry,
   onHeroCatalogRetry,
   onQueryChange,
 }: {
   resource: PageResource<AdminAnalysesResponse>;
+  detailResource: PageResource<AdminAnalysis>;
   heroCatalog: PageResource<HeroCatalogResponse>;
   initialQuery: AdminAnalysesQuery;
+  selectedId: string | null;
+  onSelect: (analysisId: string | null) => void;
   onRetry: () => void;
+  onDetailRetry: () => void;
   onHeroCatalogRetry: () => void;
   onQueryChange: (query: AdminAnalysesQuery) => void;
 }) {
@@ -156,7 +169,6 @@ export function AnalysesPage({
   const [status, setStatus] = useState<'all' | AnalysisStatus>(() => initialQuery.status ?? 'all');
   const [source, setSource] = useState<'all' | AnalysisSource>(() => initialQuery.source ?? 'all');
   const [page, setPage] = useState(() => Math.floor(initialQuery.offset / pageSize) + 1);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const debouncedQuery = useDebouncedValue(query.trim(), 280);
   const items = resource.data?.items ?? [];
   const total = resource.data?.pagination.total ?? 0;
@@ -181,10 +193,10 @@ export function AnalysesPage({
     if (page > pages) setPage(pages);
   }, [page, pages]);
   useEffect(() => {
-    if (selectedId && !items.some((analysis) => analysis.id === selectedId)) setSelectedId(null);
-  }, [items, selectedId]);
+    if (selectedId && !items.some((analysis) => analysis.id === selectedId)) onSelect(null);
+  }, [items, onSelect, selectedId]);
 
-  const selected = items.find((analysis) => analysis.id === selectedId) ?? null;
+  const selected = detailResource.data?.id === selectedId ? detailResource.data : null;
   const clearScope = () => {
     setPage(1);
     onQueryChange({
@@ -228,18 +240,17 @@ export function AnalysesPage({
               <thead><tr><th>ID</th><th>Пользователь</th><th>Статус</th><th>Источник</th><th>Результат</th><th>Патч</th><th>Период записи</th><th>Создана</th><th><span className="sr-only">Открыть</span></th></tr></thead>
               <tbody>
                 {items.map((analysis) => {
-                  const result = recommendations(analysis);
                   return (
-                    <tr key={analysis.id} onClick={() => setSelectedId(analysis.id)}>
+                    <tr key={analysis.id} onClick={() => onSelect(analysis.id)}>
                       <td><code className="table-id">{analysis.id.slice(0, 8)}</code><small className="table-subvalue">rev {analysis.revision}</small></td>
                       <td><strong>{accountLabel(analysis)}</strong></td>
                       <td><StatusBadge tone={statusTone[analysis.status]}>{statusLabel[analysis.status]}</StatusBadge></td>
                       <td><span className="source-label">{analysis.source === 'photo' ? <Camera size={14} /> : analysis.source === 'overwolf' ? <RadioTower size={14} /> : <MousePointer2 size={14} />}{formatAnalysisSource(analysis.source)}</span></td>
-                      <td>{analysis.errorCode ? <code className="error-code">{analysis.errorCode}</code> : analysis.dataQuality.result === 'legacy_invalid' ? <code className="error-code">LEGACY_PAYLOAD</code> : result.length ? <div className="analysis-table-heroes">{result.map(({ hero }) => <span key={hero.id}><img src={hero.iconUrl} alt="" loading="lazy" />{hero.localizedName}</span>)}</div> : '—'}</td>
+                      <td>{analysis.errorCode ? <code className="error-code">{analysis.errorCode}</code> : analysis.recommendationHeroIds.length ? <div className="analysis-table-heroes">{analysis.recommendationHeroIds.map((heroId) => { const hero = heroById.get(heroId); return <span key={heroId}>{hero ? <img src={hero.iconUrl} alt="" loading="lazy" /> : null}{hero?.localizedName ?? `#${heroId}`}</span>; })}</div> : analysis.hasResult ? <code className="error-code">LEGACY_PAYLOAD</code> : '—'}</td>
                       <td>{analysis.patch ?? '—'}</td>
                       <td><span className="table-date">{durationLabel(analysis)}</span></td>
                       <td><span className="table-date">{formatRelativeTime(analysis.createdAt)}</span></td>
-                      <td onClick={(event) => event.stopPropagation()}><TableRowButton label={`Открыть ${analysis.id}`} onClick={() => setSelectedId(analysis.id)} /></td>
+                      <td onClick={(event) => event.stopPropagation()}><TableRowButton label={`Открыть ${analysis.id}`} onClick={() => onSelect(analysis.id)} /></td>
                     </tr>
                   );
                 })}
@@ -251,7 +262,9 @@ export function AnalysesPage({
         <footer className="table-footer"><span>{total ? `${resource.data.pagination.offset + 1}–${resource.data.pagination.offset + items.length} из ${total}` : '0 записей'}</span><div><IconButton label="Предыдущая страница" disabled={currentPage === 1} onClick={() => setPage((value) => Math.max(1, value - 1))}><ChevronLeft size={17} /></IconButton><span>{currentPage} / {pages}</span><IconButton label="Следующая страница" disabled={currentPage === pages} onClick={() => setPage((value) => Math.min(pages, value + 1))}><ChevronRight size={17} /></IconButton></div></footer>
       </Panel>
 
-      <Drawer open={Boolean(selected)} title={selected ? `Проверка ${selected.id.slice(0, 8)}` : 'Проверка'} eyebrow={selected?.id} onClose={() => setSelectedId(null)}>
+      <Drawer open={Boolean(selectedId)} title={selected ? `Проверка ${selected.id.slice(0, 8)}` : selectedId ? `Проверка ${selectedId.slice(0, 8)}` : 'Проверка'} eyebrow={selected?.id ?? selectedId ?? undefined} onClose={() => onSelect(null)}>
+        {detailResource.loading && !selected ? <div className="analysis-drawer" aria-busy="true"><div className="page-skeleton page-skeleton--heading" /><div className="page-skeleton page-skeleton--panel" /></div> : null}
+        {detailResource.error && !selected ? <div className="analysis-drawer"><EmptyState title="Проверка недоступна" text={detailResource.error} action={<Button onClick={onDetailRetry}>Повторить</Button>} /></div> : null}
         {selected ? (
           <div className="analysis-drawer">
             <div className="analysis-outcome"><span>{selected.status === 'completed' ? '✓' : selected.status === 'failed' ? '!' : '…'}</span><div><small>{statusLabel[selected.status]}</small><strong>{selected.errorCode ?? (recommendations(selected).map(({ hero }) => hero.localizedName).join(', ') || 'Результат формируется')}</strong><p>{accountLabel(selected)} · {formatDateTime(selected.createdAt)}</p></div></div>

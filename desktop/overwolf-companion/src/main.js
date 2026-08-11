@@ -12,6 +12,7 @@ import {
   parsePairingUrl,
   reduceConnectionPhase,
   resetMatchState,
+  snapshotFingerprint,
   supportsRequiredFeatures,
   unwrapInfoResult,
 } from './protocol.js';
@@ -24,6 +25,7 @@ const reconnectBackoff = new ReconnectBackoff();
 let connectionPhase = 'unpaired';
 let socket = null;
 let sequence = 0;
+let lastSnapshotFingerprint = null;
 let reconnectTimer = null;
 let heartbeatTimer = null;
 let pairing = null;
@@ -123,9 +125,24 @@ function sendDiagnostic(level, code, message) {
 }
 
 function sendSnapshot() {
-  if (connectionPhase !== 'connected') return;
-  send(buildSnapshot(dotaState, ++sequence));
+  if (connectionPhase !== 'connected') {
+    render();
+    return false;
+  }
+  const snapshot = buildSnapshot(dotaState, sequence + 1);
+  const fingerprint = snapshotFingerprint(snapshot);
+  if (fingerprint === lastSnapshotFingerprint) {
+    render();
+    return false;
+  }
+  if (!send(snapshot)) {
+    render();
+    return false;
+  }
+  sequence += 1;
+  lastSnapshotFingerprint = fingerprint;
   render();
+  return true;
 }
 
 function startHeartbeat(intervalMs = 5000) {
@@ -185,6 +202,7 @@ function connect() {
     if (message?.version !== PROTOCOL_VERSION || message.type !== 'hello-ack') return;
     reconnectBackoff.reset();
     sequence = 0;
+    lastSnapshotFingerprint = null;
     setConnectionEvent('ack');
     startHeartbeat(Number.isInteger(message.heartbeatIntervalMs) ? message.heartbeatIntervalMs : 5000);
     sendDiagnostic('info', 'BRIDGE_CONNECTED', 'Authenticated local bridge connected');

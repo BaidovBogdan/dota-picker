@@ -2,9 +2,29 @@ import { z } from 'zod';
 import type { AppConfig } from '../../config/env.js';
 import { ExternalServiceError, NotFoundError } from '../../lib/errors.js';
 import { TtlCache } from './cache.js';
+import {
+  draftDataPopulations,
+  fallbackDraftDataPopulation,
+  primaryDraftDataPopulation,
+  type DraftSnapshotPairRow,
+  type DraftSnapshotPositionRow,
+  type DraftSnapshotRepository,
+  type StoredDraftSnapshot,
+} from './draft-snapshot.repository.js';
+import {
+  DRAFT_PAIR_WINDOW,
+  DRAFT_PRIMARY_POSITION_WINDOW,
+  DRAFT_POSITION_WINDOW,
+  DRAFT_SNAPSHOT_PRIMARY_SOURCE,
+  OpenDotaDraftSnapshotSource,
+} from './draft-snapshot-source.js';
 import type {
+  DraftDataHealth,
+  DraftDataPopulation,
+  DraftDataPopulationId,
   DraftPairScope,
   DraftPairStat,
+  DraftSnapshotHero,
   HeroBuildItem,
   HeroBuildVariant,
   HeroDetail,
@@ -38,6 +58,14 @@ const PAIR_CACHE_STALE_MS = 24 * 60 * 60 * 1_000;
 const PAIR_CACHE_MAX_ENTRIES = 256;
 const PAIR_FOREGROUND_WAIT_MS = 1_500;
 const PAIR_QUERY_TIMEOUT_MS = 5_000;
+const DRAFT_SNAPSHOT_FRESH_MS = 90 * 60 * 1_000;
+const DRAFT_SNAPSHOT_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
+const DRAFT_SNAPSHOT_RETRY_MS = 60 * 1_000;
+const DRAFT_SNAPSHOT_INSUFFICIENT_RETRY_MS = 90 * 60 * 1_000;
+const DRAFT_SNAPSHOT_BUILD_LEASE_MS = 5 * 60 * 1_000;
+const DRAFT_SNAPSHOT_MIN_RANK_POSITION_MATCHES = 50;
+const DRAFT_SNAPSHOT_MIN_RANK_HERO_GAMES = 30;
+const DRAFT_SNAPSHOT_MEMORY_MAX_ENTRIES = 256;
 const BUILD_SAMPLE_LIMIT = 400;
 const BUILD_TUPLE_SIZE = 3;
 const BUILD_ITEM_LIMIT = 6;
@@ -188,6 +216,19 @@ type DraftPairCacheEntry = {
 
 type DraftPairRelation = 'matchup' | 'synergy';
 
+type PersistedSnapshotResolution =
+  | {
+      kind: 'ready';
+      snapshot: StoredDraftSnapshot;
+      fallbackFrom: DraftDataPopulationId | null;
+    }
+  | {
+      kind: 'not_ready';
+      availability: 'collecting' | 'unavailable';
+    };
+
+type PersistedSnapshotPurpose = 'draft' | 'positions' | 'metadata';
+
 export type OpenDotaDiagnostic = {
   operation: 'hero-detail-refresh';
   heroId: number;
@@ -208,10 +249,16 @@ export class OpenDotaAdapter {
   private readonly positionPending = new Map<string, Promise<MetaPositionSnapshot>>();
   private readonly pairCache = new Map<string, DraftPairCacheEntry>();
   private readonly pairPending = new Map<string, Promise<void>>();
+  private readonly persistedSnapshotMemory = new Map<string, StoredDraftSnapshot>();
+  private readonly draftSnapshotSource: OpenDotaDraftSnapshotSource;
+  private readonly persistedSnapshotPrewarm = new Map<DraftDataPopulationId, Promise<void>>();
+  private readonly persistedSnapshotRetryAfter = new Map<DraftDataPopulationId, number>();
+  private persistedSnapshotPrewarmRun: Promise<void> | undefined;
 
   public constructor(
     private readonly config: AppConfig['openDota'],
     private readonly reportDiagnostic?: (diagnostic: OpenDotaDiagnostic) => void,
+    private readonly draftSnapshots?: DraftSnapshotRepository,
   ) {
     this.heroesCache = new TtlCache(config.cacheTtlMs, config.cacheStaleMs);
     this.patchCache = new TtlCache(config.cacheTtlMs, config.cacheStaleMs);
@@ -219,14 +266,40 @@ export class OpenDotaAdapter {
       Math.max(config.cacheTtlMs, ITEMS_CACHE_FRESH_MS),
       Math.max(config.cacheStaleMs, ITEMS_CACHE_STALE_MS),
     );
+    this.draftSnapshotSource = new OpenDotaDraftSnapshotSource(config);
   }
 
   public async getHeroes(rank?: RankBracket): Promise<HeroMeta[]> {
+    if (this.draftSnapshots) {
+      const resolved = await this.resolvePersistedSnapshot(undefined, rank, [], [], 'metadata');
+      if (resolved.kind === 'ready') {
+        return resolved.snapshot.heroes.map((hero) => this.toPersistedHeroMeta(hero, rank));
+      }
+    }
+    return this.getRemoteHeroes(rank);
+  }
+
+  private async getRemoteHeroes(rank?: RankBracket): Promise<HeroMeta[]> {
     const raw = await this.getRawHeroes();
     return raw.map((hero) => this.toHeroMeta(hero, rank));
   }
 
+  private async getRemoteSnapshotHeroes(): Promise<DraftSnapshotHero[]> {
+    const raw = await this.getRawHeroes();
+    return raw.map((hero) => this.toDraftSnapshotHero(hero));
+  }
+
   public async getPatch(): Promise<string> {
+    if (this.draftSnapshots) {
+      const resolved = await this.resolvePersistedSnapshot(
+        undefined,
+        undefined,
+        [],
+        [],
+        'metadata',
+      );
+      if (resolved.kind === 'ready') return resolved.snapshot.patch;
+    }
     return (await this.getPatchInfo()).name;
   }
 
@@ -412,6 +485,13 @@ export class OpenDotaAdapter {
   }
 
   public async getMetaPositionSnapshot(rank?: RankBracket): Promise<MetaPositionSnapshot> {
+    if (this.draftSnapshots) {
+      return this.getPersistedMetaPositionSnapshot(rank);
+    }
+    return this.getExplorerMetaPositionSnapshot(rank);
+  }
+
+  private async getExplorerMetaPositionSnapshot(rank?: RankBracket): Promise<MetaPositionSnapshot> {
     const patch = await this.getPatchInfo();
     const key = `${patch.name}:${rank ?? 'all'}`;
     const now = Date.now();
@@ -478,6 +558,59 @@ export class OpenDotaAdapter {
     allyIds: number[] = [],
     prefetchedHeroes?: HeroMeta[],
   ): Promise<MetaSnapshot> {
+    if (this.draftSnapshots) {
+      return this.getPersistedSnapshot(rank, enemyIds, allyIds, prefetchedHeroes);
+    }
+    return this.getExplorerSnapshot(rank, enemyIds, allyIds, prefetchedHeroes);
+  }
+
+  public async prewarmDraftSnapshots(): Promise<void> {
+    if (!this.draftSnapshots) {
+      return;
+    }
+    if (this.persistedSnapshotPrewarmRun) {
+      return this.persistedSnapshotPrewarmRun;
+    }
+    const request = this.runDraftSnapshotPrewarm()
+      .finally(() => {
+        this.persistedSnapshotPrewarmRun = undefined;
+      });
+    this.persistedSnapshotPrewarmRun = request;
+    return request;
+  }
+
+  private async runDraftSnapshotPrewarm(): Promise<void> {
+    if (!this.draftSnapshots) {
+      return;
+    }
+    const patch = await this.getPatchInfo();
+    let heroesRequest: Promise<DraftSnapshotHero[]> | undefined;
+    const loadHeroes = (): Promise<DraftSnapshotHero[]> => {
+      heroesRequest ??= this.getRemoteSnapshotHeroes();
+      return heroesRequest;
+    };
+    const results = await Promise.allSettled(
+      Object.values(draftDataPopulations).map((population) => (
+        this.prewarmDraftPopulation(patch, population, loadHeroes)
+      )),
+    );
+    await this.draftSnapshots.prune(
+      new Date(Date.now() - DRAFT_SNAPSHOT_RETENTION_MS),
+    );
+    const failed = results.find(
+      (result): result is PromiseRejectedResult => result.status === 'rejected',
+    );
+    if (failed) {
+      throw failed.reason;
+    }
+  }
+
+  private async getExplorerSnapshot(
+    rank: RankBracket | undefined,
+    enemyIds: number[],
+    allyIds: number[] = [],
+    prefetchedHeroes?: HeroMeta[],
+  ): Promise<MetaSnapshot> {
     const fetchedAt = new Date().toISOString();
     const patchRequest = this.getPatchInfo().catch(() => undefined);
     const pairRequest = patchRequest.then((patch) =>
@@ -508,7 +641,572 @@ export class OpenDotaAdapter {
     };
   }
 
+  private async getPersistedSnapshot(
+    rank: RankBracket | undefined,
+    enemyIds: number[],
+    allyIds: number[] = [],
+    prefetchedHeroes?: HeroMeta[],
+  ): Promise<MetaSnapshot> {
+    const fetchedAt = new Date().toISOString();
+    const resolved = await this.resolvePersistedSnapshot(
+      undefined,
+      rank,
+      enemyIds,
+      allyIds,
+      'draft',
+    );
+    if (resolved.kind === 'not_ready') {
+      if (resolved.availability === 'collecting') {
+        void this.prewarmDraftSnapshots().catch(() => undefined);
+      }
+      const dataHealth = this.createUnavailableDataHealth(resolved.availability);
+      return {
+        heroes: [],
+        patch: 'unknown patch',
+        fetchedAt,
+        matchupByEnemy: new Map(),
+        synergyByAlly: new Map(),
+        pairScope: {
+          ...this.emptyDraftPairSnapshot(
+            'unknown patch',
+            rank,
+            resolved.availability,
+          ).scope,
+          dataHealth,
+        },
+        matchupBaselineByHero: new Map(),
+        positionMeta: this.createCollectingPersistedPositionSnapshot(
+          'unknown patch',
+          rank,
+          dataHealth,
+        ),
+        dataHealth,
+      };
+    }
+
+    const dataHealth = this.createPersistedDataHealth(
+      resolved.snapshot,
+      resolved.fallbackFrom,
+      'ready',
+    );
+    const pairSnapshot = this.toPersistedDraftPairSnapshot(
+      resolved.snapshot,
+      rank,
+      enemyIds,
+      allyIds,
+      dataHealth,
+    );
+    const positionMeta = this.toPersistedPositionSnapshot(
+      resolved.snapshot,
+      rank,
+      dataHealth,
+    );
+    if (positionMeta.availability !== 'ready') {
+      return {
+        heroes: resolved.snapshot.heroes.map((hero) => this.toPersistedHeroMeta(hero, rank)),
+        patch: resolved.snapshot.patch,
+        fetchedAt,
+        matchupByEnemy: pairSnapshot.matchupByEnemy,
+        synergyByAlly: pairSnapshot.synergyByAlly,
+        pairScope: pairSnapshot.scope,
+        matchupBaselineByHero: new Map(),
+        positionMeta,
+        dataHealth,
+      };
+    }
+    const heroes = prefetchedHeroes ?? resolved.snapshot.heroes.map(
+      (hero) => this.toPersistedHeroMeta(hero, rank),
+    );
+    return {
+      heroes,
+      patch: resolved.snapshot.patch,
+      fetchedAt,
+      matchupByEnemy: pairSnapshot.matchupByEnemy,
+      synergyByAlly: pairSnapshot.synergyByAlly,
+      pairScope: pairSnapshot.scope,
+      matchupBaselineByHero: new Map(heroes.map((hero) => [hero.id, hero.winRate])),
+      positionMeta,
+      dataHealth,
+    };
+  }
+
+  private async getPersistedMetaPositionSnapshot(
+    rank?: RankBracket,
+  ): Promise<MetaPositionSnapshot> {
+    const resolved = await this.resolvePersistedSnapshot(undefined, rank, [], [], 'positions');
+    if (resolved.kind === 'not_ready') {
+      if (resolved.availability === 'collecting') {
+        void this.prewarmDraftSnapshots().catch(() => undefined);
+      }
+      const dataHealth = this.createUnavailableDataHealth(resolved.availability);
+      return this.createCollectingPersistedPositionSnapshot(
+        'unknown patch',
+        rank,
+        dataHealth,
+      );
+    }
+    const dataHealth = this.createPersistedDataHealth(
+      resolved.snapshot,
+      resolved.fallbackFrom,
+      'ready',
+    );
+    return this.toPersistedPositionSnapshot(resolved.snapshot, rank, dataHealth);
+  }
+
+  private async resolvePersistedSnapshot(
+    patch: string | undefined,
+    rank: RankBracket | undefined,
+    enemyIds: number[],
+    allyIds: number[],
+    purpose: PersistedSnapshotPurpose,
+  ): Promise<PersistedSnapshotResolution> {
+    const draftSnapshots = this.draftSnapshots;
+    if (!draftSnapshots) {
+      return { kind: 'not_ready', availability: 'unavailable' };
+    }
+    const resolutionState = { repositoryUnavailable: false };
+    const loadPopulation = async (population: DraftDataPopulation): Promise<{
+      snapshot: StoredDraftSnapshot;
+      fallbackFrom: DraftDataPopulationId | null;
+    } | null> => {
+      const memoryKey = this.persistedSnapshotMemoryKey(
+        patch,
+        population.id,
+        rank,
+        enemyIds,
+        allyIds,
+        purpose,
+      );
+      let snapshot: StoredDraftSnapshot | null;
+      try {
+        snapshot = await draftSnapshots.findLatestReady({
+          patch,
+          population: population.id,
+          ...(rank === undefined ? {} : { rank }),
+          enemyHeroIds: enemyIds,
+          allyHeroIds: allyIds,
+          includePositions: purpose !== 'metadata',
+        });
+        if (snapshot) {
+          this.rememberPersistedSnapshot(memoryKey, snapshot);
+        }
+      } catch {
+        snapshot = this.persistedSnapshotMemory.get(memoryKey) ?? null;
+        if (!snapshot) {
+          resolutionState.repositoryUnavailable = true;
+        }
+      }
+      if (snapshot) {
+        snapshot = this.withCurrentSnapshotFreshness(snapshot);
+      }
+      if (
+        !snapshot
+        || snapshot.matchCount < population.minimumMatches
+        || !this.hasRequiredLoadedSnapshotEvidence(
+          snapshot,
+          purpose,
+        )
+      ) {
+        return null;
+      }
+      return {
+        snapshot,
+        fallbackFrom: population.id === primaryDraftDataPopulation.id
+          ? null
+          : primaryDraftDataPopulation.id,
+      };
+    };
+    const primary = await loadPopulation(primaryDraftDataPopulation);
+    const fallback = await loadPopulation(fallbackDraftDataPopulation);
+    const selectCurrentPatch = (candidates: NonNullable<typeof primary>[]) => {
+      const latest = candidates.toSorted((left, right) => {
+        const leftTime = Date.parse(left.snapshot.completedAt ?? left.snapshot.generatedAt ?? '');
+        const rightTime = Date.parse(right.snapshot.completedAt ?? right.snapshot.generatedAt ?? '');
+        return (Number.isFinite(rightTime) ? rightTime : 0)
+          - (Number.isFinite(leftTime) ? leftTime : 0);
+      })[0];
+      if (!latest) return null;
+      return candidates.find((candidate) => (
+        candidate.snapshot.patch === latest.snapshot.patch
+        && candidate.fallbackFrom === null
+      )) ?? latest;
+    };
+    const candidates = [primary, fallback].flatMap((candidate) => (
+      candidate === null ? [] : [candidate]
+    ));
+    const fresh = selectCurrentPatch(candidates.filter((candidate) => !candidate.snapshot.isStale));
+    if (fresh) {
+      return { kind: 'ready', ...fresh };
+    }
+    const stale = selectCurrentPatch(candidates);
+    if (stale) {
+      return { kind: 'ready', ...stale };
+    }
+    return {
+      kind: 'not_ready',
+      availability: resolutionState.repositoryUnavailable ? 'unavailable' : 'collecting',
+    };
+  }
+
+  private persistedSnapshotMemoryKey(
+    patch: string | undefined,
+    population: DraftDataPopulationId,
+    rank: RankBracket | undefined,
+    enemyIds: number[],
+    allyIds: number[],
+    purpose: PersistedSnapshotPurpose,
+  ): string {
+    const normalizedEnemies = [...new Set(enemyIds)].toSorted((left, right) => left - right);
+    const normalizedAllies = [...new Set(allyIds)].toSorted((left, right) => left - right);
+    return [
+      patch ?? 'latest',
+      population,
+      rank ?? 'all',
+      normalizedEnemies.join(','),
+      normalizedAllies.join(','),
+      purpose,
+    ].join(':');
+  }
+
+  private rememberPersistedSnapshot(key: string, snapshot: StoredDraftSnapshot): void {
+    this.persistedSnapshotMemory.delete(key);
+    this.persistedSnapshotMemory.set(key, snapshot);
+    if (this.persistedSnapshotMemory.size <= DRAFT_SNAPSHOT_MEMORY_MAX_ENTRIES) {
+      return;
+    }
+    const oldest = this.persistedSnapshotMemory.keys().next().value;
+    if (oldest) {
+      this.persistedSnapshotMemory.delete(oldest);
+    }
+  }
+
+  private withCurrentSnapshotFreshness(
+    snapshot: StoredDraftSnapshot,
+  ): StoredDraftSnapshot {
+    const expiresAt = snapshot.expiresAt ? Date.parse(snapshot.expiresAt) : Number.NaN;
+    return {
+      ...snapshot,
+      isStale: !Number.isFinite(expiresAt) || expiresAt <= Date.now(),
+    };
+  }
+
+  private createPersistedDataHealth(
+    snapshot: StoredDraftSnapshot,
+    fallbackFrom: DraftDataPopulationId | null,
+    availability: DraftDataHealth['availability'],
+  ): DraftDataHealth {
+    return {
+      snapshotId: snapshot.id,
+      snapshotVersion: snapshot.snapshotVersion,
+      source: snapshot.source,
+      population: {
+        ...snapshot.population,
+        lobbyTypes: [...snapshot.population.lobbyTypes],
+        gameModes: [...snapshot.population.gameModes],
+      },
+      fallbackFrom,
+      matchCount: snapshot.matchCount,
+      minimumMatches: snapshot.population.minimumMatches,
+      rankMatchCounts: { ...snapshot.rankMatchCounts },
+      generatedAt: snapshot.generatedAt,
+      expiresAt: snapshot.expiresAt,
+      availability,
+      isStale: snapshot.isStale,
+    };
+  }
+
+  private createUnavailableDataHealth(
+    availability: Exclude<DraftDataHealth['availability'], 'ready'>,
+  ): DraftDataHealth {
+    return {
+      snapshotId: null,
+      snapshotVersion: 1,
+      source: DRAFT_SNAPSHOT_PRIMARY_SOURCE,
+      population: {
+        ...primaryDraftDataPopulation,
+        lobbyTypes: [...primaryDraftDataPopulation.lobbyTypes],
+        gameModes: [...primaryDraftDataPopulation.gameModes],
+      },
+      fallbackFrom: null,
+      matchCount: 0,
+      minimumMatches: primaryDraftDataPopulation.minimumMatches,
+      rankMatchCounts: {},
+      generatedAt: null,
+      expiresAt: null,
+      availability,
+      isStale: false,
+    };
+  }
+
+  private toPersistedDraftPairSnapshot(
+    snapshot: StoredDraftSnapshot,
+    rank: RankBracket | undefined,
+    enemyIds: number[],
+    allyIds: number[],
+    dataHealth: DraftDataHealth,
+  ): DraftPairSnapshot {
+    const allRankRows = new Map<string, DraftSnapshotPairRow>();
+    const rankRows = new Map<string, DraftSnapshotPairRow>();
+    for (const row of snapshot.pairRows) {
+      const key = `${row.relation}:${row.selectedHeroId}:${row.candidateHeroId}`;
+      if (row.rankBucket === 0) {
+        allRankRows.set(key, row);
+      } else if (row.rankBucket === rank) {
+        rankRows.set(key, row);
+      }
+    }
+    const result = this.emptyDraftPairSnapshot(
+      snapshot.patch,
+      rank,
+      'ready',
+    );
+    const rankHasPopulationCoverage = rank !== undefined
+      && (snapshot.rankMatchCounts[rank] ?? 0) >= DRAFT_SNAPSHOT_MIN_RANK_POSITION_MATCHES;
+    result.scope = {
+      ...result.scope,
+      rankFilter: rankHasPopulationCoverage ? 'average_match_rank' : 'all_ranks',
+      window: DRAFT_PAIR_WINDOW,
+      fetchedAt: snapshot.generatedAt ?? new Date().toISOString(),
+      isStale: snapshot.isStale,
+      dataHealth,
+    };
+    const addRelation = (
+      relation: 'matchup' | 'synergy',
+      selectedIds: number[],
+      target: Map<number, Map<number, DraftPairStat>>,
+    ): void => {
+      const selectedSet = new Set(selectedIds);
+      for (const [key, allRank] of allRankRows) {
+        if (allRank.relation !== relation || !selectedSet.has(allRank.selectedHeroId)) {
+          continue;
+        }
+        const rankRow = rankRows.get(key);
+        const values = target.get(allRank.selectedHeroId) ?? new Map<number, DraftPairStat>();
+        values.set(allRank.candidateHeroId, {
+          heroId: allRank.candidateHeroId,
+          patchGames: allRank.games,
+          patchWins: allRank.wins,
+          rankGames: rankRow?.games ?? 0,
+          rankWins: rankRow?.wins ?? 0,
+        });
+        target.set(allRank.selectedHeroId, values);
+      }
+    };
+    addRelation('matchup', enemyIds, result.matchupByEnemy);
+    addRelation('synergy', allyIds, result.synergyByAlly);
+    return result;
+  }
+
+  private toPersistedPositionSnapshot(
+    snapshot: StoredDraftSnapshot,
+    rank: RankBracket | undefined,
+    dataHealth: DraftDataHealth,
+  ): MetaPositionSnapshot {
+    const rankRows = rank === undefined
+      ? []
+      : snapshot.positionRows.filter((row) => row.rankBucket === rank);
+    const rankPositions = new Set(rankRows.map((row) => row.position));
+    const useRankRows = rank !== undefined
+      && (snapshot.rankMatchCounts[rank] ?? 0) >= DRAFT_SNAPSHOT_MIN_RANK_POSITION_MATCHES
+      && rankPositions.size === 5;
+    const selectedRows = useRankRows
+      ? rankRows
+      : snapshot.positionRows.filter((row) => row.rankBucket === 0);
+    const hasCompleteCoverage = new Set(selectedRows.map((row) => row.position)).size === 5;
+    return {
+      patch: snapshot.patch,
+      rank: rank ?? null,
+      rankFilter: useRankRows ? 'average_match_rank' : 'all_ranks',
+      window: snapshot.source === DRAFT_SNAPSHOT_PRIMARY_SOURCE
+        ? DRAFT_PRIMARY_POSITION_WINDOW
+        : DRAFT_POSITION_WINDOW,
+      minimumGames: POSITION_MIN_GAMES,
+      fetchedAt: snapshot.generatedAt ?? new Date().toISOString(),
+      isStale: snapshot.isStale,
+      availability: hasCompleteCoverage ? 'ready' : 'collecting',
+      positionStats: selectedRows.map((row) => ({
+        heroId: row.heroId,
+        position: row.position,
+        picks: row.games,
+        wins: row.wins,
+        winRate: row.wins / row.games,
+        isApproximate: row.position !== 2,
+        method: snapshot.source === DRAFT_SNAPSHOT_PRIMARY_SOURCE
+          ? row.position === 2
+            ? 'lane_role'
+            : 'lane_role_farm_priority'
+          : row.position === 2
+            ? 'lane_role_scenario'
+            : 'lane_role_scenario_approximation',
+      })),
+      dataHealth,
+    };
+  }
+
+  private createCollectingPersistedPositionSnapshot(
+    patch: string,
+    rank: RankBracket | undefined,
+    dataHealth: DraftDataHealth,
+  ): MetaPositionSnapshot {
+    return {
+      patch,
+      rank: rank ?? null,
+      rankFilter: 'all_ranks',
+      window: DRAFT_POSITION_WINDOW,
+      minimumGames: POSITION_MIN_GAMES,
+      fetchedAt: new Date().toISOString(),
+      isStale: false,
+      availability: 'collecting',
+      positionStats: [],
+      dataHealth,
+    };
+  }
+
+  private async prewarmDraftPopulation(
+    patch: PatchMeta,
+    population: DraftDataPopulation,
+    loadHeroes: () => Promise<DraftSnapshotHero[]>,
+  ): Promise<void> {
+    if (!this.draftSnapshots) {
+      return;
+    }
+    const pending = this.persistedSnapshotPrewarm.get(population.id);
+    if (pending) {
+      return pending;
+    }
+    if ((this.persistedSnapshotRetryAfter.get(population.id) ?? 0) > Date.now()) {
+      return;
+    }
+    const current = await this.draftSnapshots.findLatestInfo(patch.name, population.id)
+      .catch((error: unknown) => {
+        this.persistedSnapshotRetryAfter.set(
+          population.id,
+          Date.now() + DRAFT_SNAPSHOT_RETRY_MS,
+        );
+        throw error;
+      });
+    const expiresAt = current?.expiresAt ? Date.parse(current.expiresAt) : Number.NaN;
+    if (
+      current
+      && current.matchCount >= population.minimumMatches
+      && Number.isFinite(expiresAt)
+      && expiresAt > Date.now()
+    ) {
+      return;
+    }
+    const request = this.refreshPersistedDraftPopulation(
+      patch,
+      population,
+      await loadHeroes(),
+    )
+      .catch((error: unknown) => {
+        this.persistedSnapshotRetryAfter.set(
+          population.id,
+          Date.now() + this.draftSnapshotRetryDelayMs(error),
+        );
+        throw error;
+      })
+      .finally(() => {
+        this.persistedSnapshotPrewarm.delete(population.id);
+      });
+    this.persistedSnapshotPrewarm.set(population.id, request);
+    return request;
+  }
+
+  private async refreshPersistedDraftPopulation(
+    patch: PatchMeta,
+    population: DraftDataPopulation,
+    heroes: DraftSnapshotHero[],
+  ): Promise<void> {
+    if (!this.draftSnapshots) {
+      return;
+    }
+    await this.draftSnapshots.abandonBuildingStartedBefore(
+      new Date(Date.now() - DRAFT_SNAPSHOT_BUILD_LEASE_MS),
+    );
+    const snapshotId = await this.draftSnapshots.tryBegin(patch.name, population.id);
+    if (!snapshotId) {
+      return;
+    }
+    try {
+      const materialization = await this.draftSnapshotSource.materialize(
+        patch,
+        population,
+        DRAFT_SNAPSHOT_FRESH_MS,
+        heroes,
+      );
+      if (materialization.matchCount < population.minimumMatches) {
+        this.persistedSnapshotRetryAfter.set(
+          population.id,
+          Date.now() + DRAFT_SNAPSHOT_INSUFFICIENT_RETRY_MS,
+        );
+        await this.draftSnapshots.fail(snapshotId, 'INSUFFICIENT_POPULATION_SAMPLE');
+        return;
+      }
+      if (materialization.heroes.length === 0 || !this.hasRequiredDraftEvidence(
+        materialization.pairRows,
+        materialization.positionRows,
+      )) {
+        this.persistedSnapshotRetryAfter.set(
+          population.id,
+          Date.now() + DRAFT_SNAPSHOT_INSUFFICIENT_RETRY_MS,
+        );
+        await this.draftSnapshots.fail(snapshotId, 'SNAPSHOT_EVIDENCE_INCOMPLETE');
+        return;
+      }
+      await this.draftSnapshots.complete(snapshotId, materialization);
+    } catch (error) {
+      await this.draftSnapshots.fail(
+        snapshotId,
+        error instanceof ExternalServiceError ? 'OPENDOTA_UNAVAILABLE' : 'SNAPSHOT_REFRESH_FAILED',
+      ).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private draftSnapshotRetryDelayMs(error: unknown): number {
+    if (!(error instanceof ExternalServiceError)) return DRAFT_SNAPSHOT_RETRY_MS;
+    const details = error.details;
+    if (typeof details !== 'object' || details === null || !('retryAfterMs' in details)) {
+      return DRAFT_SNAPSHOT_RETRY_MS;
+    }
+    const retryAfterMs = Number((details as { retryAfterMs?: unknown }).retryAfterMs);
+    return Number.isFinite(retryAfterMs) && retryAfterMs > 0
+      ? Math.min(24 * 60 * 60 * 1_000, Math.max(DRAFT_SNAPSHOT_RETRY_MS, retryAfterMs))
+      : DRAFT_SNAPSHOT_RETRY_MS;
+  }
+
+  private hasRequiredDraftEvidence(
+    pairRows: readonly DraftSnapshotPairRow[],
+    positionRows: readonly DraftSnapshotPositionRow[],
+  ): boolean {
+    return pairRows.some((row) => row.rankBucket === 0 && row.relation === 'matchup')
+      && pairRows.some((row) => row.rankBucket === 0 && row.relation === 'synergy')
+      && new Set(
+        positionRows
+          .filter((row) => row.rankBucket === 0)
+          .map((row) => row.position),
+      ).size === 5;
+  }
+
+  private hasRequiredLoadedSnapshotEvidence(
+    snapshot: StoredDraftSnapshot,
+    purpose: PersistedSnapshotPurpose,
+  ): boolean {
+    if (snapshot.heroes.length === 0) return false;
+    if (purpose === 'metadata') return true;
+    const positionsReady = new Set(
+      snapshot.positionRows
+        .filter((row) => row.rankBucket === 0)
+        .map((row) => row.position),
+    ).size === 5;
+    return positionsReady;
+  }
+
   private async getRecommendationPositionMeta(rank?: RankBracket) {
+    if (this.draftSnapshots) {
+      return this.getPersistedMetaPositionSnapshot(rank).catch(() => undefined);
+    }
     let timeout: NodeJS.Timeout | undefined;
     const request = this.getMetaPositionSnapshot(rank).catch(() => undefined);
     try {
@@ -1295,8 +1993,10 @@ export class OpenDotaAdapter {
   private toHeroMeta(hero: RawHero, rank?: RankBracket): HeroMeta {
     const rankedPicks = rank ? this.numberField(hero, `${rank}_pick`) : 0;
     const rankedWins = rank ? this.numberField(hero, `${rank}_win`) : 0;
-    const picks = rank ? rankedPicks : hero.pub_pick;
-    const wins = rank ? rankedWins : hero.pub_win;
+    const useRankStatistics = rank !== undefined
+      && rankedPicks >= DRAFT_SNAPSHOT_MIN_RANK_HERO_GAMES;
+    const picks = useRankStatistics ? rankedPicks : hero.pub_pick;
+    const wins = useRankStatistics ? rankedWins : hero.pub_win;
 
     return {
       id: hero.id,
@@ -1310,6 +2010,36 @@ export class OpenDotaAdapter {
       picks,
       wins,
       winRate: picks > 0 ? wins / picks : 0.5,
+      statisticsScope: useRankStatistics ? 'rank' : 'all_ranks',
+    };
+  }
+
+  private toDraftSnapshotHero(hero: RawHero): DraftSnapshotHero {
+    const rankStats: DraftSnapshotHero['rankStats'] = {};
+    for (const rank of RANK_BRACKETS) {
+      const picks = this.numberField(hero, `${rank}_pick`);
+      const wins = this.numberField(hero, `${rank}_win`);
+      if (picks > 0 && wins >= 0 && wins <= picks) rankStats[rank] = { picks, wins };
+    }
+    return { ...this.toHeroMeta(hero), rankStats };
+  }
+
+  private toPersistedHeroMeta(
+    hero: DraftSnapshotHero,
+    rank: RankBracket | undefined,
+  ): HeroMeta {
+    const { rankStats, ...base } = hero;
+    const rankStat = rank === undefined ? undefined : rankStats[rank];
+    if (!rankStat || rankStat.picks < DRAFT_SNAPSHOT_MIN_RANK_HERO_GAMES) {
+      return { ...base, roles: [...base.roles], statisticsScope: 'all_ranks' };
+    }
+    return {
+      ...base,
+      roles: [...base.roles],
+      picks: rankStat.picks,
+      wins: rankStat.wins,
+      winRate: rankStat.wins / rankStat.picks,
+      statisticsScope: 'rank',
     };
   }
 

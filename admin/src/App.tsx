@@ -32,6 +32,7 @@ import { UsersPage } from './pages/users';
 import { mergeDiagnosticEvents } from './lib/diagnostics';
 import type {
   AdminAnalysesResponse,
+  AdminAnalysis,
   AdminAnalysesQuery,
   AdminDiagnosticSessionResponse,
   AdminDiagnosticSessionsQuery,
@@ -151,6 +152,8 @@ export function App() {
   const [usersQuery, setUsersQuery] = useState<AdminUsersQuery>({ limit: 20, offset: 0 });
   const [analyses, setAnalyses] = useState<Resource<AdminAnalysesResponse>>(emptyResource);
   const [analysesQuery, setAnalysesQuery] = useState<AdminAnalysesQuery>({ limit: 20, offset: 0 });
+  const [selectedAnalysisId, setSelectedAnalysisId] = useState<string | null>(null);
+  const [analysisDetail, setAnalysisDetail] = useState<Resource<AdminAnalysis>>(idleResource);
   const [diagnostics, setDiagnostics] = useState<Resource<AdminDiagnosticSessionsResponse>>(emptyResource);
   const [diagnosticsQuery, setDiagnosticsQuery] = useState<AdminDiagnosticSessionsQuery>({ limit: 20, offset: 0 });
   const [diagnosticSessionId, setDiagnosticSessionId] = useState<string | null>(null);
@@ -175,6 +178,8 @@ export function App() {
     setOverview(emptyResource());
     setUsers(emptyResource());
     setAnalyses(emptyResource());
+    setSelectedAnalysisId(null);
+    setAnalysisDetail(idleResource());
     setDiagnostics(emptyResource());
     setDiagnosticSessionId(null);
     setDiagnosticSession(idleResource());
@@ -242,6 +247,14 @@ export function App() {
     return load(setAnalyses, adminApi.analyses(session.token, analysesQuery, signal));
   }, [analysesQuery, load, session]);
 
+  const refreshAnalysisDetail = useCallback((signal?: AbortSignal) => {
+    if (!session || !selectedAnalysisId) return Promise.resolve();
+    return load(
+      setAnalysisDetail,
+      adminApi.analysis(session.token, selectedAnalysisId, signal),
+    );
+  }, [load, selectedAnalysisId, session]);
+
   const refreshHeroCatalog = useCallback((signal?: AbortSignal) => {
     if (!session) return Promise.resolve();
     return load(setHeroCatalog, adminApi.heroCatalog(signal));
@@ -256,7 +269,7 @@ export function App() {
     if (!session || !diagnosticSessionId) return Promise.resolve();
     return load(
       setDiagnosticSession,
-      adminApi.diagnosticSession(session.token, diagnosticSessionId, { limit: 500, beforeSequence }, signal),
+      adminApi.diagnosticSession(session.token, diagnosticSessionId, { limit: 200, beforeSequence }, signal),
       beforeSequence !== undefined
         ? (current, incoming) => ({
             ...incoming,
@@ -291,6 +304,15 @@ export function App() {
 
   const updateAnalysesQuery = useCallback((next: AdminAnalysesQuery) => {
     setAnalysesQuery((current) => sameQuery(current, next) ? current : next);
+  }, []);
+
+  const selectAnalysis = useCallback((analysisId: string | null) => {
+    setSelectedAnalysisId((current) => {
+      if (current === analysisId) return current;
+      latestRequests.current.set(setAnalysisDetail, ++requestCounter.current);
+      setAnalysisDetail(analysisId ? emptyResource() : idleResource());
+      return analysisId;
+    });
   }, []);
 
   const updateDiagnosticsQuery = useCallback((next: AdminDiagnosticSessionsQuery) => {
@@ -330,6 +352,13 @@ export function App() {
     void refreshAnalyses(controller.signal);
     return () => controller.abort();
   }, [page, refreshAnalyses, session]);
+
+  useEffect(() => {
+    if (!session || page !== 'analyses' || !selectedAnalysisId) return;
+    const controller = new AbortController();
+    void refreshAnalysisDetail(controller.signal);
+    return () => controller.abort();
+  }, [page, refreshAnalysisDetail, selectedAnalysisId, session]);
 
   useEffect(() => {
     if (!session || (page !== 'analyses' && page !== 'diagnostics') || heroCatalog.data) return;
@@ -401,6 +430,7 @@ export function App() {
     if (page === 'users') void refreshUsers();
     if (page === 'analyses') {
       void refreshAnalyses();
+      if (selectedAnalysisId) void refreshAnalysisDetail();
       if (!heroCatalog.data || heroCatalog.error) void refreshHeroCatalog();
     }
     if (page === 'reviews') void refreshReviews();
@@ -418,7 +448,7 @@ export function App() {
     : page === 'users'
       ? users.loading
       : page === 'analyses'
-        ? analyses.loading
+        ? analyses.loading || analysisDetail.loading
         : page === 'diagnostics'
           ? diagnostics.loading || diagnosticSession.loading || heroCatalog.loading
         : page === 'reviews'
@@ -497,6 +527,7 @@ export function App() {
               }}
               onOpenAnalyses={(accountId) => {
                 setAnalyses(emptyResource());
+                selectAnalysis(null);
                 setAnalysesQuery({ limit: 20, offset: 0, accountId });
                 navigate('analyses');
               }}
@@ -507,7 +538,7 @@ export function App() {
               }}
             />
           ) : null}
-          {page === 'analyses' ? <AnalysesPage resource={analyses} heroCatalog={heroCatalog} initialQuery={analysesQuery} onRetry={() => { void refreshAnalyses(); if (!heroCatalog.data) void refreshHeroCatalog(); }} onHeroCatalogRetry={() => void refreshHeroCatalog()} onQueryChange={updateAnalysesQuery} /> : null}
+          {page === 'analyses' ? <AnalysesPage resource={analyses} detailResource={analysisDetail} heroCatalog={heroCatalog} initialQuery={analysesQuery} selectedId={selectedAnalysisId} onSelect={selectAnalysis} onRetry={() => { void refreshAnalyses(); if (!heroCatalog.data) void refreshHeroCatalog(); }} onDetailRetry={() => void refreshAnalysisDetail()} onHeroCatalogRetry={() => void refreshHeroCatalog()} onQueryChange={updateAnalysesQuery} /> : null}
           {page === 'diagnostics' ? <DiagnosticsPage resource={diagnostics} detailResource={diagnosticSession} heroCatalog={heroCatalog} initialQuery={diagnosticsQuery} selectedSessionId={diagnosticSessionId} onSelectSession={selectDiagnosticSession} onRetry={() => void refreshDiagnostics()} onDetailRetry={() => void refreshDiagnosticSession()} onHeroCatalogRetry={() => void refreshHeroCatalog()} onLoadOlder={() => {
             const cursor = diagnosticSession.data?.pagination.nextBeforeSequence;
             if (cursor !== null && cursor !== undefined) void refreshDiagnosticSession(undefined, cursor);
@@ -525,6 +556,7 @@ export function App() {
               }}
               onOpenAnalysis={(id) => {
                 setAnalyses(emptyResource());
+                selectAnalysis(null);
                 setAnalysesQuery({ limit: 20, offset: 0, id });
                 navigate('analyses');
               }}

@@ -21,6 +21,31 @@ export class TtlCache<T> {
       return cached.value;
     }
 
+    if (cached && cached.staleUntil > now) {
+      void this.refresh(key, loader, cached).catch(() => undefined);
+      return cached.value;
+    }
+
+    return this.refresh(key, loader, cached);
+  }
+
+  public peek(key: string): { value: T; isFresh: boolean } | undefined {
+    const cached = this.entries.get(key);
+    const now = Date.now();
+    if (!cached || cached.staleUntil <= now) {
+      return undefined;
+    }
+    return {
+      value: cached.value,
+      isFresh: cached.freshUntil > now,
+    };
+  }
+
+  private async refresh(
+    key: string,
+    loader: () => Promise<T>,
+    cached: CacheEntry<T> | undefined,
+  ): Promise<T> {
     const existingRequest = this.pending.get(key);
     if (existingRequest) {
       return existingRequest;

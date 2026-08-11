@@ -20,6 +20,11 @@ const envSchema = z.object({
   HOST: z.string().min(1).default('0.0.0.0'),
   PORT: z.coerce.number().int().min(1).max(65_535).default(4000),
   DATABASE_URL: databaseUrl,
+  DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(100).default(12),
+  DATABASE_POOL_MIN: z.coerce.number().int().min(0).max(100).default(0),
+  DATABASE_IDLE_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(300_000).default(30_000),
+  DATABASE_CONNECTION_TIMEOUT_MS: z.coerce.number().int().min(500).max(60_000).default(5_000),
+  DATABASE_STATEMENT_TIMEOUT_MS: z.coerce.number().int().min(500).max(60_000).default(8_000),
   JWT_SECRET: z.string().min(32),
   ACCESS_TOKEN_TTL: z.string().min(2).default('15m'),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(30),
@@ -63,11 +68,20 @@ const envSchema = z.object({
   MAX_IMAGE_BYTES: z.coerce.number().int().min(1_024).max(8 * 1_024 * 1_024).default(5 * 1_024 * 1_024),
   IDEMPOTENCY_TTL_HOURS: z.coerce.number().positive().default(24),
   IDEMPOTENCY_LEASE_SECONDS: z.coerce.number().int().min(30).max(900).default(300),
+  RECOGNITION_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(2),
+  ADMIN_OVERVIEW_CACHE_SECONDS: z.coerce.number().int().min(1).max(60).default(10),
   REVENUECAT_WEBHOOK_SECRET: z.string().min(24),
   REVENUECAT_PRO_ENTITLEMENT_ID: z.string().min(1).default('pro'),
   REVENUECAT_APP_IDS: z.string().default(''),
   REVENUECAT_ALLOW_SANDBOX: booleanFromString,
 }).superRefine((env, context) => {
+  if (env.DATABASE_POOL_MIN > env.DATABASE_POOL_MAX) {
+    context.addIssue({
+      code: 'custom',
+      path: ['DATABASE_POOL_MIN'],
+      message: 'DATABASE_POOL_MIN must not exceed DATABASE_POOL_MAX',
+    });
+  }
   if (
     env.NODE_ENV === 'production'
     && env.OTP_STATIC_CODE !== undefined
@@ -102,6 +116,13 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env) {
     host: env.HOST,
     port: env.PORT,
     databaseUrl: env.DATABASE_URL,
+    database: {
+      poolMax: env.DATABASE_POOL_MAX,
+      poolMin: env.DATABASE_POOL_MIN,
+      idleTimeoutMs: env.DATABASE_IDLE_TIMEOUT_MS,
+      connectionTimeoutMs: env.DATABASE_CONNECTION_TIMEOUT_MS,
+      statementTimeoutMs: env.DATABASE_STATEMENT_TIMEOUT_MS,
+    },
     jwtSecret: env.JWT_SECRET,
     accessTokenTtl: env.ACCESS_TOKEN_TTL,
     refreshTokenTtlDays: env.REFRESH_TOKEN_TTL_DAYS,
@@ -145,6 +166,12 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env) {
     maxImageBytes: env.MAX_IMAGE_BYTES,
     idempotencyTtlMs: env.IDEMPOTENCY_TTL_HOURS * 60 * 60 * 1_000,
     idempotencyLeaseMs: env.IDEMPOTENCY_LEASE_SECONDS * 1_000,
+    recognition: {
+      concurrency: env.RECOGNITION_CONCURRENCY,
+    },
+    admin: {
+      overviewCacheTtlMs: env.ADMIN_OVERVIEW_CACHE_SECONDS * 1_000,
+    },
     revenueCat: {
       webhookSecret: env.REVENUECAT_WEBHOOK_SECRET,
       proEntitlementId: env.REVENUECAT_PRO_ENTITLEMENT_ID,

@@ -27,6 +27,7 @@ import { WindowControls } from '../components/window-controls';
 import { useI18n } from '../i18n';
 import { useAppStore } from '../store';
 import type { Language, OtpChallenge } from '../types';
+import { clearAccountQueryCache, sessionQueryKey } from '../../shared/account-query-cache';
 
 type AuthMode = 'login' | 'register' | 'reset';
 
@@ -192,8 +193,9 @@ export function AuthPage() {
       });
     },
     onSuccess: async (account) => {
+      await clearAccountQueryCache(queryClient);
       setAccount(account);
-      queryClient.setQueryData(['session'], { authenticated: true, account });
+      queryClient.setQueryData(sessionQueryKey, { authenticated: true, account });
       navigate('/', { replace: true });
     },
   });

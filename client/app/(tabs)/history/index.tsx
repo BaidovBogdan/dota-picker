@@ -32,8 +32,9 @@ export default function HistoryScreen() {
     useCallback(() => {
       if (!registeredUserId || isRemoteBootstrapPending) return;
       const expectedUserId = registeredUserId;
+      const controller = new AbortController();
       let active = true;
-      void getServerHistory()
+      void getServerHistory(controller.signal)
         .then((serverHistory) => {
           const store = useAppStore.getState();
           if (active && store.session?.userId === expectedUserId) {
@@ -43,6 +44,7 @@ export default function HistoryScreen() {
         .catch(() => {});
       return () => {
         active = false;
+        controller.abort();
       };
     }, [isRemoteBootstrapPending, registeredUserId]),
   );
@@ -227,7 +229,8 @@ function HistoryCard({
   const first = item.recommendations[0];
   const { colors, alpha } = useAppTheme();
   const { t, locale } = useTranslation();
-  if (!first) return null;
+  const recommendationName = first?.hero.name ?? t('history.open');
+  const imageUrl = first?.hero.imageUrl;
 
   const sourceColor = item.source === 'server' ? colors.cobalt : colors.live;
   const date = new Date(item.createdAt).toLocaleDateString(locale, {
@@ -283,7 +286,7 @@ function HistoryCard({
       <View style={{ minHeight: 96, flexDirection: 'row', alignItems: 'stretch' }}>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`${t('history.open')}: ${first.hero.name}`}
+          accessibilityLabel={`${t('history.open')}: ${recommendationName}`}
           onPress={() => router.push({ pathname: '/result/[id]', params: { id: item.id } })}
           style={{
             flex: 1,
@@ -303,9 +306,9 @@ function HistoryCard({
               backgroundColor: colors.surfaceElevated,
             }}
           >
-            {first.hero.imageUrl ? (
+            {imageUrl ? (
               <Image
-                source={{ uri: first.hero.imageUrl }}
+                source={{ uri: imageUrl }}
                 contentFit="cover"
                 cachePolicy="disk"
                 enforceEarlyResizing
@@ -313,11 +316,15 @@ function HistoryCard({
                 transition={120}
                 style={{ width: '100%', height: '100%' }}
               />
-            ) : (
+            ) : first ? (
               <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
                 <AppText variant="title" color={sourceColor}>
                   {first.hero.name.slice(0, 2)}
                 </AppText>
+              </View>
+            ) : (
+              <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+                <Ionicons name="document-text-outline" size={28} color={sourceColor} />
               </View>
             )}
           </View>
@@ -326,7 +333,7 @@ function HistoryCard({
               {t('history.position', { position: item.draft.position ?? '—' })}
             </AppText>
             <AppText variant="title" numberOfLines={1} style={{ marginTop: 3 }}>
-              {first.hero.name}
+              {recommendationName}
             </AppText>
             <AppText
               variant="caption"
@@ -341,7 +348,7 @@ function HistoryCard({
 
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`${t('common.delete')}: ${first.hero.name}`}
+          accessibilityLabel={`${t('common.delete')}: ${recommendationName}`}
           hitSlop={6}
           onPress={onRemove}
           style={{

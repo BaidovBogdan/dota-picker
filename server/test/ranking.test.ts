@@ -454,6 +454,48 @@ describe('recommendation ranking', () => {
     expect(result.recommendations.map(entry => entry.hero.id)).not.toContain(2);
   });
 
+  it('does not let an approximate lane scenario override hard-support role constraints', () => {
+    const heroes = [
+      hero(1, ['Carry']),
+      hero(2, ['Carry', 'Support', 'Disabler']),
+      hero(3, ['Support', 'Disabler']),
+      hero(4, ['Support', 'Nuker']),
+      hero(5, ['Support', 'Initiator']),
+      hero(6, ['Support', 'Disabler']),
+    ];
+    const snapshot = createSnapshot(
+      heroes,
+      [[1, [
+        matchup(2, 2_000, 100),
+        matchup(3, 500, 250),
+        matchup(4, 500, 250),
+        matchup(5, 500, 250),
+        matchup(6, 500, 250),
+      ]]],
+      [{
+        heroId: 2,
+        position: 5,
+        picks: 5_000,
+        wins: 3_000,
+        winRate: 0.6,
+        isApproximate: true,
+        method: 'lane_role_scenario_approximation',
+      }],
+    );
+
+    const result = rankRecommendations({
+      draft: {
+        source: 'manual',
+        position: 5,
+        allyHeroIds: [],
+        enemyHeroIds: [1],
+      },
+      snapshot,
+    });
+
+    expect(result.recommendations.map((entry) => entry.hero.id)).not.toContain(2);
+  });
+
   it('uses the selected-rank result while shrinking it toward current-patch all-rank evidence', () => {
     const heroes = [
       hero(1, ['Carry']),
@@ -582,6 +624,73 @@ describe('recommendation ranking', () => {
       rankScoped: false,
       rankGames: 0,
       patchGames: 1_000,
+    });
+  });
+
+  it('does not let a sparse selected-rank pair overturn the all-rank estimate', () => {
+    const heroes = [
+      hero(1, ['Carry']),
+      hero(2, ['Carry']),
+      hero(3, ['Carry']),
+      hero(4, ['Carry']),
+      hero(5, ['Carry']),
+    ];
+    const snapshot = createSnapshot(heroes, [[
+      1,
+      [
+        {
+          heroId: 2,
+          patchGames: 1_000,
+          patchWins: 700,
+          rankGames: 8,
+          rankWins: 0,
+        },
+        matchup(3, 1_000, 500),
+        matchup(4, 1_000, 500),
+        matchup(5, 1_000, 500),
+      ],
+    ]]);
+
+    const result = rankRecommendations({
+      draft: { ...defaultDraft, rank: 7 },
+      snapshot,
+    });
+
+    expect(result.recommendations[0]?.hero.id).toBe(2);
+    expect(result.recommendations[0]?.evidence?.matchups).toMatchObject({
+      source: 'opendota_current_patch_all_ranks_pairs',
+      rankScoped: false,
+      rankGames: 8,
+      patchGames: 1_000,
+    });
+  });
+
+  it('keeps hero-meta provenance on all ranks when the requested rank is sparse', () => {
+    const heroes = [
+      hero(1, ['Carry']),
+      hero(2, ['Carry']),
+      hero(3, ['Carry']),
+      hero(4, ['Carry']),
+      hero(5, ['Carry']),
+    ].map((entry) => ({ ...entry, statisticsScope: 'all_ranks' as const }));
+    const snapshot = createSnapshot(heroes, [[
+      1,
+      [
+        matchup(2, 1_000, 300),
+        matchup(3, 1_000, 500),
+        matchup(4, 1_000, 500),
+        matchup(5, 1_000, 500),
+      ],
+    ]]);
+
+    const result = rankRecommendations({
+      draft: { ...defaultDraft, rank: 7 },
+      snapshot,
+    });
+
+    expect(result.recommendations[0]?.evidence?.meta).toMatchObject({
+      source: 'opendota_public_hero_stats',
+      rankScoped: false,
     });
   });
 

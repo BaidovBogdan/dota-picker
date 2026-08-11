@@ -36,10 +36,60 @@ export const historyItemSchema = analysisSchema.pick({
   createdAt: true,
 });
 
-export const historyResponseSchema = z.object({
-  items: z.array(historyItemSchema),
-  nextCursor: z.string().nullable(),
+const historySummaryHeroSchema = z.object({
+  id: z.number().int().positive(),
+  name: z.string().min(1),
+  localizedName: z.string().nullable(),
+  imageUrl: z.url().nullable(),
+  iconUrl: z.url().nullable(),
+  roles: z.array(z.string()),
 });
+
+const historySummaryRecommendationSchema = z.object({
+  hero: historySummaryHeroSchema,
+  score: z.number(),
+  confidence: z.enum(['low', 'medium', 'high']),
+});
+
+export const historySummaryItemSchema = z.object({
+  id: z.uuid(),
+  source: z.enum(['manual', 'photo', 'overwolf']),
+  input: z.object({
+    position: z.union([
+      z.literal(1),
+      z.literal(2),
+      z.literal(3),
+      z.literal(4),
+      z.literal(5),
+    ]).nullable(),
+    rank: rankBracketSchema.nullable().optional(),
+    enemyHeroIds: z.array(z.number().int().positive()).max(5),
+  }).nullable(),
+  result: z.object({
+    patch: z.string().min(1).nullable(),
+    recommendations: z.array(historySummaryRecommendationSchema).max(3),
+  }).nullable(),
+  createdAt: z.iso.datetime(),
+});
+
+export const historyQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  cursor: z.string().min(1).optional(),
+  view: z.enum(['full', 'summary']).default('full'),
+});
+
+export const historyResponseSchema = z.discriminatedUnion('view', [
+  z.object({
+    view: z.literal('full'),
+    items: z.array(historyItemSchema),
+    nextCursor: z.string().nullable(),
+  }),
+  z.object({
+    view: z.literal('summary'),
+    items: z.array(historySummaryItemSchema),
+    nextCursor: z.string().nullable(),
+  }),
+]);
 
 export const historyDetailResponseSchema = z.object({ analysis: analysisSchema });
 

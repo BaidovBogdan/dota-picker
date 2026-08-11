@@ -118,7 +118,7 @@ const initDecisionField = (root: HTMLElement): Cleanup => {
   let width = 1;
   let height = 1;
   let dpr = 1;
-  let frame = 0;
+  let frame: number | null = null;
   let visible = true;
   let pointerX = 0;
   let pointerY = 0;
@@ -137,11 +137,14 @@ const initDecisionField = (root: HTMLElement): Cleanup => {
     context.setTransform(dpr, 0, 0, dpr, 0, 0);
   };
 
+  const scheduleDraw = () => {
+    if (frame !== null || !visible || document.hidden) return;
+    frame = requestAnimationFrame(draw);
+  };
+
   const draw = (time: number) => {
-    if (!visible || document.hidden) {
-      frame = requestAnimationFrame(draw);
-      return;
-    }
+    frame = null;
+    if (!visible || document.hidden) return;
 
     pointerX += (targetX - pointerX) * 0.045;
     pointerY += (targetY - pointerY) * 0.045;
@@ -188,7 +191,7 @@ const initDecisionField = (root: HTMLElement): Cleanup => {
     }
 
     context.restore();
-    frame = requestAnimationFrame(draw);
+    scheduleDraw();
   };
 
   const onPointerMove = (event: PointerEvent) => {
@@ -201,11 +204,13 @@ const initDecisionField = (root: HTMLElement): Cleanup => {
     targetX = 0;
     targetY = 0;
   };
+  const onVisibilityChange = () => scheduleDraw();
 
   const resizeObserver = new ResizeObserver(resize);
   const intersectionObserver = new IntersectionObserver(
     ([entry]) => {
       visible = entry?.isIntersecting ?? false;
+      scheduleDraw();
     },
     { rootMargin: "120px" }
   );
@@ -214,15 +219,17 @@ const initDecisionField = (root: HTMLElement): Cleanup => {
   intersectionObserver.observe(host);
   host.addEventListener("pointermove", onPointerMove);
   host.addEventListener("pointerleave", onPointerLeave);
+  document.addEventListener("visibilitychange", onVisibilityChange);
   resize();
-  frame = requestAnimationFrame(draw);
+  scheduleDraw();
 
   return () => {
-    cancelAnimationFrame(frame);
+    if (frame !== null) cancelAnimationFrame(frame);
     resizeObserver.disconnect();
     intersectionObserver.disconnect();
     host.removeEventListener("pointermove", onPointerMove);
     host.removeEventListener("pointerleave", onPointerLeave);
+    document.removeEventListener("visibilitychange", onVisibilityChange);
   };
 };
 

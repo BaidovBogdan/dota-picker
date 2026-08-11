@@ -7,6 +7,7 @@ import {
   gte,
   ilike,
   inArray,
+  lt,
   max,
   or,
   sql,
@@ -14,8 +15,8 @@ import {
 } from 'drizzle-orm';
 import { z } from 'zod';
 import type { AppConfig } from '../../config/env.js';
-import type { Database } from '../../db/client.js';
-import { ExternalServiceError } from '../../lib/errors.js';
+import type { Database, DatabasePoolMetrics } from '../../db/client.js';
+import { AppError, ExternalServiceError, NotFoundError } from '../../lib/errors.js';
 import {
   accounts,
   adminAuditEvents,
@@ -34,10 +35,26 @@ import type {
   AdminAnalysesQuery,
   AdminMetaQuery,
   AdminUsersQuery,
+  OverviewResponse,
   OverviewQuery,
 } from './admin.schemas.js';
 
 const grantAllMarker = complimentaryProGrantId;
+const listCursorSchema = z.object({ createdAt: z.iso.datetime(), id: z.uuid() });
+
+function decodeListCursor(cursor: string) {
+  try {
+    return listCursorSchema.parse(
+      JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')),
+    );
+  } catch {
+    throw new AppError(400, 'VALIDATION_ERROR', 'Invalid list cursor');
+  }
+}
+
+function encodeListCursor(createdAt: Date, id: string) {
+  return Buffer.from(JSON.stringify({ createdAt: createdAt.toISOString(), id })).toString('base64url');
+}
 
 function escapeSearch(value: string) {
   return value.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_');
@@ -118,14 +135,49 @@ type Integration = {
   missing: string[];
 };
 
+type OverviewCacheEntry = {
+  expiresAt: number;
+  value?: OverviewResponse;
+  pending?: Promise<OverviewResponse>;
+};
+
 export class AdminService {
+  private readonly overviewCache = new Map<OverviewQuery['days'], OverviewCacheEntry>();
+
   public constructor(
     private readonly db: Database,
     private readonly config: AppConfig,
     private readonly metaAdapter?: Pick<OpenDotaAdapter, 'getHeroes' | 'getMetaPositionSnapshot' | 'getPatch'>,
+    private readonly getPoolMetrics?: () => DatabasePoolMetrics,
   ) {}
 
-  public async overview(query: OverviewQuery) {
+  public async overview(query: OverviewQuery): Promise<OverviewResponse> {
+    const now = Date.now();
+    const cached = this.overviewCache.get(query.days);
+    if (cached?.value && cached.expiresAt > now) return cached.value;
+    if (cached?.pending) return cached.pending;
+
+    const entry: OverviewCacheEntry = { expiresAt: 0 };
+    const pending = this.buildOverview(query)
+      .then((value) => {
+        this.overviewCache.set(query.days, {
+          expiresAt: Date.now() + this.config.admin.overviewCacheTtlMs,
+          value,
+        });
+        return value;
+      })
+      .catch((error: unknown) => {
+        if (this.overviewCache.get(query.days) === entry) {
+          this.overviewCache.delete(query.days);
+        }
+        throw error;
+      });
+    entry.pending = pending;
+    this.overviewCache.set(query.days, entry);
+    return pending;
+  }
+
+  private async buildOverview(query: OverviewQuery): Promise<OverviewResponse> {
     const generatedAt = new Date();
     const from = new Date(Date.UTC(
       generatedAt.getUTCFullYear(),
@@ -288,6 +340,7 @@ export class AdminService {
 
   public async listUsers(query: AdminUsersQuery) {
     const conditions: SQL[] = [];
+    const cursor = query.cursor ? decodeListCursor(query.cursor) : undefined;
     if (query.kind) conditions.push(eq(accounts.kind, query.kind));
     if (query.plan) conditions.push(eq(accounts.plan, query.plan));
     if (query.q) {
@@ -299,16 +352,45 @@ export class AdminService {
       );
       if (match) conditions.push(match);
     }
+    const filtersWhere = conditions.length > 0 ? and(...conditions) : undefined;
+    if (cursor) {
+      const cursorCondition = or(
+        lt(accounts.createdAt, new Date(cursor.createdAt)),
+        and(
+          eq(accounts.createdAt, new Date(cursor.createdAt)),
+          lt(accounts.id, cursor.id),
+        ),
+      );
+      if (cursorCondition) conditions.push(cursorCondition);
+    }
     const where = conditions.length > 0 ? and(...conditions) : undefined;
+    const totalQuery = this.db.select({ total: count() }).from(accounts).where(filtersWhere);
+    const pageQuery = this.db.select({
+      id: accounts.id,
+      kind: accounts.kind,
+      email: accounts.email,
+      deviceId: accounts.deviceId,
+      plan: accounts.plan,
+      complimentaryPro: accounts.complimentaryPro,
+      planProductId: accounts.planProductId,
+      planExpiresAt: accounts.planExpiresAt,
+      quotaBalance: accounts.quotaBalance,
+      quotaRefreshedAt: accounts.quotaRefreshedAt,
+      billingUpdatedAt: accounts.billingUpdatedAt,
+      createdAt: accounts.createdAt,
+      updatedAt: accounts.updatedAt,
+    }).from(accounts)
+      .where(where)
+      .orderBy(desc(accounts.createdAt), desc(accounts.id))
+      .limit(query.limit + 1);
     const [totalRows, pageAccounts] = await Promise.all([
-      this.db.select({ total: count() }).from(accounts).where(where),
-      this.db.select().from(accounts)
-        .where(where)
-        .orderBy(desc(accounts.createdAt), desc(accounts.id))
-        .limit(query.limit)
-        .offset(query.offset),
+      totalQuery,
+      cursor ? pageQuery : pageQuery.offset(query.offset),
     ]);
-    const pageAccountIds = pageAccounts.map((account) => account.id);
+    const hasMore = pageAccounts.length > query.limit;
+    const visibleAccounts = pageAccounts.slice(0, query.limit);
+    const lastAccount = visibleAccounts.at(-1);
+    const pageAccountIds = visibleAccounts.map((account) => account.id);
     const [analysisRows, reviewRows] = await Promise.all([
       this.db.select({
         accountId: analyses.accountId,
@@ -331,7 +413,7 @@ export class AdminService {
     const reviewsByAccount = new Map(reviewRows.map((row) => [row.accountId, row]));
 
     return {
-      items: pageAccounts.map((account) => {
+      items: visibleAccounts.map((account) => {
         const analysisStats = analysesByAccount.get(account.id);
         const reviewStats = reviewsByAccount.get(account.id);
         const completedCount = numeric(analysisStats?.completedCount);
@@ -364,12 +446,16 @@ export class AdminService {
         limit: query.limit,
         offset: query.offset,
         total: numeric(totalRows[0]?.total),
+        nextCursor: hasMore && lastAccount
+          ? encodeListCursor(lastAccount.createdAt, lastAccount.id)
+          : null,
       },
     };
   }
 
   public async listAnalyses(query: AdminAnalysesQuery) {
     const conditions: SQL[] = [];
+    const cursor = query.cursor ? decodeListCursor(query.cursor) : undefined;
     if (query.id) conditions.push(eq(analyses.id, query.id));
     if (query.accountId) conditions.push(eq(analyses.accountId, query.accountId));
     if (query.status) conditions.push(eq(analyses.status, query.status));
@@ -385,57 +471,64 @@ export class AdminService {
       );
       if (match) conditions.push(match);
     }
-    const where = conditions.length > 0 ? and(...conditions) : undefined;
-    const [totalRows, rows] = await Promise.all([
-      this.db.select({ total: count() })
-        .from(analyses)
-        .innerJoin(accounts, eq(accounts.id, analyses.accountId))
-        .where(where),
-      this.db.select({
-        analysis: analyses,
-        account: {
-          id: accounts.id,
-          kind: accounts.kind,
-          email: accounts.email,
-        },
-      }).from(analyses)
-        .innerJoin(accounts, eq(accounts.id, analyses.accountId))
-        .where(where)
-        .orderBy(desc(analyses.createdAt), desc(analyses.id))
-        .limit(query.limit)
-        .offset(query.offset),
-    ]);
-
-    const analysisIds = rows.map(({ analysis }) => analysis.id);
-    const quotaRows = analysisIds.length > 0
-      ? await this.db.select({
-          id: quotaEvents.id,
-          analysisId: quotaEvents.analysisId,
-          delta: quotaEvents.delta,
-          reason: quotaEvents.reason,
-          createdAt: quotaEvents.createdAt,
-        }).from(quotaEvents)
-          .where(inArray(quotaEvents.analysisId, analysisIds))
-          .orderBy(desc(quotaEvents.createdAt), desc(quotaEvents.id))
-      : [];
-    const quotaByAnalysis = new Map<string, typeof quotaRows>();
-    for (const event of quotaRows) {
-      if (!event.analysisId) continue;
-      const events = quotaByAnalysis.get(event.analysisId) ?? [];
-      events.push(event);
-      quotaByAnalysis.set(event.analysisId, events);
+    const filtersWhere = conditions.length > 0 ? and(...conditions) : undefined;
+    if (cursor) {
+      const cursorCondition = or(
+        lt(analyses.createdAt, new Date(cursor.createdAt)),
+        and(
+          eq(analyses.createdAt, new Date(cursor.createdAt)),
+          lt(analyses.id, cursor.id),
+        ),
+      );
+      if (cursorCondition) conditions.push(cursorCondition);
     }
+    const where = conditions.length > 0 ? and(...conditions) : undefined;
+    const totalQuery = this.db.select({ total: count() })
+      .from(analyses)
+      .innerJoin(accounts, eq(accounts.id, analyses.accountId))
+      .where(filtersWhere);
+    const pageQuery = this.db.select({
+      id: analyses.id,
+      accountId: analyses.accountId,
+      status: analyses.status,
+      source: analyses.source,
+      recommendationHeroIds: sql<unknown>`coalesce(jsonb_path_query_array(${analyses.result}, '$.recommendations[*].hero.id'), '[]'::jsonb)`,
+      hasResult: sql<boolean>`${analyses.result} is not null`,
+      patch: analyses.patch,
+      errorCode: analyses.errorCode,
+      revision: analyses.revision,
+      createdAt: analyses.createdAt,
+      updatedAt: analyses.updatedAt,
+      account: {
+        id: accounts.id,
+        kind: accounts.kind,
+        email: accounts.email,
+      },
+    }).from(analyses)
+      .innerJoin(accounts, eq(accounts.id, analyses.accountId))
+      .where(where)
+      .orderBy(desc(analyses.createdAt), desc(analyses.id))
+      .limit(query.limit + 1);
+    const [totalRows, rows] = await Promise.all([
+      totalQuery,
+      cursor ? pageQuery : pageQuery.offset(query.offset),
+    ]);
+    const hasMore = rows.length > query.limit;
+    const visibleRows = rows.slice(0, query.limit);
+    const lastRow = visibleRows.at(-1);
 
     return {
-      items: rows.map(({ analysis, account }) => {
-        const payloads = parseAdminAnalysisPayloads(analysis.input, analysis.result);
+      items: visibleRows.map((analysis) => {
+        const recommendationHeroIds = z.array(z.number().int().positive()).max(3)
+          .safeParse(analysis.recommendationHeroIds);
         return {
           id: analysis.id,
           accountId: analysis.accountId,
-          account,
+          account: analysis.account,
           status: analysis.status,
           source: analysis.source,
-          ...payloads,
+          recommendationHeroIds: recommendationHeroIds.success ? recommendationHeroIds.data : [],
+          hasResult: analysis.hasResult,
           patch: analysis.patch,
           errorCode: analysis.errorCode,
           revision: analysis.revision,
@@ -447,13 +540,6 @@ export class AdminService {
             : analysis.revision > 0
               ? 'session_to_latest_revision' as const
               : 'initial_terminal_state' as const,
-          quotaEvents: (quotaByAnalysis.get(analysis.id) ?? []).map((event) => ({
-            id: event.id,
-            delta: event.delta,
-            reason: event.reason,
-            createdAt: event.createdAt.toISOString(),
-          })),
-          sourceImage: analysisSourceImage(analysis.source),
           createdAt: analysis.createdAt.toISOString(),
           updatedAt: analysis.updatedAt.toISOString(),
         };
@@ -462,7 +548,79 @@ export class AdminService {
         limit: query.limit,
         offset: query.offset,
         total: numeric(totalRows[0]?.total),
+        nextCursor: hasMore && lastRow
+          ? encodeListCursor(lastRow.createdAt, lastRow.id)
+          : null,
       },
+    };
+  }
+
+  public async getAnalysis(id: string) {
+    const [analysisRows, quotaRows] = await Promise.all([
+      this.db.select({
+        analysis: analyses,
+        account: {
+          id: accounts.id,
+          kind: accounts.kind,
+          email: accounts.email,
+        },
+      }).from(analyses)
+        .innerJoin(accounts, eq(accounts.id, analyses.accountId))
+        .where(eq(analyses.id, id))
+        .limit(1),
+      this.db.select({
+        id: quotaEvents.id,
+        delta: quotaEvents.delta,
+        reason: quotaEvents.reason,
+        createdAt: quotaEvents.createdAt,
+      }).from(quotaEvents)
+        .where(eq(quotaEvents.analysisId, id))
+        .orderBy(desc(quotaEvents.createdAt), desc(quotaEvents.id))
+        .limit(2),
+    ]);
+    const row = analysisRows[0];
+    if (!row) throw new NotFoundError('Analysis not found');
+    return this.toAnalysisDetail(row.analysis, row.account, quotaRows);
+  }
+
+  private toAnalysisDetail(
+    analysis: typeof analyses.$inferSelect,
+    account: { id: string; kind: 'guest' | 'user'; email: string | null },
+    quotaRows: {
+      id: string;
+      delta: number;
+      reason: 'analysis' | 'refund';
+      createdAt: Date;
+    }[],
+  ) {
+    const payloads = parseAdminAnalysisPayloads(analysis.input, analysis.result);
+    return {
+      id: analysis.id,
+      accountId: analysis.accountId,
+      account,
+      status: analysis.status,
+      source: analysis.source,
+      ...payloads,
+      patch: analysis.patch,
+      errorCode: analysis.errorCode,
+      revision: analysis.revision,
+      durationMs: analysis.status === 'processing'
+        ? null
+        : Math.max(0, analysis.updatedAt.getTime() - analysis.createdAt.getTime()),
+      durationKind: analysis.status === 'processing'
+        ? 'in_progress' as const
+        : analysis.revision > 0
+          ? 'session_to_latest_revision' as const
+          : 'initial_terminal_state' as const,
+      quotaEvents: quotaRows.map((event) => ({
+        id: event.id,
+        delta: event.delta,
+        reason: event.reason,
+        createdAt: event.createdAt.toISOString(),
+      })),
+      sourceImage: analysisSourceImage(analysis.source),
+      createdAt: analysis.createdAt.toISOString(),
+      updatedAt: analysis.updatedAt.toISOString(),
     };
   }
 
@@ -592,7 +750,11 @@ export class AdminService {
       generatedAt: generatedAt.toISOString(),
       summary: {
         api: { status: 'connected' as const },
-        database: { status: databaseStatus, latencyMs: databaseLatencyMs },
+        database: {
+          status: databaseStatus,
+          latencyMs: databaseLatencyMs,
+          pool: this.getPoolMetrics?.() ?? null,
+        },
         connected: groups.connected.length,
         connectable: groups.connectable.length,
         blocked: groups.blocked.length,
@@ -602,7 +764,7 @@ export class AdminService {
   }
 
   public async grantProToAllFreeAccounts(actor: string) {
-    return this.db.transaction(async (tx) => {
+    const result = await this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${grantAllMarker}))`);
       const [existing] = await tx.select().from(adminAuditEvents)
         .where(eq(adminAuditEvents.marker, grantAllMarker))
@@ -655,5 +817,7 @@ export class AdminService {
         appliedAt: event.createdAt.toISOString(),
       };
     });
+    this.overviewCache.clear();
+    return result;
   }
 }

@@ -9,7 +9,6 @@ import {
   FunnelIcon,
   ListBulletsIcon,
   TargetIcon,
-  TrophyIcon,
 } from '@phosphor-icons/react';
 import { memo, useDeferredValue, useMemo, useState } from 'react';
 import { Link } from 'react-router';
@@ -27,15 +26,20 @@ import { StickyFilterBar } from '../components/sticky-filter-bar';
 import { AsyncState, Badge, Button, HeroIcon, Page } from '../components/ui';
 import { formatDateTime, heroName, positionName } from '../format';
 import { useI18n } from '../i18n';
-import type { Analysis, AnalysisSource, Position } from '../types';
+import { useAppStore } from '../store';
+import { accountQueryKey } from '../../shared/account-query-cache';
+import type { AnalysisSource, HistorySummary, Position } from '../types';
 
 type SourceFilter = 'all' | AnalysisSource;
 
-const HistoryItem = memo(function HistoryItem({ analysis }: { analysis: Analysis }) {
+const HistoryItem = memo(function HistoryItem({ analysis: summary }: { analysis: HistorySummary }) {
   const { language, text } = useI18n();
+  const analysis = {
+    ...summary,
+    input: summary.input ?? { position: null, enemyHeroIds: [] },
+    result: summary.result ?? { patch: null, recommendations: [] },
+  };
   const primary = analysis.result.recommendations[0];
-  if (!primary) return null;
-
   const alternatives = analysis.result.recommendations.slice(1);
 
   return (
@@ -45,27 +49,37 @@ const HistoryItem = memo(function HistoryItem({ analysis }: { analysis: Analysis
           <CalendarDotsIcon size={16} weight="duotone" aria-hidden />
           {formatDateTime(analysis.createdAt, language)}
         </span>
-        <HeroIcon hero={primary.hero} />
+        <HeroIcon hero={primary?.hero} />
         <span className="history-item__hero">
-          <strong>{heroName(primary.hero, language)}</strong>
+          <strong>
+            {primary
+              ? heroName(primary.hero, language)
+              : text('Рекомендации недоступны', 'Recommendations unavailable')}
+          </strong>
           <small className="history-item__taxonomy">
-            <PositionLabel position={analysis.input.position} variant="compact" />
+            {analysis.input.position ? (
+              <PositionLabel position={analysis.input.position} variant="compact" />
+            ) : (
+              <span>—</span>
+            )}
             <span aria-hidden>·</span>
             <RankLabel rank={analysis.input.rank ?? null} variant="compact" />
             <span aria-hidden>·</span>
-            <span>{text('Патч', 'Patch')} {analysis.result.patch}</span>
+            <span>{text('Патч', 'Patch')} {analysis.result.patch ?? '—'}</span>
           </small>
         </span>
         <span className="history-item__score">
           <small>{text('Оценка', 'Score')}</small>
-          <strong>{Math.round(primary.score)}</strong>
+          <strong>{primary ? Math.round(primary.score) : '—'}</strong>
         </span>
-        <Badge tone={primary.confidence === 'high' ? 'success' : 'warning'}>
-          {primary.confidence === 'high'
+        <Badge tone={primary?.confidence === 'high' ? 'success' : primary ? 'warning' : 'neutral'}>
+          {primary?.confidence === 'high'
             ? text('Высокая уверенность', 'High confidence')
-            : primary.confidence === 'medium'
+            : primary?.confidence === 'medium'
               ? text('Средняя уверенность', 'Medium confidence')
-              : text('Низкая уверенность', 'Low confidence')}
+              : primary
+                ? text('Низкая уверенность', 'Low confidence')
+                : '—'}
         </Badge>
         <CaretDownIcon className="history-item__chevron" size={18} aria-hidden />
       </summary>
@@ -93,10 +107,6 @@ const HistoryItem = memo(function HistoryItem({ analysis }: { analysis: Analysis
             <TargetIcon size={16} weight="duotone" aria-hidden />
             {analysis.input.enemyHeroIds.length} {text('соперников', 'enemies')}
           </span>
-          <span>
-            <TrophyIcon size={16} weight="duotone" aria-hidden />
-            {primary.evidence?.matchups.games ?? 0} {text('игр в matchup', 'matchup games')}
-          </span>
         </div>
         <Link className="button button--primary" to={`/result/${analysis.id}`}>
           {text('Открыть доказательства', 'Open evidence')}
@@ -107,6 +117,7 @@ const HistoryItem = memo(function HistoryItem({ analysis }: { analysis: Analysis
 });
 
 export function HistoryPage() {
+  const accountId = useAppStore((state) => state.account?.id ?? null);
   const { language, locale, text } = useI18n();
   const [search, setSearch] = useState('');
   const [source, setSource] = useState<SourceFilter>('all');
@@ -129,8 +140,9 @@ export function HistoryPage() {
   ];
 
   const query = useInfiniteQuery({
-    queryKey: ['history'],
+    queryKey: accountQueryKey(accountId ?? 'anonymous', 'history', 'summary'),
     queryFn: ({ pageParam }) => desktop.data.history({ cursor: pageParam, limit: 30 }),
+    enabled: Boolean(accountId),
     initialPageParam: null as string | null,
     getNextPageParam: (page) => page.nextCursor,
   });
@@ -144,9 +156,9 @@ export function HistoryPage() {
     const normalizedSearch = deferredSearch.trim().toLocaleLowerCase(locale);
     return allItems.filter((analysis) => {
       if (source !== 'all' && analysis.source !== source) return false;
-      if (position !== 'all' && analysis.input.position !== position) return false;
+      if (position !== 'all' && analysis.input?.position !== position) return false;
       if (!normalizedSearch) return true;
-      return analysis.result.recommendations.some((item) =>
+      return (analysis.result?.recommendations ?? []).some((item) =>
         heroName(item.hero, language).toLocaleLowerCase(locale).includes(normalizedSearch),
       );
     });

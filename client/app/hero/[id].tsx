@@ -60,7 +60,7 @@ export default function HeroDetailScreen() {
   const wishlistIds = ownerScope ? (wishlistByOwnerScope[ownerScope] ?? []) : [];
   const query = useQuery({
     queryKey: ['hero-detail', session?.userId, heroId],
-    queryFn: () => getHeroDetail(heroId),
+    queryFn: ({ signal }) => getHeroDetail(heroId, signal),
     enabled: Boolean(session && validHeroId),
     staleTime: (cachedQuery) => heroDetailStaleTime(cachedQuery.state.data),
     refetchInterval: (currentQuery) => heroDetailRefreshInterval(

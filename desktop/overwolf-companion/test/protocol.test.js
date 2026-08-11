@@ -13,6 +13,7 @@ import {
   parseInitialPairingUrl,
   parsePairingUrl,
   reduceConnectionPhase,
+  snapshotFingerprint,
   supportsRequiredFeatures,
   unwrapInfoResult,
 } from '../src/protocol.js';
@@ -127,6 +128,29 @@ describe('Dota 2 snapshot normalization', () => {
     assert.equal(snapshot.draft.picks.length, 2);
     assert.deepEqual(snapshot.draft.bans, [75]);
     assert.equal(JSON.stringify(snapshot).includes('76561198000000000'), false);
+  });
+
+  it('treats sequence, timestamp and source ordering as transport noise while preserving a new pick', () => {
+    const state = createDotaState();
+    Object.assign(state, {
+      running: true,
+      matchState: 'DOTA_GAMERULES_STATE_HERO_SELECTION',
+      playerTeam: 2,
+      draft: [
+        { heroId: 25, heroName: 'lina', team: 2, slot: 1, confirmed: true },
+        { heroId: 14, heroName: 'pudge', team: 3, slot: 0, confirmed: true },
+      ],
+      bans: [75],
+    });
+    const first = buildSnapshot(state, 1, 1000);
+    const repeated = {
+      ...buildSnapshot(state, 99, 2000),
+      draft: { ...buildSnapshot(state, 99, 2000).draft, picks: [...first.draft.picks].reverse() },
+    };
+
+    assert.equal(snapshotFingerprint(first), snapshotFingerprint(repeated));
+    state.draft.push({ heroId: 26, heroName: 'lion', team: 3, slot: 1, confirmed: true });
+    assert.notEqual(snapshotFingerprint(first), snapshotFingerprint(buildSnapshot(state, 100, 3000)));
   });
 
   it('preserves the official slug-only player identity beside ID-only draft picks', () => {

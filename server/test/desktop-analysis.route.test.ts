@@ -271,6 +271,8 @@ async function createTestApp(options: TestAppOptions = {}) {
     _accountId,
     draft,
     execution,
+    buildResponse,
+    additionalExecutions,
   ) => {
     if (draft.source === 'overwolf') currentOverwolfRevision = 0;
     if (draft.source === 'photo') {
@@ -282,10 +284,10 @@ async function createTestApp(options: TestAppOptions = {}) {
     const analysisDraft = execution.resourceId && options.recoveredAnalysisPosition
       ? { ...draft, position: options.recoveredAnalysisPosition }
       : draft;
-    return {
+    const base = {
       analysis: {
         id: analysisId,
-        status: 'completed',
+        status: 'completed' as const,
         source: draft.source,
         input: draftSchema.parse(analysisDraft),
         result: {
@@ -301,6 +303,21 @@ async function createTestApp(options: TestAppOptions = {}) {
       },
       quota,
     };
+    const response = buildResponse ? buildResponse(base) : base;
+    await idempotency.service.complete(
+      execution.idempotencyRecordId,
+      execution.leaseToken,
+      response,
+    );
+    for (const additionalExecution of additionalExecutions ?? []) {
+      idempotency.linkResource(additionalExecution.idempotencyRecordId, analysisId);
+      await idempotency.service.complete(
+        additionalExecution.idempotencyRecordId,
+        additionalExecution.leaseToken,
+        response,
+      );
+    }
+    return response as never;
   });
   const reviseOverwolf = vi.fn<AnalysisService['reviseOverwolf']>(async (
     _accountId,
@@ -308,6 +325,7 @@ async function createTestApp(options: TestAppOptions = {}) {
     expectedRevision,
     draft,
     execution,
+    buildResponse,
   ) => {
     const recovering = expectedRevision + 1 === currentOverwolfRevision
       && execution.resourceId === requestedAnalysisId;
@@ -316,11 +334,11 @@ async function createTestApp(options: TestAppOptions = {}) {
     }
     if (!recovering) currentOverwolfRevision += 1;
     idempotency.linkResource(execution.idempotencyRecordId, requestedAnalysisId);
-    return {
+    const base = {
       analysis: {
         id: requestedAnalysisId,
-        status: 'completed',
-        source: 'overwolf',
+        status: 'completed' as const,
+        source: 'overwolf' as const,
         input: draftSchema.parse(draft),
         result: {
           patch: '7.41',
@@ -336,6 +354,13 @@ async function createTestApp(options: TestAppOptions = {}) {
       quota,
       revision: currentOverwolfRevision,
     };
+    const response = buildResponse ? buildResponse(base) : base;
+    await idempotency.service.complete(
+      execution.idempotencyRecordId,
+      execution.leaseToken,
+      response,
+    );
+    return response as never;
   });
   const reviseDesktop = vi.fn<AnalysisService['reviseDesktop']>(async (
     _accountId,
@@ -344,6 +369,7 @@ async function createTestApp(options: TestAppOptions = {}) {
     nextDraft,
     execution,
     maximumRevisions,
+    buildResponse,
   ) => {
     const recovering = expectedRevision + 1 === currentDesktopRevision
       && execution.resourceId === requestedAnalysisId;
@@ -370,11 +396,11 @@ async function createTestApp(options: TestAppOptions = {}) {
       currentDesktopDraft = normalizedDraft;
       idempotency.linkResource(execution.idempotencyRecordId, requestedAnalysisId);
     }
-    return {
+    const base = {
       analysis: {
         id: requestedAnalysisId,
-        status: 'completed',
-        source: 'photo',
+        status: 'completed' as const,
+        source: 'photo' as const,
         input: currentDesktopDraft,
         result: {
           patch: '7.41',
@@ -387,6 +413,13 @@ async function createTestApp(options: TestAppOptions = {}) {
       revision: currentDesktopRevision,
       changed,
     };
+    const response = buildResponse ? buildResponse(base) : base;
+    await idempotency.service.complete(
+      execution.idempotencyRecordId,
+      execution.leaseToken,
+      response,
+    );
+    return response as never;
   });
   const quotaGet = vi.fn(async () => quota);
   let accountSequence = 0;
@@ -537,7 +570,7 @@ describe('Overwolf live analysis route', () => {
     expect(replayed.json()).toEqual(first.json());
     expect(parseOverwolfResponse(first).liveSession).toMatchObject({ revision: 1 });
     expect(reviseOverwolf).toHaveBeenCalledTimes(1);
-    expect(reviseOverwolf).toHaveBeenCalledWith(
+    expect(reviseOverwolf.mock.calls[0]?.slice(0, 5)).toEqual([
       accountId,
       analysisId,
       0,
@@ -547,7 +580,7 @@ describe('Overwolf live analysis route', () => {
         leaseToken: 'lease-2',
         resourceId: null,
       },
-    );
+    ]);
     expect(idempotency.claim).toHaveBeenNthCalledWith(
       2,
       accountId,
@@ -607,10 +640,8 @@ describe('Overwolf live analysis route', () => {
     expect(reviseOverwolf).not.toHaveBeenCalled();
   });
 
-  it('recovers when the revision committed before idempotency response storage failed', async () => {
-    const { app, reviseOverwolf } = await createTestApp({
-      failOverwolfCompletionOnce: true,
-    });
+  it('replays the terminal revision response from the same idempotency record', async () => {
+    const { app, reviseOverwolf } = await createTestApp();
     const started = await start(app, 'overwolf-recovery-start');
     const session = parseOverwolfResponse(started).liveSession;
     const request = () => app.inject({
@@ -624,13 +655,13 @@ describe('Overwolf live analysis route', () => {
       payload: revisionDraft,
     });
 
-    const interrupted = await request();
-    const recovered = await request();
+    const completed = await request();
+    const replayed = await request();
 
-    expect(interrupted.statusCode).toBe(500);
-    expect(recovered.statusCode).toBe(200);
-    expect(parseOverwolfResponse(recovered).liveSession).toMatchObject({ revision: 1 });
-    expect(reviseOverwolf).toHaveBeenCalledTimes(2);
+    expect(completed.statusCode).toBe(200);
+    expect(replayed.statusCode).toBe(200);
+    expect(replayed.json()).toEqual(completed.json());
+    expect(reviseOverwolf).toHaveBeenCalledTimes(1);
   });
 
   it('stops the capability chain after eight revisions', async () => {
@@ -711,7 +742,7 @@ describe('desktop analysis route', () => {
       quota,
     });
     expect(analyze).toHaveBeenCalledTimes(1);
-    expect(analyze).toHaveBeenCalledWith(
+    expect(analyze.mock.calls[0]?.slice(0, 3)).toEqual([
       accountId,
       expect.objectContaining({
         source: 'photo',
@@ -724,7 +755,7 @@ describe('desktop analysis route', () => {
         leaseToken: 'lease-4',
         resourceId: null,
       },
-    );
+    ]);
 
     const replayed = await request(2);
     expect(replayed.statusCode).toBe(200);
@@ -791,11 +822,11 @@ describe('desktop analysis route', () => {
       recognition: { detectedPosition: 4 },
       analysis: { input: { position: 4 } },
     });
-    expect(analyze).toHaveBeenCalledWith(
+    expect(analyze.mock.calls[0]?.slice(0, 3)).toEqual([
       accountId,
       expect.objectContaining({ position: 4 }),
       expect.any(Object),
-    );
+    ]);
     expect(recognize).toHaveBeenCalledWith(
       pngImage,
       'image/png',
@@ -864,11 +895,11 @@ describe('desktop analysis route', () => {
       status: 'completed',
       analysis: { input: { position: expected } },
     });
-    expect(analyze).toHaveBeenCalledWith(
+    expect(analyze.mock.calls[0]?.slice(0, 3)).toEqual([
       accountId,
       expect.objectContaining({ position: expected }),
       expect.any(Object),
-    );
+    ]);
     expect(recognize).toHaveBeenCalledWith(
       pngImage,
       'image/png',
@@ -942,16 +973,13 @@ describe('desktop analysis route', () => {
     expect(statuses[48]).toBe(429);
   });
 
-  it('keeps a committed session recoverable when idempotency completion fails', async () => {
+  it('replays the exact completed desktop session without another analysis', async () => {
     const {
       app,
       idempotency,
       analyze,
       getReserveCount,
-    } = await createTestApp({
-      firstFrameWaiting: false,
-      failSessionCompletionOnce: true,
-    });
+    } = await createTestApp({ firstFrameWaiting: false });
     const request = async (revision: number) => {
       const image = multipartImage();
       return app.inject({
@@ -965,30 +993,22 @@ describe('desktop analysis route', () => {
       });
     };
 
-    const failed = await request(0);
-    expect(failed.statusCode).toBe(500);
+    const completed = await request(0);
+    expect(completed.statusCode).toBe(200);
     expect(analyze).toHaveBeenCalledTimes(1);
     expect(getReserveCount()).toBe(1);
-    expect(idempotency.abort.mock.calls.map(([id]) => id)).toEqual(['claim-1']);
 
-    const recovered = await request(1);
-    expect(recovered.statusCode).toBe(200);
-    expect(recovered.json()).toMatchObject({
-      status: 'completed',
-      analysis: { id: '00000000-0000-4000-8000-000000000003' },
-    });
-    expect(analyze).toHaveBeenCalledTimes(2);
+    const replayed = await request(1);
+    expect(replayed.statusCode).toBe(200);
+    expect(replayed.json()).toEqual(completed.json());
+    expect(analyze).toHaveBeenCalledTimes(1);
     expect(getReserveCount()).toBe(1);
-    expect(analyze.mock.calls.at(1)?.[2].resourceId)
-      .toBe('00000000-0000-4000-8000-000000000003');
-    expect(idempotency.abort.mock.calls.map(([id]) => id)).toEqual(['claim-1']);
+    expect(idempotency.abort).not.toHaveBeenCalled();
   });
 
-  it('keeps recovered auto-position recognition aligned with the committed analysis', async () => {
+  it('replays the committed auto-position response without recalculating recognition', async () => {
     const { app, recognize } = await createTestApp({
       firstFrameWaiting: false,
-      failSessionCompletionOnce: true,
-      recoveredAnalysisPosition: 4,
     });
     recognize
       .mockResolvedValueOnce({ ...trustedRecognition, detectedPosition: 4 })
@@ -1006,11 +1026,12 @@ describe('desktop analysis route', () => {
       });
     };
 
-    expect((await request(0)).statusCode).toBe(500);
-    const recovered = await request(1);
+    const completed = await request(0);
+    const replayed = await request(1);
 
-    expect(recovered.statusCode).toBe(200);
-    expect(recovered.json()).toMatchObject({
+    expect(completed.statusCode).toBe(200);
+    expect(replayed.statusCode).toBe(200);
+    expect(replayed.json()).toMatchObject({
       status: 'completed',
       recognition: { detectedPosition: 4 },
       analysis: { input: { position: 4 } },

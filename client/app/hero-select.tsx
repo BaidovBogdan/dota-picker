@@ -30,7 +30,7 @@ export default function HeroSelectScreen() {
   const draftAccess = useDraftAccessGuard();
   const query = useQuery({
     queryKey: ['heroes', sessionUserId],
-    queryFn: getHeroes,
+    queryFn: ({ signal }) => getHeroes(signal),
     enabled: Boolean(sessionUserId) && validTeam && draftAccess.status === 'allowed',
   });
   const { colors } = useAppTheme();

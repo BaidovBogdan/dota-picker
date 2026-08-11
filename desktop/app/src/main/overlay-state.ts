@@ -97,7 +97,9 @@ export function createOverlayState(
       .flatMap((pick) => {
         const side = pick.side === 'ally' || pick.side === 'enemy'
           ? !pick.needsReview ? pick.side : null
-          : null;
+          : orientation && pick.visualGroup
+            ? pick.visualGroup === orientation.allyGroup ? 'ally' as const : 'enemy' as const
+            : null;
         if (!side || pick.heroId === null) return [];
         return [{
           side,

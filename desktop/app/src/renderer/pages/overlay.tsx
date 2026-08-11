@@ -54,6 +54,10 @@ export function isOverlayRefreshVisible(
   return engineRefreshing || pending === 'refresh';
 }
 
+export function isDraftOrientationSelectionPending(pending: PendingAction): boolean {
+  return pending === 'left' || pending === 'right';
+}
+
 function text(language: Language, russian: string, english: string): string {
   return language === 'en' ? english : russian;
 }
@@ -510,7 +514,7 @@ export function OverlayPage() {
           {state.draftOrientation.required ? (
             <DraftOrientationPrompt
               language={state.language}
-              pending={controlsPending}
+              pending={isDraftOrientationSelectionPending(pending)}
               onSelect={(allyGroup) => void runAction(
                 allyGroup,
                 (currentBridge) => currentBridge.setDraftAllyGroup(allyGroup),

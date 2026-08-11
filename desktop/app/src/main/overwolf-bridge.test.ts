@@ -203,6 +203,80 @@ describe('OverwolfBridge', () => {
     }
   });
 
+  it('suppresses duplicate semantic snapshots while delivering the latest meaningful pick', async () => {
+    const harness = createHarness();
+    const received: number[][] = [];
+    const unsubscribe = harness.bridge.onSnapshot((snapshot) => {
+      received.push(snapshot.draft.picks.map((pick) => pick.heroId));
+    });
+    const snapshot = (sequence: number, picks: number[]) => ({
+      version: 1 as const,
+      type: 'snapshot' as const,
+      sequence,
+      sentAt: Date.now() + sequence,
+      game: {
+        running: true,
+        matchState: 'DOTA_GAMERULES_STATE_HERO_SELECTION',
+        playerTeam: 2 as const,
+        localHeroId: 25,
+        localHeroName: 'lina',
+        localSlot: 1,
+        localPosition: 2 as const,
+        pseudoMatchId: 'match-dedupe',
+        launchCommandConfigured: true,
+      },
+      draft: {
+        picks: picks.map((heroId, slot) => ({
+          heroId,
+          heroName: null,
+          team: slot === 0 ? 2 as const : 3 as const,
+          slot,
+          confirmed: true,
+        })),
+        bans: [75],
+      },
+    });
+    try {
+      const listening = await harness.bridge.start();
+      await harness.bridge.connect();
+      const token = new URL(harness.openedUrls.at(-1) as string).searchParams.get('token');
+      const socket = new WebSocket(`ws://127.0.0.1:${listening.port}/v1/live`);
+      await waitForOpen(socket);
+      const acknowledgement = waitForMessage(socket);
+      socket.send(JSON.stringify({
+        version: 1,
+        type: 'hello',
+        sessionToken: token,
+        companionVersion: '0.1.0-test',
+        extensionId: 'test-extension',
+        sentAt: Date.now(),
+      }));
+      await acknowledgement;
+
+      socket.send(JSON.stringify(snapshot(1, [25, 14])));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const stateEventsAfterFirstSnapshot = harness.states.length;
+      for (let sequence = 2; sequence <= 51; sequence += 1) {
+        socket.send(JSON.stringify(snapshot(sequence, [25, 14])));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 35));
+      assert.deepEqual(received, [[25, 14]]);
+      assert.equal(harness.states.length, stateEventsAfterFirstSnapshot);
+
+      socket.send(JSON.stringify(snapshot(52, [25, 14, 26])));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.deepEqual(received, [[25, 14], [25, 14, 26]]);
+      assert.equal(harness.states.length, stateEventsAfterFirstSnapshot);
+
+      const closed = waitForClose(socket);
+      socket.close();
+      await closed;
+    } finally {
+      unsubscribe();
+      await harness.bridge.dispose();
+    }
+  });
+
   it('rejects invalid credentials and rotates the session token after restart', async () => {
     const harness = createHarness();
     try {

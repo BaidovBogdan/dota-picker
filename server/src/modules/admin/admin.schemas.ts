@@ -13,6 +13,7 @@ const paginationSchema = z.object({
   limit: z.number().int().positive(),
   offset: z.number().int().nonnegative(),
   total: z.number().int().nonnegative(),
+  nextCursor: z.string().nullable().optional(),
 });
 
 const accountKindSchema = z.enum(['guest', 'user']);
@@ -84,7 +85,8 @@ export const adminMetaResponseSchema = metaPositionResponseSchema.extend({
 
 export const adminUsersQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
-  offset: z.coerce.number().int().min(0).max(1_000_000).default(0),
+  offset: z.coerce.number().int().min(0).max(10_000).default(0),
+  cursor: z.string().min(1).max(512).optional(),
   q: z.string().trim().max(200).default(''),
   kind: accountKindSchema.optional(),
   plan: planSchema.optional(),
@@ -120,7 +122,8 @@ export const adminUsersResponseSchema = z.object({
 
 export const adminAnalysesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
-  offset: z.coerce.number().int().min(0).max(1_000_000).default(0),
+  offset: z.coerce.number().int().min(0).max(10_000).default(0),
+  cursor: z.string().min(1).max(512).optional(),
   q: z.string().trim().max(200).default(''),
   id: z.uuid().optional(),
   accountId: z.uuid().optional(),
@@ -141,6 +144,33 @@ const adminSourceImageSchema = z.object({
   detail: z.string().min(1),
 });
 
+const adminAnalysisDataQualitySchema = z.object({
+  input: z.enum(['valid', 'legacy_invalid']),
+  result: z.enum(['valid', 'absent', 'legacy_invalid']),
+  issues: z.array(z.string()),
+});
+
+export const adminAnalysisSummarySchema = z.object({
+  id: z.uuid(),
+  accountId: z.uuid(),
+  account: z.object({
+    id: z.uuid(),
+    kind: accountKindSchema,
+    email: z.email().nullable(),
+  }),
+  status: analysisStatusSchema,
+  source: analysisSourceSchema,
+  recommendationHeroIds: z.array(z.number().int().positive()).max(3),
+  hasResult: z.boolean(),
+  patch: z.string().nullable(),
+  errorCode: z.string().nullable(),
+  revision: z.number().int().nonnegative(),
+  durationMs: z.number().int().nonnegative().nullable(),
+  durationKind: z.enum(['initial_terminal_state', 'session_to_latest_revision', 'in_progress']),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+
 export const adminAnalysisSchema = z.object({
   id: z.uuid(),
   accountId: z.uuid(),
@@ -155,11 +185,7 @@ export const adminAnalysisSchema = z.object({
   result: recommendationResultSchema.nullable(),
   rawInput: jsonValueSchema,
   rawResult: jsonValueSchema,
-  dataQuality: z.object({
-    input: z.enum(['valid', 'legacy_invalid']),
-    result: z.enum(['valid', 'absent', 'legacy_invalid']),
-    issues: z.array(z.string()),
-  }),
+  dataQuality: adminAnalysisDataQualitySchema,
   patch: z.string().nullable(),
   errorCode: z.string().nullable(),
   revision: z.number().int().nonnegative(),
@@ -172,8 +198,12 @@ export const adminAnalysisSchema = z.object({
 });
 
 export const adminAnalysesResponseSchema = z.object({
-  items: z.array(adminAnalysisSchema),
+  items: z.array(adminAnalysisSummarySchema),
   pagination: paginationSchema,
+});
+
+export const adminAnalysisDetailResponseSchema = z.object({
+  analysis: adminAnalysisSchema,
 });
 
 export const integrationStatusSchema = z.enum(['connected', 'connectable', 'blocked']);
@@ -196,6 +226,12 @@ export const adminSystemResponseSchema = z.object({
     database: z.object({
       status: z.enum(['connected', 'blocked']),
       latencyMs: z.number().int().nonnegative(),
+      pool: z.object({
+        maxConnections: z.number().int().positive(),
+        totalConnections: z.number().int().nonnegative(),
+        idleConnections: z.number().int().nonnegative(),
+        waitingRequests: z.number().int().nonnegative(),
+      }).nullable(),
     }),
     connected: z.number().int().nonnegative(),
     connectable: z.number().int().nonnegative(),
@@ -223,6 +259,7 @@ export const grantProAllResponseSchema = z.object({
 });
 
 export type OverviewQuery = z.infer<typeof overviewQuerySchema>;
+export type OverviewResponse = z.infer<typeof overviewResponseSchema>;
 export type AdminMetaQuery = z.infer<typeof adminMetaQuerySchema>;
 export type AdminUsersQuery = z.infer<typeof adminUsersQuerySchema>;
 export type AdminAnalysesQuery = z.infer<typeof adminAnalysesQuerySchema>;

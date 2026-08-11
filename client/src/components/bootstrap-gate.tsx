@@ -27,6 +27,7 @@ export function BootstrapGate({ fontsReady, children }: Props) {
   useEffect(() => {
     if (!fontsReady || !hydrated || started.current) return;
     started.current = true;
+    const controller = new AbortController();
     let active = true;
 
     const start = async () => {
@@ -60,11 +61,12 @@ export function BootstrapGate({ fontsReady, children }: Props) {
         }
         const expectedUserId = session.userId;
         if (session.kind === 'registered') {
-          try {
-            const history = await getServerHistory();
-            const latest = useAppStore.getState();
-            if (latest.session?.userId === expectedUserId) latest.mergeHistory(history);
-          } catch {}
+          void getServerHistory(controller.signal)
+            .then((history) => {
+              const latest = useAppStore.getState();
+              if (active && latest.session?.userId === expectedUserId) latest.mergeHistory(history);
+            })
+            .catch(() => {});
         }
         loginBilling(session.revenueCatAppUserId).catch(() => {});
       } catch {
@@ -81,6 +83,7 @@ export function BootstrapGate({ fontsReady, children }: Props) {
     void start();
     return () => {
       active = false;
+      controller.abort();
     };
   }, [bootstrapGuest, fontsReady, hydrated]);
 

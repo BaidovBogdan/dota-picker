@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { lazy, Suspense, useEffect, useLayoutEffect } from 'react';
+import { lazy, Suspense, useEffect, useLayoutEffect, useState } from 'react';
 import {
   HashRouter,
   Navigate,
@@ -18,6 +18,7 @@ import { WindowControls } from './components/window-controls';
 import { useI18n } from './i18n';
 import { measureStartup } from './startup-diagnostics';
 import { useAppStore } from './store';
+import { accountQueryKey, sessionQueryKey } from '../shared/account-query-cache';
 
 const AccountPage = lazy(() =>
   measureStartup('route', 'account', () => import('./pages/account'))
@@ -64,7 +65,13 @@ const WishlistPage = lazy(() =>
     .then((module) => ({ default: module.WishlistPage })),
 );
 
-function Bootstrap() {
+function Bootstrap({
+  startupCycleComplete,
+  onStartupCycleComplete,
+}: {
+  startupCycleComplete: boolean;
+  onStartupCycleComplete: () => void;
+}) {
   const location = useLocation();
   const queryClient = useQueryClient();
   const account = useAppStore((state) => state.account);
@@ -82,7 +89,7 @@ function Bootstrap() {
     staleTime: Infinity,
   });
   const sessionQuery = useQuery({
-    queryKey: ['session'],
+    queryKey: sessionQueryKey,
     queryFn: () => measureStartup('session', undefined, desktop.session.bootstrap),
     retry: 1,
     staleTime: Infinity,
@@ -99,24 +106,27 @@ function Bootstrap() {
   }, [preferencesQuery.data, setPreferences]);
 
   useEffect(() => {
-    if (!sessionQuery.data?.authenticated) return;
+    const accountId = sessionQuery.data?.account?.id;
+    if (!sessionQuery.data?.authenticated || !accountId) return;
     let ready = false;
     const applyEngineState = (nextEngine: Parameters<typeof setEngine>[0]) => {
       setEngine(nextEngine);
       const nextReady = nextEngine.phase === 'ready' && Boolean(nextEngine.latestAnalysisId);
       if (nextReady && !ready && nextEngine.latestAnalysisId) {
         void Promise.all([
-          queryClient.invalidateQueries({ queryKey: ['quota'] }),
-          queryClient.invalidateQueries({ queryKey: ['history'] }),
-          queryClient.invalidateQueries({ queryKey: ['analysis', nextEngine.latestAnalysisId] }),
-          queryClient.invalidateQueries({ queryKey: ['reviews'] }),
+          queryClient.invalidateQueries({ queryKey: accountQueryKey(accountId, 'quota') }),
+          queryClient.invalidateQueries({ queryKey: accountQueryKey(accountId, 'history') }),
+          queryClient.invalidateQueries({
+            queryKey: accountQueryKey(accountId, 'analysis', nextEngine.latestAnalysisId),
+          }),
+          queryClient.invalidateQueries({ queryKey: accountQueryKey(accountId, 'reviews') }),
         ]);
       }
       ready = nextReady;
     };
     void desktop.engine.getState().then(applyEngineState);
     return desktop.engine.subscribe(applyEngineState);
-  }, [queryClient, sessionQuery.data?.authenticated, setEngine]);
+  }, [queryClient, sessionQuery.data?.account?.id, sessionQuery.data?.authenticated, setEngine]);
 
   useLayoutEffect(() => {
     const root = document.documentElement;
@@ -147,7 +157,7 @@ function Bootstrap() {
   if (!preferences) {
     return (
       <BootstrapScreen>
-        <StartupLoader phase="preferences" />
+        <StartupLoader phase="preferences" onCycleComplete={onStartupCycleComplete} />
       </BootstrapScreen>
     );
   }
@@ -155,7 +165,7 @@ function Bootstrap() {
   if (sessionQuery.isPending) {
     return (
       <BootstrapScreen>
-        <StartupLoader phase="session" />
+        <StartupLoader phase="session" onCycleComplete={onStartupCycleComplete} />
       </BootstrapScreen>
     );
   }
@@ -172,6 +182,14 @@ function Bootstrap() {
           )}
           onRetry={() => void sessionQuery.refetch()}
         />
+      </BootstrapScreen>
+    );
+  }
+
+  if (!startupCycleComplete) {
+    return (
+      <BootstrapScreen>
+        <StartupLoader phase="route" onCycleComplete={onStartupCycleComplete} />
       </BootstrapScreen>
     );
   }
@@ -203,11 +221,32 @@ function BootstrapScreen({ children }: { children: React.ReactNode }) {
   );
 }
 
-function Router() {
+function Router({
+  startupCycleComplete,
+  onStartupCycleComplete,
+}: {
+  startupCycleComplete: boolean;
+  onStartupCycleComplete: () => void;
+}) {
   return (
     <Routes>
-      <Route path="/auth" element={<Bootstrap />} />
-      <Route element={<Bootstrap />}>
+      <Route
+        path="/auth"
+        element={(
+          <Bootstrap
+            startupCycleComplete={startupCycleComplete}
+            onStartupCycleComplete={onStartupCycleComplete}
+          />
+        )}
+      />
+      <Route
+        element={(
+          <Bootstrap
+            startupCycleComplete={startupCycleComplete}
+            onStartupCycleComplete={onStartupCycleComplete}
+          />
+        )}
+      >
         <Route path="/" element={<DashboardPage />} />
         <Route path="/history" element={<HistoryPage />} />
         <Route path="/result/:id" element={<AnalysisPage />} />
@@ -248,6 +287,8 @@ function UpdateSync() {
 }
 
 export function App() {
+  const [startupCycleComplete, setStartupCycleComplete] = useState(false);
+
   return (
     <HashRouter>
       <UpdateSync />
@@ -258,7 +299,10 @@ export function App() {
           </BootstrapScreen>
         }
       >
-        <Router />
+        <Router
+          startupCycleComplete={startupCycleComplete}
+          onStartupCycleComplete={() => setStartupCycleComplete(true)}
+        />
       </Suspense>
     </HashRouter>
   );

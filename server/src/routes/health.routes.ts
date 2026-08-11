@@ -5,7 +5,10 @@ import type { Database } from '../db/client.js';
 
 const healthSchema = z.object({ status: z.enum(['ok', 'ready', 'not_ready']) });
 
-export function healthRoutes(db: Database): FastifyPluginAsyncZod {
+export function healthRoutes(
+  db: Database,
+  isApplicationReady?: () => Promise<boolean>,
+): FastifyPluginAsyncZod {
   return async (app) => {
     app.get('/live', {
       schema: { tags: ['Health'], response: { 200: healthSchema } },
@@ -16,6 +19,9 @@ export function healthRoutes(db: Database): FastifyPluginAsyncZod {
     }, async (_request, reply) => {
       try {
         await db.execute(sql`select 1`);
+        if (isApplicationReady && !(await isApplicationReady())) {
+          return await reply.status(503).send({ status: 'not_ready' as const });
+        }
         return { status: 'ready' as const };
       } catch {
         return reply.status(503).send({ status: 'not_ready' as const });

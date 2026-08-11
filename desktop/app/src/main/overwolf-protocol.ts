@@ -75,6 +75,40 @@ export const overwolfClientMessageSchema = z.discriminatedUnion('type', [
 export type OverwolfClientMessage = z.infer<typeof overwolfClientMessageSchema>;
 export type OverwolfSnapshotMessage = z.infer<typeof snapshotMessageSchema>;
 
+export function overwolfSnapshotFingerprint(snapshot: OverwolfSnapshotMessage): string {
+  const picks = snapshot.draft.picks
+    .map((pick) => [
+      pick.team,
+      pick.slot ?? -1,
+      pick.heroId,
+      pick.heroName ?? '',
+      pick.confirmed ? 1 : 0,
+    ] as const)
+    .sort((left, right) => {
+      for (let index = 0; index < left.length; index += 1) {
+        const comparison = String(left[index]).localeCompare(String(right[index]));
+        if (comparison !== 0) return comparison;
+      }
+      return 0;
+    });
+  const bans = [...new Set(snapshot.draft.bans)].sort((left, right) => left - right);
+  return JSON.stringify({
+    game: [
+      snapshot.game.running,
+      snapshot.game.matchState,
+      snapshot.game.playerTeam,
+      snapshot.game.localHeroId,
+      snapshot.game.localHeroName,
+      snapshot.game.localSlot,
+      snapshot.game.localPosition,
+      snapshot.game.pseudoMatchId,
+      snapshot.game.launchCommandConfigured,
+    ],
+    picks,
+    bans,
+  });
+}
+
 export type OverwolfServerMessage =
   | {
       version: typeof OVERWOLF_BRIDGE_PROTOCOL_VERSION;

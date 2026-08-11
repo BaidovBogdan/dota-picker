@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { create } from 'zustand';
 import { persist, type PersistStorage, type StorageValue } from 'zustand/middleware';
 
+import { combineHistoryRecords } from '@/services/history-records';
 import type {
   AnalysisResult,
   Attempts,
@@ -712,6 +713,7 @@ const normalizeAnalysisResult = (value: unknown): AnalysisResult | null => {
     id: value.id,
     ...(typeof value.serverId === 'string' ? { serverId: value.serverId } : {}),
     ...(typeof value.ownerScope === 'string' ? { ownerScope: value.ownerScope } : {}),
+    ...(source === 'server' && value.detailLevel === 'summary' ? { detailLevel: 'summary' as const } : {}),
     draft,
     recommendations,
     patch: typeof value.patch === 'string' ? value.patch : '',
@@ -936,26 +938,6 @@ const sameHeroes = (left: Hero[], right: Hero[]) =>
       sameNumbers(hero.positions, candidate.positions)
     );
   });
-
-const combineHistory = (
-  incoming: AnalysisResult[],
-  existing: AnalysisResult[],
-  deletedHistoryIds: string[],
-) => {
-  const deleted = new Set(deletedHistoryIds);
-  const seen = new Set<string>();
-  const canonicalId = (item: AnalysisResult) => item.serverId ?? item.id;
-  const combined: AnalysisResult[] = [];
-  for (const item of [...incoming, ...existing]) {
-    const id = canonicalId(item);
-    if (deleted.has(id) || seen.has(id)) continue;
-    seen.add(id);
-    combined.push(item);
-  }
-  return combined
-    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
-    .slice(0, HISTORY_LIMIT);
-};
 
 const effectiveAttempts = (
   serverAttempts: Attempts,
@@ -1316,12 +1298,13 @@ export const useAppStore = create<AppState>()(
             ownerScope ? { ...item, ownerScope } : item,
           );
           return {
-            history: combineHistory(
+            history: combineHistoryRecords(
               scopedIncoming,
               state.history.filter(
                 (item) => item.source === 'offline' && item.ownerScope === ownerScope,
               ),
               state.deletedHistoryIds,
+              HISTORY_LIMIT,
             ),
           };
         }),
@@ -1332,10 +1315,11 @@ export const useAppStore = create<AppState>()(
             ownerScope ? { ...item, ownerScope } : item,
           );
           return {
-            history: combineHistory(
+            history: combineHistoryRecords(
               scopedIncoming,
               state.history.filter((item) => !item.ownerScope || item.ownerScope === ownerScope),
               state.deletedHistoryIds,
+              HISTORY_LIMIT,
             ),
           };
         }),

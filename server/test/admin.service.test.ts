@@ -116,7 +116,7 @@ describe('AdminService analysis provenance', () => {
     });
   });
 
-  it('loads quota history once for the whole analysis page', async () => {
+  it('loads compact analysis table rows without a quota-event query', async () => {
     const createdAt = new Date('2026-08-08T10:00:00.000Z');
     const updatedAt = new Date('2026-08-08T10:00:01.000Z');
     const accountId = '11111111-1111-4111-8111-111111111111';
@@ -125,38 +125,22 @@ describe('AdminService analysis provenance', () => {
       '33333333-3333-4333-8333-333333333333',
     ];
     const rows = analysisIds.map((id, index) => ({
-      analysis: {
-        id,
-        accountId,
-        status: 'failed' as const,
-        source: index === 0 ? 'photo' as const : 'overwolf' as const,
-        input: {
-          source: index === 0 ? 'photo' as const : 'overwolf' as const,
-          position: 2,
-          allyHeroIds: [1],
-          enemyHeroIds: [2],
-          bannedHeroIds: [],
-        },
-        result: null,
-        patch: null,
-        errorCode: 'INTERNAL_ERROR',
-        revision: index,
-        createdAt,
-        updatedAt,
-      },
+      id,
+      accountId,
+      status: 'failed' as const,
+      source: index === 0 ? 'photo' as const : 'overwolf' as const,
+      recommendationHeroIds: index === 0 ? [14, 23, 42] : [],
+      hasResult: index === 0,
+      patch: null,
+      errorCode: 'INTERNAL_ERROR',
+      revision: index,
+      createdAt,
+      updatedAt,
       account: { id: accountId, kind: 'user' as const, email: 'user@example.com' },
-    }));
-    const quotaRows = analysisIds.map((analysisId, index) => ({
-      id: `${index + 4}4444444-4444-4444-8444-444444444444`,
-      analysisId,
-      delta: index === 0 ? -1 : 1,
-      reason: index === 0 ? 'analysis' as const : 'refund' as const,
-      createdAt: updatedAt,
     }));
     const select = vi.fn()
       .mockImplementationOnce(() => listQueryResult([{ total: 2 }]))
-      .mockImplementationOnce(() => listQueryResult(rows))
-      .mockImplementationOnce(() => listQueryResult(quotaRows));
+      .mockImplementationOnce(() => listQueryResult(rows));
     const service = new AdminService({ select } as unknown as Database, config, metaAdapter);
 
     const result = await service.listAnalyses({
@@ -166,22 +150,73 @@ describe('AdminService analysis provenance', () => {
       accountId,
     });
 
-    expect(select).toHaveBeenCalledTimes(3);
+    expect(select).toHaveBeenCalledTimes(2);
     expect(result.items).toHaveLength(2);
     expect(result.items[0]).toMatchObject({
       id: analysisIds[0],
       revision: 0,
-      sourceImage: { stored: false, status: 'not_stored' },
+      recommendationHeroIds: [14, 23, 42],
+      hasResult: true,
       durationKind: 'initial_terminal_state',
-      quotaEvents: [{ delta: -1, reason: 'analysis' }],
     });
     expect(result.items[1]).toMatchObject({
       id: analysisIds[1],
       revision: 1,
-      sourceImage: { stored: false, status: 'not_applicable' },
+      recommendationHeroIds: [],
+      hasResult: false,
       durationKind: 'session_to_latest_revision',
-      quotaEvents: [{ delta: 1, reason: 'refund' }],
     });
+  });
+
+  it('uses an opaque keyset cursor without scanning a legacy offset', async () => {
+    const createdAt = new Date('2026-08-08T10:00:00.000Z');
+    const accountId = '11111111-1111-4111-8111-111111111111';
+    const rows = [0, 1, 2].map((index) => ({
+      id: `22222222-2222-4222-8222-${String(index + 1).padStart(12, '0')}`,
+      accountId,
+      status: 'completed' as const,
+      source: 'manual' as const,
+      recommendationHeroIds: [2, 3, 4],
+      hasResult: true,
+      patch: '7.41',
+      errorCode: null,
+      revision: 0,
+      createdAt: new Date(createdAt.getTime() - index * 1_000),
+      updatedAt: createdAt,
+      account: { id: accountId, kind: 'user' as const, email: 'user@example.com' },
+    }));
+    const offset = vi.fn(async () => rows);
+    const pageBuilder = {
+      from: vi.fn(() => pageBuilder),
+      innerJoin: vi.fn(() => pageBuilder),
+      where: vi.fn(() => pageBuilder),
+      orderBy: vi.fn(() => pageBuilder),
+      limit: vi.fn(() => pageBuilder),
+      offset,
+      then: <TResult1 = typeof rows, TResult2 = never>(
+        onFulfilled?: ((result: typeof rows) => TResult1 | PromiseLike<TResult1>) | null,
+        onRejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
+      ) => Promise.resolve(rows).then(onFulfilled, onRejected),
+    };
+    const select = vi.fn()
+      .mockImplementationOnce(() => listQueryResult([{ total: 3 }]))
+      .mockImplementationOnce(() => pageBuilder);
+    const service = new AdminService({ select } as unknown as Database, config, metaAdapter);
+    const cursor = Buffer.from(JSON.stringify({
+      createdAt: createdAt.toISOString(),
+      id: '22222222-2222-4222-8222-000000000000',
+    })).toString('base64url');
+
+    const result = await service.listAnalyses({
+      limit: 2,
+      offset: 0,
+      cursor,
+      q: '',
+    });
+
+    expect(offset).not.toHaveBeenCalled();
+    expect(result.items).toHaveLength(2);
+    expect(result.pagination.nextCursor).toBeTypeOf('string');
   });
 });
 

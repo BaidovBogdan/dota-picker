@@ -1,4 +1,9 @@
-import type { HeroMeta, MetaSnapshot, RankBracket } from '../heroes/heroes.types.js';
+import type {
+  DraftDataHealth,
+  HeroMeta,
+  MetaSnapshot,
+  RankBracket,
+} from '../heroes/heroes.types.js';
 
 export type Position = 1 | 2 | 3 | 4 | 5;
 
@@ -52,7 +57,9 @@ export type RecommendationEvidence = {
     source:
       | 'opendota_rolling_all_ranks'
       | 'opendota_current_patch_rank_pairs'
-      | 'opendota_current_patch_all_ranks_pairs';
+      | 'opendota_current_patch_all_ranks_pairs'
+      | 'opendota_recent_public_rank_pairs'
+      | 'opendota_recent_public_all_ranks_pairs';
     opponentsCovered: number;
     opponentsTotal: number;
     games: number;
@@ -67,13 +74,15 @@ export type RecommendationEvidence = {
     patchGames?: number | undefined;
     minimumPatchGames?: number | undefined;
     isStale?: boolean | undefined;
-    availability?: 'ready' | 'unavailable' | undefined;
+    availability?: 'ready' | 'collecting' | 'unavailable' | undefined;
     byOpponent?: RecommendationPairEvidence[] | undefined;
   };
   synergy?: {
     source:
       | 'opendota_current_patch_rank_pairs'
       | 'opendota_current_patch_all_ranks_pairs'
+      | 'opendota_recent_public_rank_pairs'
+      | 'opendota_recent_public_all_ranks_pairs'
       | 'team_composition_only';
     alliesCovered: number;
     alliesTotal: number;
@@ -91,12 +100,14 @@ export type RecommendationEvidence = {
     rank: RankBracket | null;
     rankScoped: boolean;
     isStale: boolean;
-    availability: 'ready' | 'unavailable';
+    availability: 'ready' | 'collecting' | 'unavailable';
     byAlly: RecommendationPairEvidence[];
   } | undefined;
   meta: {
     source:
       | 'opendota_current_patch_30d_position'
+      | 'opendota_current_patch_parsed_position'
+      | 'opendota_rolling_lane_role_scenarios'
       | 'opendota_rank_hero_stats'
       | 'opendota_public_hero_stats';
     games: number;
@@ -158,6 +169,10 @@ export type RecommendationResult = {
   metaFetchedAt: string;
   recommendations: Recommendation[];
   provenance?: RecommendationProvenance | undefined;
+  dataHealth?: DraftDataHealth | undefined;
+  draftCompleteness?: {
+    bans: 'known' | 'unknown';
+  } | undefined;
 };
 
 export type RankRequest = {

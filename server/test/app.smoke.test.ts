@@ -135,15 +135,10 @@ describe('application composition', () => {
     expect(catalog.json()).toMatchObject({ heroes: [{ id: 1 }], patch: '7.41' });
     expect(meta.statusCode).toBe(200);
     expect(meta.json()).toMatchObject({
-      heroes: [{ id: 1 }],
-      availability: 'ready',
-      positionStats: [
-        { heroId: 1, position: 1 },
-        { heroId: 1, position: 2 },
-        { heroId: 1, position: 3 },
-        { heroId: 1, position: 4 },
-        { heroId: 1, position: 5 },
-      ],
+      heroes: [],
+      availability: 'collecting',
+      positionStats: [],
+      dataHealth: { availability: 'unavailable' },
     });
   }, 20_000);
 });

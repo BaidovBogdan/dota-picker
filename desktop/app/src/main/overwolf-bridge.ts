@@ -6,6 +6,7 @@ import { DesktopError } from './errors.js';
 import {
   OVERWOLF_BRIDGE_PROTOCOL_VERSION,
   OVERWOLF_PAIRING_SCHEME,
+  overwolfSnapshotFingerprint,
   overwolfClientMessageSchema,
   type OverwolfServerMessage,
   type OverwolfSnapshotMessage,
@@ -83,6 +84,7 @@ export class OverwolfBridge {
   private startPromise: Promise<OverwolfBridgeState> | null = null;
   private disposing = false;
   private lastSequence = -1;
+  private lastSnapshotFingerprint: string | null = null;
   private readonly snapshotListeners = new Set<(snapshot: OverwolfSnapshotMessage) => void>();
   private readonly stateListeners = new Set<(state: OverwolfBridgeState) => void>();
   private state: OverwolfBridgeState;
@@ -183,6 +185,7 @@ export class OverwolfBridge {
     this.clearStaleTimer();
     this.clearPairingTimer();
     this.token = null;
+    this.lastSnapshotFingerprint = null;
     if (this.activeSocket) {
       closeSocket(this.activeSocket, 1001, 'Counterpick is shutting down');
       this.activeSocket = null;
@@ -306,6 +309,7 @@ export class OverwolfBridge {
         }
         this.activeSocket = socket;
         this.lastSequence = -1;
+        this.lastSnapshotFingerprint = null;
         const now = new Date().toISOString();
         this.setState({
           phase: 'connected',
@@ -336,13 +340,23 @@ export class OverwolfBridge {
         this.setState({ phase: 'connected', lastMessageAt, lastError: null });
         return;
       }
-      this.setState({
+      const fingerprint = overwolfSnapshotFingerprint(message);
+      const isDuplicate = fingerprint === this.lastSnapshotFingerprint;
+      this.lastSnapshotFingerprint = fingerprint;
+      const statePatch = {
         phase: 'connected',
         lastMessageAt,
         lastError: null,
         gameDetected: message.game.running,
         draftActive: message.game.running && isDraftMatchState(message.game.matchState),
-      });
+      } as const;
+      const shouldPublishState = this.state.phase !== 'connected'
+        || this.state.lastError !== null
+        || this.state.gameDetected !== statePatch.gameDetected
+        || this.state.draftActive !== statePatch.draftActive;
+      if (shouldPublishState) this.setState(statePatch);
+      else this.state = { ...this.state, ...statePatch };
+      if (isDuplicate) return;
       for (const listener of this.snapshotListeners) {
         try {
           listener(structuredClone(message));
@@ -362,6 +376,7 @@ export class OverwolfBridge {
       if (socket !== this.activeSocket) return;
       this.activeSocket = null;
       this.lastSequence = -1;
+      this.lastSnapshotFingerprint = null;
       this.options.logger.info('Overwolf companion disconnected', { code });
       if (!this.disposing) {
         this.setState({

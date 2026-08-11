@@ -164,7 +164,7 @@ describe('diagnostics routes', () => {
       mode: 'vision',
       hasErrors: false,
     }));
-    expect(detail).toHaveBeenCalledWith(sessionId, { limit: 500 });
+    expect(detail).toHaveBeenCalledWith(sessionId, { limit: 100 });
   });
 
   it('parses a stable keyset cursor for older diagnostic events', async () => {

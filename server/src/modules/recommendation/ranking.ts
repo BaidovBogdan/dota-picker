@@ -20,6 +20,7 @@ import type {
 
 const PAIR_PATCH_PRIOR_GAMES = 80;
 const PAIR_RANK_PRIOR_GAMES = 40;
+const MIN_RANK_PAIR_GAMES = 12;
 const POSITION_PRIOR_GAMES = 120;
 const MIN_ROLE_FIT = 0.5;
 const DEFAULT_RESULT_LIMIT = 3;
@@ -87,6 +88,7 @@ type PairObservation = {
   games: number;
   reliability: number;
   winRate: number;
+  rankScoped: boolean;
   stat: DraftPairStat;
 };
 
@@ -178,8 +180,9 @@ function positionEvaluation(
   const sampleReliability =
     target.picks / (target.picks + POSITION_PRIOR_GAMES);
   const observedScore = shareScore * (0.75 + sampleReliability * 0.25);
+  const observedWeight = target.method === 'lane_role_scenario_approximation' ? 0.12 : 0.65;
   return {
-    score: clamp(tagScore * 0.35 + observedScore * 0.65),
+    score: clamp(tagScore * (1 - observedWeight) + observedScore * observedWeight),
     stat: target,
   };
 }
@@ -189,9 +192,16 @@ function isPositionEligible(
   position: Position,
   evaluation: PositionEvaluation
 ) {
+  const scenarioApproximation = evaluation.stat?.method === 'lane_role_scenario_approximation';
+  const isCarry = hero.roles.includes('Carry');
+  if (scenarioApproximation && position === 4 && isCarry) return false;
+  if (
+    scenarioApproximation
+    && position === 5
+    && (isCarry || !hero.roles.includes('Support'))
+  ) return false;
   if (evaluation.score < MIN_ROLE_FIT) return false;
   if (evaluation.stat) return true;
-  const isCarry = hero.roles.includes('Carry');
   if (position === 4 && isCarry) {
     return false;
   }
@@ -212,28 +222,30 @@ function scopedPairRate(
     expected,
     PAIR_PATCH_PRIOR_GAMES
   );
-  const winRate = rankRequested
+  const rankScoped = rankRequested && stat.rankGames >= MIN_RANK_PAIR_GAMES;
+  const winRate = rankScoped
     ? smoothedRate(
         stat.rankWins,
         stat.rankGames,
         patchRate,
         PAIR_RANK_PRIOR_GAMES
-      )
+    )
     : patchRate;
   const patchReliability =
     stat.patchGames / (stat.patchGames + PAIR_PATCH_PRIOR_GAMES * 2);
-  const rankReliability = rankRequested
+  const rankReliability = rankScoped
     ? stat.rankGames / (stat.rankGames + PAIR_RANK_PRIOR_GAMES * 2)
     : patchReliability;
   return {
     advantage: winRate - expected,
     expected,
     games:
-      rankRequested && stat.rankGames > 0 ? stat.rankGames : stat.patchGames,
-    reliability: rankRequested
+      rankScoped ? stat.rankGames : stat.patchGames,
+    reliability: rankScoped
       ? rankReliability * 0.75 + patchReliability * 0.25
       : patchReliability,
     winRate,
+    rankScoped,
     stat,
   };
 }
@@ -265,7 +277,7 @@ function aggregatePairEvidence(
       minimumPatchGames,
       value.stat.patchGames
     );
-    if (value.stat.rankGames > 0) {
+    if (value.rankScoped) {
       rankCoverageCount += 1;
     }
     reliabilityTotal += value.reliability;
@@ -401,7 +413,8 @@ function metaEvaluation(
   maximumPositionPicks: number,
   rankRequested: boolean
 ) {
-  const usingPosition = positionStat !== null;
+  const usingPosition = positionStat !== null
+    && positionStat.method !== 'lane_role_scenario_approximation';
   const games = positionStat?.picks ?? hero.picks;
   const wins = positionStat?.wins ?? hero.wins;
   const baseline = safeRate(hero.wins, hero.picks);
@@ -420,9 +433,14 @@ function metaEvaluation(
     winComponent * 0.72 + popularity * 0.16 + sampleReliability * 0.12;
   const rankScoped = usingPosition
     ? snapshot.positionMeta?.rankFilter === 'average_match_rank'
-    : rankRequested && hero.picks > 0;
+    : hero.statisticsScope === 'rank'
+      || (hero.statisticsScope === undefined && rankRequested && hero.picks > 0);
   const source: RecommendationEvidence['meta']['source'] = usingPosition
-    ? 'opendota_current_patch_30d_position'
+    ? snapshot.positionMeta?.window === 'rolling_lane_role_scenarios'
+      ? 'opendota_rolling_lane_role_scenarios'
+      : snapshot.positionMeta?.window === 'current_patch_parsed_lane_roles'
+        ? 'opendota_current_patch_parsed_position'
+        : 'opendota_current_patch_30d_position'
     : rankScoped
       ? 'opendota_rank_hero_stats'
       : 'opendota_public_hero_stats';
@@ -573,17 +591,27 @@ function teamEvaluation(
 
 function recommendationConfidence(
   matchup: MatchupEvaluation,
+  team: TeamEvaluation,
   metaReliability: number,
   pairDataReady: boolean,
-  pairDataStale: boolean
+  pairDataStale: boolean,
+  hasAllies: boolean,
+  populationFallback: boolean,
 ): Recommendation['confidence'] {
-  const combined = matchup.reliability * 0.75 + metaReliability * 0.25;
+  const teamReliable = !hasAllies || (
+    team.coverage === 1 && team.reliability >= 0.15
+  );
+  const combined = hasAllies
+    ? matchup.reliability * 0.6 + metaReliability * 0.25 + team.reliability * 0.15
+    : matchup.reliability * 0.75 + metaReliability * 0.25;
   if (
     pairDataReady &&
     !pairDataStale &&
+    !populationFallback &&
     matchup.coverage === 1 &&
     matchup.reliability >= 0.5 &&
     metaReliability >= 0.6 &&
+    teamReliable &&
     combined >= 0.55
   ) {
     return 'high';
@@ -800,11 +828,20 @@ export function rankRecommendationPool(
       .filter(stat => stat.position === draft.position)
       .map(stat => stat.picks) ?? [])
   );
-  const rankRequested = draft.rank !== undefined;
-  const rankPairSource = 'opendota_current_patch_rank_pairs';
-  const allRankPairSource = 'opendota_current_patch_all_ranks_pairs';
+  const rankRequested = draft.rank !== undefined
+    && snapshot.pairScope?.rankFilter === 'average_match_rank';
+  const metaRankRequested = draft.rank !== undefined;
+  const rollingPairSample = snapshot.pairScope?.window === 'rolling_recent_public_matches';
+  const rankPairSource = rollingPairSample
+    ? 'opendota_recent_public_rank_pairs'
+    : 'opendota_current_patch_rank_pairs';
+  const allRankPairSource = rollingPairSample
+    ? 'opendota_recent_public_all_ranks_pairs'
+    : 'opendota_current_patch_all_ranks_pairs';
   const pairDataReady = snapshot.pairScope?.availability === 'ready';
   const pairDataStale = snapshot.pairScope?.isStale ?? false;
+  const populationFallback = snapshot.dataHealth?.fallbackFrom !== null
+    && snapshot.dataHealth?.fallbackFrom !== undefined;
 
   const candidates = snapshot.heroes
     .filter(hero => !unavailable.has(hero.id))
@@ -832,11 +869,15 @@ export function rankRecommendationPool(
         snapshot,
         maximumHeroPicks,
         maximumPositionPicks,
-        rankRequested
+        metaRankRequested
       );
       const team = teamEvaluation(hero, allies, snapshot, rankRequested);
-      const matchupRankScoped = rankRequested && matchup.rankGames > 0;
-      const teamRankScoped = rankRequested && team.rankGames > 0;
+      const matchupRankScoped = rankRequested
+        && draft.enemyHeroIds.length > 0
+        && matchup.rankCoverage === 1;
+      const teamRankScoped = rankRequested
+        && allies.length > 0
+        && team.rankCoverage === 1;
       const matchupSource = matchupRankScoped
         ? rankPairSource
         : allRankPairSource;
@@ -883,9 +924,12 @@ export function rankRecommendationPool(
         score: Math.round(clamp(baseScore, 0, 100)),
         confidence: recommendationConfidence(
           matchup,
+          team,
           meta.reliability,
           pairDataReady,
-          pairDataStale
+          pairDataStale,
+          allies.length > 0,
+          populationFallback,
         ),
         metrics,
         scoreBreakdown,
@@ -990,6 +1034,10 @@ export function recommendationResultFromPool(
       DEFAULT_RESULT_LIMIT
     ),
     provenance,
+    ...(request.snapshot.dataHealth ? { dataHealth: request.snapshot.dataHealth } : {}),
+    draftCompleteness: {
+      bans: request.draft.source === 'photo' ? 'unknown' : 'known',
+    },
   };
 }
 

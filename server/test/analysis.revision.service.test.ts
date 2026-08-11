@@ -79,10 +79,21 @@ function analysisRow(overrides: Partial<Analysis> = {}): Analysis {
   };
 }
 
+function isCompletedUpdate(value: unknown): boolean {
+  return typeof value === 'object'
+    && value !== null
+    && 'status' in value
+    && value.status === 'completed'
+    && 'response' in value
+    && typeof value.response === 'object'
+    && value.response !== null;
+}
+
 function createHarness(
   row: Analysis | undefined,
   updateSucceeds = true,
   hasReview = false,
+  snapshot: unknown = {},
 ) {
   const reserve = vi.fn(async () => quota);
   const getQuota = vi.fn(async () => quota);
@@ -124,7 +135,7 @@ function createHarness(
   const heroIds = [1, 5, 14, 26, 75];
   const meta = {
     getHeroes: vi.fn(async () => heroIds.map(id => ({ id }))),
-    getSnapshot: vi.fn(async () => ({})),
+    getSnapshot: vi.fn(async () => snapshot),
   } as unknown as OpenDotaAdapter;
   const recommendations = {
     recommend: vi.fn(async () => result),
@@ -139,6 +150,37 @@ function createHarness(
 }
 
 describe('AnalysisService Overwolf revisions', () => {
+  it('does not persist a revision built from a collecting draft snapshot', async () => {
+    const harness = createHarness(
+      analysisRow(),
+      true,
+      false,
+      {
+        pairScope: { availability: 'collecting' },
+        positionMeta: { availability: 'collecting' },
+        dataHealth: { availability: 'collecting' },
+      },
+    );
+
+    await expect(harness.service.reviseOverwolf(
+      accountId,
+      analysisId,
+      0,
+      draft,
+      execution,
+    )).rejects.toMatchObject({
+      statusCode: 503,
+      code: 'DRAFT_DATA_COLLECTING',
+      details: {
+        retryAfterSeconds: 15,
+        retryable: true,
+      },
+    });
+    expect(harness.transactionUpdate).not.toHaveBeenCalled();
+    expect(harness.getQuota).not.toHaveBeenCalled();
+    expect(harness.reserve).not.toHaveBeenCalled();
+  });
+
   it('updates the same Overwolf row without reserving quota again', async () => {
     const harness = createHarness(analysisRow());
     const first = await harness.service.reviseOverwolf(
@@ -196,7 +238,7 @@ describe('AnalysisService Overwolf revisions', () => {
     expect(recovered.analysis.input.enemyHeroIds).toEqual([5, 14, 26]);
     expect(harness.getQuota).toHaveBeenCalledWith(accountId);
     expect(harness.reserve).not.toHaveBeenCalled();
-    expect(harness.transactionUpdate).not.toHaveBeenCalled();
+    expect(harness.updateValues.some(isCompletedUpdate)).toBe(true);
   });
 
   it.each([
@@ -228,6 +270,92 @@ describe('AnalysisService Overwolf revisions', () => {
       harness.service.reviseOverwolf(accountId, analysisId, 0, draft, execution),
     ).rejects.toMatchObject({ statusCode: 409, code: 'ANALYSIS_REVIEWED' });
     expect(harness.updateValues).not.toContainEqual(expect.objectContaining({ input: draft }));
+  });
+});
+
+describe('AnalysisService snapshot admission', () => {
+  it('rejects a collecting snapshot before creating an analysis row', async () => {
+    const insert = vi.fn();
+    const db = {
+      select: () => ({
+        from: () => ({
+          where: () => ({ limit: async () => [] }),
+        }),
+      }),
+      insert,
+    } as unknown as Database;
+    const meta = {
+      getSnapshot: vi.fn(async () => ({
+        pairScope: { availability: 'collecting' },
+        positionMeta: { availability: 'collecting' },
+        dataHealth: { availability: 'collecting' },
+      })),
+    } as unknown as OpenDotaAdapter;
+    const service = new AnalysisService(
+      db,
+      meta,
+      { reserve: vi.fn(), get: vi.fn(), refund: vi.fn() } as unknown as QuotaService,
+    );
+
+    await expect(service.analyze(accountId, draft, execution)).rejects.toMatchObject({
+      statusCode: 503,
+      code: 'DRAFT_DATA_COLLECTING',
+    });
+
+    expect(insert).not.toHaveBeenCalled();
+  });
+
+  it('compensates a reused processing analysis when snapshot data becomes unavailable', async () => {
+    const processing = analysisRow({
+      status: 'processing',
+      result: null,
+      errorCode: null,
+    });
+    let selectCall = 0;
+    const update = vi.fn(() => ({
+      set: () => ({
+        where: () => ({ returning: async () => [{ id: analysisId }] }),
+      }),
+    }));
+    const transaction = vi.fn(async (operation: (tx: unknown) => Promise<unknown>) => operation({
+      select: () => ({
+        from: () => ({
+          where: () => ({ for: async () => [{ id: execution.idempotencyRecordId }] }),
+        }),
+      }),
+      update,
+    }));
+    const db = {
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: async () => selectCall++ === 0 ? [processing] : [],
+          }),
+        }),
+      }),
+      transaction,
+    } as unknown as Database;
+    const refund = vi.fn(async () => quota);
+    const service = new AnalysisService(
+      db,
+      {
+        getSnapshot: vi.fn(async () => ({
+          pairScope: { availability: 'collecting' },
+          positionMeta: { availability: 'collecting' },
+          dataHealth: { availability: 'collecting' },
+        })),
+      } as unknown as OpenDotaAdapter,
+      { reserve: vi.fn(), get: vi.fn(), refund } as unknown as QuotaService,
+    );
+
+    await expect(service.analyze(
+      accountId,
+      draft,
+      { ...execution, resourceId: analysisId },
+    )).rejects.toMatchObject({ code: 'DRAFT_DATA_COLLECTING' });
+
+    expect(update).toHaveBeenCalledOnce();
+    expect(refund).toHaveBeenCalledWith(accountId, analysisId);
   });
 });
 
@@ -300,7 +428,8 @@ describe('AnalysisService Draft Vision revisions', () => {
     expect(same).toMatchObject({ changed: false, revision: 0 });
     expect(waiting).toMatchObject({ changed: false, revision: 0 });
     expect(harness.reserve).not.toHaveBeenCalled();
-    expect(harness.transactionUpdate).not.toHaveBeenCalled();
+    expect(harness.updateValues).toHaveLength(2);
+    expect(harness.updateValues).not.toContainEqual(expect.objectContaining({ input: reordered }));
   });
 
   it('recovers a committed photo revision from its linked request', async () => {
@@ -325,7 +454,7 @@ describe('AnalysisService Draft Vision revisions', () => {
 
     expect(recovered).toMatchObject({ changed: true, revision: 1 });
     expect(harness.reserve).not.toHaveBeenCalled();
-    expect(harness.transactionUpdate).not.toHaveBeenCalled();
+    expect(harness.updateValues.some(isCompletedUpdate)).toBe(true);
   });
 
   it.each([

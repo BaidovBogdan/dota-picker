@@ -1,6 +1,6 @@
 {
   "name": "@counterpick/desktop",
-  "version": "0.1.18",
+  "version": "0.1.19",
   "private": true,
   "author": "Counterpick",
   "description": "Counterpick desktop companion for Dota 2",
@@ -10,6 +10,7 @@
     "dev": "electron-vite dev",
     "start": "electron-vite preview",
     "test": "tsx --test src/main/*.test.ts",
+    "benchmark:overwolf-snapshots": "tsx scripts/benchmark-overwolf-snapshot-dedupe.ts",
     "build:native": "node-gyp rebuild --directory native/noactivate",
     "typecheck:shell": "tsc --noEmit -p tsconfig.shell.json",
     "typecheck": "tsc --noEmit",

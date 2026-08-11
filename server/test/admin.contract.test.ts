@@ -74,24 +74,26 @@ async function createApp() {
   const meta = vi.fn(async () => createMeta());
   const listAnalyses = vi.fn<AdminService['listAnalyses']>(async () => ({
     items: [],
-    pagination: { limit: 50, offset: 0, total: 0 },
+    pagination: { limit: 50, offset: 0, total: 0, nextCursor: null },
   }));
+  const getAnalysis = vi.fn<AdminService['getAnalysis']>();
   const listUsers = vi.fn<AdminService['listUsers']>(async () => ({
     items: [],
-    pagination: { limit: 50, offset: 0, total: 0 },
+    pagination: { limit: 50, offset: 0, total: 0, nextCursor: null },
   }));
   const adminService = {
     overview,
     meta,
     listUsers,
     listAnalyses,
+    getAnalysis,
     system: vi.fn(),
     grantProToAllFreeAccounts: vi.fn(),
   } as unknown as AdminService;
   await app.register(adminApiCachePlugin);
   await app.register(adminRoutes({ config, adminService }), { prefix: '/v1/admin' });
   await app.ready();
-  return { app, listAnalyses, listUsers, meta, overview };
+  return { app, getAnalysis, listAnalyses, listUsers, meta, overview };
 }
 
 afterEach(async () => {
@@ -212,7 +214,7 @@ describe('admin API authentication', () => {
     expect(invalid.statusCode).toBe(400);
   });
 
-  it('parses exact analysis-history filters and serves real diagnostic fields', async () => {
+  it('parses exact analysis-history filters and serves compact table rows', async () => {
     const { app, listAnalyses } = await createApp();
     const analysisId = '11111111-1111-4111-8111-111111111111';
     const accountId = '22222222-2222-4222-8222-222222222222';
@@ -224,39 +226,8 @@ describe('admin API authentication', () => {
         account: { id: accountId, kind: 'user', email: 'admin-test@example.com' },
         status: 'completed',
         source: 'photo',
-        input: {
-          source: 'photo',
-          position: 2,
-          allyHeroIds: [1],
-          enemyHeroIds: [2],
-          bannedHeroIds: [],
-          rank: 6,
-        },
-        result: {
-          patch: '7.41',
-          metaFetchedAt: now,
-          recommendations: [3, 4, 5].map((id) => ({
-            hero: {
-              id,
-              name: `hero_${id}`,
-              localizedName: `Hero ${id}`,
-              imageUrl: `https://cdn.cloudflare.steamstatic.com/${id}.png`,
-              iconUrl: `https://cdn.cloudflare.steamstatic.com/${id}-icon.png`,
-              roles: ['Carry'],
-            },
-            score: 80,
-            confidence: 'high' as const,
-            metrics: { roleFit: 0.8, counter: 0.7, meta: 0.6, synergy: 0.5 },
-            reasons: ['strong_counter' as const],
-          })),
-        },
-        rawInput: null,
-        rawResult: null,
-        dataQuality: {
-          input: 'valid' as const,
-          result: 'valid' as const,
-          issues: [],
-        },
+        recommendationHeroIds: [3, 4, 5],
+        hasResult: true,
         patch: '7.41',
         errorCode: null,
         revision: 2,
@@ -276,8 +247,8 @@ describe('admin API authentication', () => {
         createdAt: now,
         updatedAt: now,
       }],
-      pagination: { limit: 50, offset: 0, total: 1 },
-    });
+      pagination: { limit: 50, offset: 0, total: 1, nextCursor: null },
+    } as never);
 
     const response = await app.inject({
       method: 'GET',
@@ -290,10 +261,11 @@ describe('admin API authentication', () => {
       items: [{
         id: analysisId,
         revision: 2,
-        quotaEvents: [{ delta: -1, reason: 'analysis' }],
-        sourceImage: { stored: false, status: 'not_stored' },
+        recommendationHeroIds: [3, 4, 5],
+        hasResult: true,
       }],
     });
+    expect(response.json<{ items: unknown[] }>().items[0]).not.toHaveProperty('quotaEvents');
     expect(listAnalyses).toHaveBeenCalledWith(expect.objectContaining({
       id: analysisId,
       accountId,
@@ -302,8 +274,8 @@ describe('admin API authentication', () => {
     }));
   });
 
-  it('serializes legacy JSON arrays, primitives, and null without failing the page', async () => {
-    const { app, listAnalyses } = await createApp();
+  it('serializes legacy JSON payloads only on the detail endpoint', async () => {
+    const { app, getAnalysis } = await createApp();
     const now = new Date().toISOString();
     const accountId = '22222222-2222-4222-8222-222222222222';
     const legacyItem = (
@@ -339,26 +311,20 @@ describe('admin API authentication', () => {
       createdAt: now,
       updatedAt: now,
     });
-    listAnalyses.mockResolvedValueOnce({
-      items: [
-        legacyItem('11111111-1111-4111-8111-111111111111', [1, 'legacy'], false),
-        legacyItem('33333333-3333-4333-8333-333333333333', null, 0),
-      ],
-      pagination: { limit: 50, offset: 0, total: 2 },
-    });
+    getAnalysis.mockResolvedValueOnce(
+      legacyItem('11111111-1111-4111-8111-111111111111', [1, 'legacy'], false),
+    );
 
     const response = await app.inject({
       method: 'GET',
-      url: '/v1/admin/analyses',
+      url: '/v1/admin/analyses/11111111-1111-4111-8111-111111111111',
       headers: { 'x-admin-key': adminKey },
     });
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({
-      items: [
-        { rawInput: [1, 'legacy'], rawResult: false },
-        { rawInput: null, rawResult: 0 },
-      ],
+      analysis: { rawInput: [1, 'legacy'], rawResult: false },
     });
+    expect(getAnalysis).toHaveBeenCalledWith('11111111-1111-4111-8111-111111111111');
   });
 });

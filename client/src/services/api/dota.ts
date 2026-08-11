@@ -45,8 +45,8 @@ const backendHeroSchema = z.object({
   name: z.string().min(1),
   localizedName: z.string().min(1).nullable().optional(),
   primaryAttribute: z.enum(['str', 'agi', 'int', 'all']).optional(),
-  imageUrl: z.string().min(1).optional(),
-  iconUrl: z.string().min(1).optional(),
+  imageUrl: z.string().min(1).nullable().optional(),
+  iconUrl: z.string().min(1).nullable().optional(),
   roles: z.array(z.string()).optional(),
   picks: z.number().nonnegative().optional(),
   wins: z.number().nonnegative().optional(),
@@ -210,14 +210,23 @@ const metaPositionStatSchema = z.object({
   wins: z.number().int().nonnegative(),
   winRate: z.number().min(0).max(1),
   isApproximate: z.boolean(),
-  method: z.enum(['lane_role', 'lane_role_farm_priority']),
+  method: z.enum([
+    'lane_role',
+    'lane_role_farm_priority',
+    'lane_role_scenario',
+    'lane_role_scenario_approximation',
+  ]),
 });
 const metaPositionResponseSchema = z.object({
   heroes: z.array(backendHeroSchema),
   patch: z.string().min(1),
   rank: positionSchema.or(z.literal(6)).or(z.literal(7)).or(z.literal(8)).nullable(),
   rankFilter: z.enum(['average_match_rank', 'all_ranks']),
-  window: z.literal('current_patch_30d'),
+  window: z.enum([
+    'current_patch_30d',
+    'current_patch_parsed_lane_roles',
+    'rolling_lane_role_scenarios',
+  ]),
   minimumGames: z.number().int().positive(),
   fetchedAt: z.string().min(1),
   isStale: z.boolean(),
@@ -276,16 +285,49 @@ const analysisResponseSchema = z.object({
   analysis: backendAnalysisSchema,
   quota: backendQuotaSchema,
 });
-const historyResponseSchema = z.object({
-  items: z.array(backendAnalysisSchema),
-  nextCursor: z.string().nullable(),
+const historySummaryRecommendationSchema = z.object({
+  hero: backendHeroSchema,
+  score: z.number().finite(),
+  confidence: z.enum(['low', 'medium', 'high']),
 });
+const historySummaryAnalysisSchema = z.object({
+  id: z.uuid(),
+  source: z.enum(['manual', 'photo', 'overwolf']),
+  input: z
+    .object({
+      position: positionSchema.nullable(),
+      rank: z.number().int().min(1).max(8).nullable().optional(),
+      enemyHeroIds: z.array(z.number().int().positive()).max(5),
+    })
+    .nullable(),
+  result: z
+    .object({
+      patch: z.string().min(1).nullable(),
+      recommendations: z.array(historySummaryRecommendationSchema).max(3),
+    })
+    .nullable(),
+  createdAt: z.string().min(1),
+});
+const historyResponseSchema = z.discriminatedUnion('view', [
+  z.object({
+    view: z.literal('full'),
+    items: z.array(backendAnalysisSchema),
+    nextCursor: z.string().nullable(),
+  }),
+  z.object({
+    view: z.literal('summary'),
+    items: z.array(historySummaryAnalysisSchema),
+    nextCursor: z.string().nullable(),
+  }),
+]);
+const historyDetailResponseSchema = z.object({ analysis: backendAnalysisSchema });
 const quotaResponseSchema = z.object({ quota: backendQuotaSchema });
 
 type BackendHero = z.infer<typeof backendHeroSchema>;
 type BackendQuota = z.infer<typeof backendQuotaSchema>;
 type BackendRecognizedPick = z.infer<typeof backendRecognizedPickSchema>;
 type BackendAnalysis = z.infer<typeof backendAnalysisSchema>;
+type BackendHistorySummary = z.infer<typeof historySummaryAnalysisSchema>;
 
 const applyServerQuota = (quota: BackendQuota) => {
   const store = useAppStore.getState();
@@ -486,10 +528,39 @@ const mapAnalysis = (analysis: BackendAnalysis): AnalysisResult => ({
     : {}),
 });
 
-export async function getHeroes(): Promise<Hero[]> {
+const mapHistorySummary = (analysis: BackendHistorySummary): AnalysisResult => ({
+  id: analysis.id,
+  detailLevel: 'summary',
+  draft: {
+    allies: [],
+    enemies: analysis.input?.enemyHeroIds ?? [],
+    position: analysis.input?.position ?? null,
+    rank: analysis.input?.rank ?? null,
+    source: analysis.source,
+    photoUri: null,
+    updatedAt: analysis.createdAt,
+  },
+  recommendations: (analysis.result?.recommendations ?? []).map((item, index) => ({
+    hero: mapHero(item.hero),
+    score: item.score,
+    label: index === 0 ? 'best' : index === 1 ? 'reliable' : 'fallback',
+    confidence: item.confidence,
+    reasons: [],
+    risks: [],
+    laneFit: '',
+  })),
+  patch: analysis.result?.patch ?? '',
+  confidence: analysis.result?.recommendations[0]?.confidence ?? 'low',
+  dataUpdatedAt: analysis.createdAt,
+  createdAt: analysis.createdAt,
+  source: 'server',
+});
+
+export async function getHeroes(signal?: AbortSignal): Promise<Hero[]> {
   try {
     const payload = await apiRequest<z.infer<typeof heroesResponseSchema>>('/heroes', {
       timeoutMs: 6_000,
+      ...(signal ? { signal } : {}),
       schema: heroesResponseSchema,
     });
     const heroes = payload.heroes.map(mapHero);
@@ -498,6 +569,7 @@ export async function getHeroes(): Promise<Hero[]> {
     useAppStore.getState().setHeroes(heroes);
     return heroes;
   } catch (error) {
+    if (error instanceof ApiError && error.code === 'REQUEST_CANCELLED') throw error;
     if (error instanceof ApiError && error.status >= 400 && error.status < 500) throw error;
     useAppStore.getState().setHeroes(fallbackHeroes);
     return fallbackHeroes;
@@ -512,7 +584,10 @@ export type MetaSnapshot = {
   fetchedAt: string;
   rank: number | null;
   rankFilter: 'average_match_rank' | 'all_ranks';
-  window: 'current_patch_30d';
+  window:
+    | 'current_patch_30d'
+    | 'current_patch_parsed_lane_roles'
+    | 'rolling_lane_role_scenarios';
   minimumGames: number;
   isStale: boolean;
   error: 'refresh_failed' | 'upstream_stale' | null;
@@ -527,7 +602,11 @@ export type MetaPositionStat = {
   wins: number;
   winRate: number;
   isApproximate: boolean;
-  method: 'lane_role' | 'lane_role_farm_priority';
+  method:
+    | 'lane_role'
+    | 'lane_role_farm_priority'
+    | 'lane_role_scenario'
+    | 'lane_role_scenario_approximation';
 };
 
 export type MetaRotationEntry = {
@@ -538,7 +617,11 @@ export type MetaRotationEntry = {
   winRate: number;
   isApproximate: boolean;
   isStale: boolean;
-  method: 'lane_role' | 'lane_role_farm_priority';
+  method:
+    | 'lane_role'
+    | 'lane_role_farm_priority'
+    | 'lane_role_scenario'
+    | 'lane_role_scenario_approximation';
 };
 
 export const META_SNAPSHOT_STALE_RETRY_MS = 5 * 60 * 1_000;
@@ -638,7 +721,10 @@ const cacheMetaSnapshot = (key: string, snapshot: MetaSnapshot) => {
   }
 };
 
-export async function getMetaSnapshot(rank?: number | null): Promise<MetaSnapshot> {
+export async function getMetaSnapshot(
+  rank?: number | null,
+  signal?: AbortSignal,
+): Promise<MetaSnapshot> {
   const cacheKey = rank == null ? 'all' : String(rank);
   try {
     const suffix = rank ? `?rank=${rank}` : '';
@@ -646,6 +732,7 @@ export async function getMetaSnapshot(rank?: number | null): Promise<MetaSnapsho
       `/heroes/meta-positions${suffix}`,
       {
         timeoutMs: 32_000,
+        ...(signal ? { signal } : {}),
         schema: metaPositionResponseSchema,
       },
     );
@@ -674,6 +761,7 @@ export async function getMetaSnapshot(rank?: number | null): Promise<MetaSnapsho
     if (!isMetaSnapshotIncomplete(snapshot)) cacheMetaSnapshot(cacheKey, snapshot);
     return snapshot;
   } catch (error) {
+    if (error instanceof ApiError && error.code === 'REQUEST_CANCELLED') throw error;
     if (error instanceof ApiError && error.status >= 400 && error.status < 500) throw error;
     const cached = metaSnapshotCache.get(cacheKey);
     if (!cached) throw error;
@@ -732,11 +820,12 @@ export type HeroDetail = {
   };
 };
 
-export async function getHeroDetail(heroId: number): Promise<HeroDetail> {
+export async function getHeroDetail(heroId: number, signal?: AbortSignal): Promise<HeroDetail> {
   const payload = await apiRequest<z.infer<typeof heroDetailResponseSchema>>(
     `/heroes/${heroId}/detail`,
     {
       timeoutMs: 30_000,
+      ...(signal ? { signal } : {}),
       schema: heroDetailResponseSchema,
     },
   );
@@ -897,12 +986,22 @@ export async function analyzeDraft(
   }
 }
 
-export async function getServerHistory() {
+export async function getServerHistory(signal?: AbortSignal) {
   const payload = await apiRequest<z.infer<typeof historyResponseSchema>>(
-    '/analyses/history?limit=50',
-    { schema: historyResponseSchema },
+    '/analyses/history?limit=50&view=summary',
+    { ...(signal ? { signal } : {}), schema: historyResponseSchema },
   );
-  return payload.items.map(mapAnalysis);
+  return payload.view === 'summary'
+    ? payload.items.map(mapHistorySummary)
+    : payload.items.map(mapAnalysis);
+}
+
+export async function getServerAnalysis(id: string, signal?: AbortSignal) {
+  const payload = await apiRequest<z.infer<typeof historyDetailResponseSchema>>(
+    `/analyses/history/${encodeURIComponent(id)}`,
+    { ...(signal ? { signal } : {}), schema: historyDetailResponseSchema },
+  );
+  return mapAnalysis(payload.analysis);
 }
 
 let pendingSync: Promise<void> | null = null;

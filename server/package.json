@@ -17,11 +17,15 @@
     "admin:grant-pro-all": "tsx scripts/grant-pro-all.ts",
     "eval:photo": "tsx scripts/eval-photo-pipeline.ts",
     "eval:local-portraits": "tsx scripts/eval-local-portrait-index.ts",
+    "bench:draft-snapshot": "tsx scripts/benchmark-draft-snapshot.ts",
+    "verify:draft-source-live": "tsx scripts/verify-draft-source-live.ts",
+    "bench:api-performance": "tsx scripts/benchmark-api-performance.ts",
     "index:portraits": "tsx scripts/generate-portrait-index.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts"
   },
   "dependencies": {
+    "@fastify/compress": "^9.2.0",
     "@fastify/cors": "^11.3.0",
     "@fastify/helmet": "^13.1.0",
     "@fastify/jwt": "^10.2.0",

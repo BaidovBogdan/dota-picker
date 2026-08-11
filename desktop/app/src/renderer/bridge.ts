@@ -1,7 +1,7 @@
 import type {
   Account,
   Analysis,
-  HistoryPage,
+  HistorySummaryPage,
   NativeBridge,
   Quota,
   Review,
@@ -58,9 +58,10 @@ export const desktop = {
     deleteAccount: () => native().session.deleteAccount(),
   },
   data: {
-    async history(input?: Parameters<NativeBridge['data']['history']>[0]): Promise<HistoryPage> {
+    async history(input?: Parameters<NativeBridge['data']['history']>[0]): Promise<HistorySummaryPage> {
       const value = await native().data.history(input);
       return {
+        view: value.view,
         items: value.items,
         nextCursor: value.nextCursor ?? null,
       };

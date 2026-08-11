@@ -7,9 +7,37 @@ import type {
 } from '../types';
 
 export function mergeDiagnosticEvents(current: AdminDiagnosticEvent[], incoming: AdminDiagnosticEvent[]) {
-  const eventsById = new Map(current.map((event) => [event.id, event]));
-  for (const event of incoming) eventsById.set(event.id, event);
-  return [...eventsById.values()].sort((left, right) => left.sequence - right.sequence || left.id.localeCompare(right.id));
+  const merged: AdminDiagnosticEvent[] = [];
+  let currentIndex = 0;
+  let incomingIndex = 0;
+  while (currentIndex < current.length || incomingIndex < incoming.length) {
+    const currentEvent = current[currentIndex];
+    const incomingEvent = incoming[incomingIndex];
+    if (!currentEvent) {
+      merged.push(...incoming.slice(incomingIndex));
+      break;
+    }
+    if (!incomingEvent) {
+      merged.push(...current.slice(currentIndex));
+      break;
+    }
+    const order = currentEvent.sequence - incomingEvent.sequence
+      || currentEvent.id.localeCompare(incomingEvent.id);
+    if (order < 0) {
+      merged.push(currentEvent);
+      currentIndex += 1;
+      continue;
+    }
+    if (order > 0) {
+      merged.push(incomingEvent);
+      incomingIndex += 1;
+      continue;
+    }
+    merged.push(incomingEvent);
+    currentIndex += 1;
+    incomingIndex += 1;
+  }
+  return merged;
 }
 
 export const diagnosticModeLabel = (mode: DiagnosticMode) => mode === 'vision' ? 'Draft Vision' : 'Overwolf Live';

@@ -39,7 +39,7 @@ export default function WishlistScreen() {
   const ownerScope = getSessionScope(session, guestId);
   const query = useQuery({
     queryKey: ['heroes', session?.userId],
-    queryFn: getHeroes,
+    queryFn: ({ signal }) => getHeroes(signal),
     enabled: Boolean(session),
     staleTime: 15 * 60 * 1000,
   });

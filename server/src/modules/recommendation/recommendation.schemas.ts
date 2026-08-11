@@ -51,6 +51,8 @@ export const recommendationSchema = z.object({
         'opendota_rolling_all_ranks',
         'opendota_current_patch_rank_pairs',
         'opendota_current_patch_all_ranks_pairs',
+        'opendota_recent_public_rank_pairs',
+        'opendota_recent_public_all_ranks_pairs',
       ]),
       opponentsCovered: z.number().int().nonnegative(),
       opponentsTotal: z.number().int().nonnegative(),
@@ -66,7 +68,7 @@ export const recommendationSchema = z.object({
       patchGames: z.number().int().nonnegative().optional(),
       minimumPatchGames: z.number().int().nonnegative().optional(),
       isStale: z.boolean().optional(),
-      availability: z.enum(['ready', 'unavailable']).optional(),
+      availability: z.enum(['ready', 'collecting', 'unavailable']).optional(),
       byOpponent: z.array(z.object({
         heroId: z.number().int().positive(),
         rankGames: z.number().int().nonnegative(),
@@ -83,6 +85,8 @@ export const recommendationSchema = z.object({
       source: z.enum([
         'opendota_current_patch_rank_pairs',
         'opendota_current_patch_all_ranks_pairs',
+        'opendota_recent_public_rank_pairs',
+        'opendota_recent_public_all_ranks_pairs',
         'team_composition_only',
       ]),
       alliesCovered: z.number().int().nonnegative(),
@@ -101,7 +105,7 @@ export const recommendationSchema = z.object({
       rank: rankBracketSchema.nullable(),
       rankScoped: z.boolean(),
       isStale: z.boolean(),
-      availability: z.enum(['ready', 'unavailable']),
+      availability: z.enum(['ready', 'collecting', 'unavailable']),
       byAlly: z.array(z.object({
         heroId: z.number().int().positive(),
         rankGames: z.number().int().nonnegative(),
@@ -117,6 +121,8 @@ export const recommendationSchema = z.object({
     meta: z.object({
       source: z.enum([
         'opendota_current_patch_30d_position',
+        'opendota_current_patch_parsed_position',
+        'opendota_rolling_lane_role_scenarios',
         'opendota_rank_hero_stats',
         'opendota_public_hero_stats',
       ]),
@@ -155,9 +161,38 @@ export const recommendationProvenanceSchema = z.object({
   ]).optional(),
 });
 
+const draftDataHealthSchema = z.object({
+  snapshotId: z.uuid().nullable(),
+  snapshotVersion: z.literal(1),
+  source: z.enum([
+    'opendota_public_matches_explorer_positions',
+    'opendota_public_matches_lane_roles',
+  ]),
+  population: z.object({
+    id: z.enum(['ranked_all_pick', 'public_all_pick']),
+    version: z.literal(1),
+    audience: z.literal('opendota_recent_public_sample'),
+    lobbyTypes: z.array(z.number().int().nonnegative()).max(16),
+    gameModes: z.array(z.number().int().nonnegative()).min(1).max(32),
+    minimumMatches: z.number().int().positive(),
+  }),
+  fallbackFrom: z.enum(['ranked_all_pick', 'public_all_pick']).nullable(),
+  matchCount: z.number().int().nonnegative(),
+  minimumMatches: z.number().int().positive(),
+  rankMatchCounts: z.record(z.string(), z.number().int().nonnegative()),
+  generatedAt: z.iso.datetime().nullable(),
+  expiresAt: z.iso.datetime().nullable(),
+  availability: z.enum(['ready', 'collecting', 'unavailable']),
+  isStale: z.boolean(),
+});
+
 export const recommendationResultSchema = z.object({
   patch: z.string(),
   metaFetchedAt: z.iso.datetime(),
   recommendations: z.array(recommendationSchema).length(3),
   provenance: recommendationProvenanceSchema.optional(),
+  dataHealth: draftDataHealthSchema.optional(),
+  draftCompleteness: z.object({
+    bans: z.enum(['known', 'unknown']),
+  }).optional(),
 });

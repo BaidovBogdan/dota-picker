@@ -12,6 +12,7 @@ export type Pagination = {
   limit: number;
   offset: number;
   total: number;
+  nextCursor?: string | null;
 };
 
 export type AdminSession = {
@@ -88,6 +89,7 @@ export type AdminUsersResponse = {
 export type AdminUsersQuery = {
   limit: number;
   offset: number;
+  cursor?: string;
   q?: string;
   kind?: AccountKind;
   plan?: Plan;
@@ -217,14 +219,34 @@ export type AdminAnalysis = {
   updatedAt: string;
 };
 
+export type AdminAnalysisSummary = Pick<
+  AdminAnalysis,
+  | 'id'
+  | 'accountId'
+  | 'account'
+  | 'status'
+  | 'source'
+  | 'patch'
+  | 'errorCode'
+  | 'revision'
+  | 'durationMs'
+  | 'durationKind'
+  | 'createdAt'
+  | 'updatedAt'
+> & {
+  recommendationHeroIds: number[];
+  hasResult: boolean;
+};
+
 export type AdminAnalysesResponse = {
-  items: AdminAnalysis[];
+  items: AdminAnalysisSummary[];
   pagination: Pagination;
 };
 
 export type AdminAnalysesQuery = {
   limit: number;
   offset: number;
+  cursor?: string;
   q?: string;
   id?: string;
   accountId?: string;
@@ -445,7 +467,11 @@ export type AdminHeroPositionStat = {
   wins: number;
   winRate: number;
   isApproximate: boolean;
-  method: 'lane_role' | 'lane_role_farm_priority';
+  method:
+    | 'lane_role'
+    | 'lane_role_farm_priority'
+    | 'lane_role_scenario'
+    | 'lane_role_scenario_approximation';
 };
 
 export type AdminMeta = {
@@ -453,7 +479,10 @@ export type AdminMeta = {
   patch: string;
   rank: RankBracket | null;
   rankFilter: 'average_match_rank' | 'all_ranks';
-  window: 'current_patch_30d';
+  window:
+    | 'current_patch_30d'
+    | 'current_patch_parsed_lane_roles'
+    | 'rolling_lane_role_scenarios';
   minimumGames: number;
   fetchedAt: string;
   isStale: boolean;
@@ -479,6 +508,12 @@ export type AdminSystem = {
     database: {
       status: 'connected' | 'blocked';
       latencyMs: number;
+      pool: {
+        maxConnections: number;
+        totalConnections: number;
+        idleConnections: number;
+        waitingRequests: number;
+      } | null;
     };
     connected: number;
     connectable: number;

@@ -17,6 +17,8 @@ import { AppSelect } from '../components/app-select';
 import { ConfirmDialog } from '../components/confirm-dialog';
 import { formatDateTime, heroName } from '../format';
 import { useI18n } from '../i18n';
+import { useAppStore } from '../store';
+import { accountQueryKey } from '../../shared/account-query-cache';
 import { AsyncState, Button, HeroIcon, InputField, Page } from '../components/ui';
 
 type ReviewForm = {
@@ -28,6 +30,7 @@ type ReviewForm = {
 
 export function ReviewsPage() {
   const { language, text } = useI18n();
+  const accountId = useAppStore((state) => state.account?.id ?? null);
   const [params] = useSearchParams();
   const requestedAnalysisId = params.get('analysis');
   const queryClient = useQueryClient();
@@ -40,12 +43,14 @@ export function ReviewsPage() {
   }), [text]);
 
   const reviewsQuery = useQuery({
-    queryKey: ['reviews'],
+    queryKey: accountQueryKey(accountId ?? 'anonymous', 'reviews'),
     queryFn: () => desktop.data.reviews({ limit: 30 }),
+    enabled: Boolean(accountId),
   });
   const historyQuery = useQuery({
-    queryKey: ['history', 'review-picker'],
+    queryKey: accountQueryKey(accountId ?? 'anonymous', 'history', 'summary', 'review-picker'),
     queryFn: () => desktop.data.history({ limit: 30 }),
+    enabled: Boolean(accountId),
   });
   const form = useForm<ReviewForm>({
     resolver: zodResolver(reviewSchema),
@@ -62,26 +67,27 @@ export function ReviewsPage() {
     () => historyQuery.data?.items.find((item) => item.id === selectedAnalysisId),
     [historyQuery.data?.items, selectedAnalysisId],
   );
+  const selectedRecommendations = selectedAnalysis?.result?.recommendations ?? [];
   const analysisOptions = useMemo(
     () =>
-      historyQuery.data?.items.map((analysis) => {
-        const hero = analysis.result.recommendations[0]?.hero;
-        return {
+      historyQuery.data?.items.flatMap((analysis) => {
+        const hero = analysis.result?.recommendations[0]?.hero;
+        return hero ? [{
           value: analysis.id,
           label: heroName(hero, language),
           description: formatDateTime(analysis.createdAt, language),
           icon: <HeroIcon hero={hero} />,
-        };
+        }] : [];
       }) ?? [],
     [historyQuery.data?.items, language],
   );
 
   useEffect(() => {
-    if (!requestedAnalysisId || !historyQuery.data?.items.some((item) => item.id === requestedAnalysisId)) {
+    if (!requestedAnalysisId || !analysisOptions.some((item) => item.value === requestedAnalysisId)) {
       return;
     }
     form.setValue('analysisId', requestedAnalysisId);
-  }, [form, historyQuery.data?.items, requestedAnalysisId]);
+  }, [analysisOptions, form, requestedAnalysisId]);
 
   const saveMutation = useMutation({
     mutationFn: (input: ReviewForm) =>
@@ -92,14 +98,18 @@ export function ReviewsPage() {
       }),
     onSuccess: (_review, input) => {
       form.reset(input);
-      void queryClient.invalidateQueries({ queryKey: ['reviews'] });
+      void queryClient.invalidateQueries({
+        queryKey: accountQueryKey(accountId ?? 'anonymous', 'reviews'),
+      });
     },
   });
   const deleteMutation = useMutation({
     mutationFn: desktop.data.deleteReview,
     onSuccess: () => {
       setReviewToDelete(null);
-      void queryClient.invalidateQueries({ queryKey: ['reviews'] });
+      void queryClient.invalidateQueries({
+        queryKey: accountQueryKey(accountId ?? 'anonymous', 'reviews'),
+      });
     },
   });
 
@@ -177,14 +187,14 @@ export function ReviewsPage() {
                   />
                 </InputField>
 
-                {selectedAnalysis?.result.recommendations.length ? (
+                {selectedRecommendations.length ? (
                   <InputField label={text('Кого вы выбрали?', 'Who did you pick?')}>
                     <Controller
                       control={form.control}
                       name="selectedHeroIds"
                       render={({ field }) => (
                         <div className="review-hero-picker">
-                          {selectedAnalysis.result.recommendations.map((item) => {
+                          {selectedRecommendations.map((item) => {
                             const selected = field.value.includes(item.hero.id);
                             return (
                               <button

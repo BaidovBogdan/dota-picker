@@ -807,6 +807,14 @@ export class DraftEngine {
       );
       if (!responseFrameIsCurrent) {
         const latencyMs = Math.min(120_000, Math.round(performance.now() - requestStartedAt));
+        const completedRecognition = response.status === 'completed'
+          ? this.autoDetectPosition
+            ? {
+                ...response.recognition,
+                detectedPosition: response.recognition.detectedPosition ?? previousDetectedPosition,
+              }
+            : { ...response.recognition, detectedPosition: null }
+          : null;
         this.reportDiagnostic({
           type: 'request_completed',
           status: 'warning',
@@ -821,6 +829,7 @@ export class DraftEngine {
         });
         if (response.status === 'completed') this.liveAnalysisId = response.analysis.id;
         if (response.liveSession) this.liveSessionToken = response.liveSession.token;
+        if (completedRecognition) this.reportRecognition(completedRecognition);
         this.requestFingerprint = null;
         this.requestKey = null;
         this.requestImage = null;
@@ -828,11 +837,16 @@ export class DraftEngine {
         this.retryRequested = false;
         this.forceRefresh = true;
         this.lastCaptureAt = 0;
-        visionLog.info('Draft recognition discarded', {
-          reason: latestFrame ? 'frame_changed_during_request' : 'dota_window_unavailable',
-          revision: response.revision,
-          responseStatus: response.status,
-        });
+        visionLog.info(
+          response.status === 'completed'
+            ? 'Draft response published pending revalidation'
+            : 'Draft recognition discarded',
+          {
+            reason: latestFrame ? 'frame_changed_during_request' : 'dota_window_unavailable',
+            revision: response.revision,
+            responseStatus: response.status,
+          },
+        );
         this.update({
           ...this.state,
           phase: latestFrame ? 'watching_draft' : 'waiting_for_dota',
@@ -840,6 +854,13 @@ export class DraftEngine {
             ? 'Пики изменились — проверяем свежий кадр'
             : 'Окно Dota 2 не найдено. Используйте оконный режим без рамки',
           dotaDetected: Boolean(latestFrame),
+          latestAnalysisId: response.status === 'completed'
+            ? response.analysis.id
+            : this.state.latestAnalysisId,
+          latestAnalysis: response.status === 'completed'
+            ? response.analysis
+            : this.state.latestAnalysis,
+          recognition: completedRecognition ?? this.state.recognition,
         });
         return;
       }
@@ -1046,7 +1067,18 @@ export class DraftEngine {
     if (reason !== 'insufficient_enemy_picks' && reason !== 'no_enemy_picks') {
       return recognition;
     }
-    if (this.state.latestAnalysis || this.getDraftOrientation()) {
+    if (this.state.latestAnalysis) {
+      return this.state.recognition;
+    }
+    if (this.getDraftOrientation()) return recognition;
+    if (
+      recognition.recognized.length === 0
+      && this.state.recognition?.recognized.some((pick) => (
+        pick.side === 'unknown'
+        && pick.visualGroup !== undefined
+        && pick.heroId !== null
+      ))
+    ) {
       return this.state.recognition;
     }
     return {
@@ -1085,6 +1117,7 @@ export class DraftEngine {
         allyGroup,
         source: 'gsi_player_hero',
       },
+      recognition,
     });
     visionLog.info('Draft orientation resolved', {
       source: 'gsi_player_hero',

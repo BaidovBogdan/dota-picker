@@ -1,10 +1,12 @@
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
+import { z } from 'zod';
 import type { AppConfig } from '../../config/env.js';
 import { UnauthorizedError } from '../../lib/errors.js';
 import { errorResponseSchema } from '../../lib/schemas.js';
 import { secureEqual } from '../../lib/secure-equal.js';
 import {
   adminAnalysesQuerySchema,
+  adminAnalysisDetailResponseSchema,
   adminAnalysesResponseSchema,
   adminHeadersSchema,
   adminMetaQuerySchema,
@@ -101,6 +103,21 @@ export function adminRoutes(dependencies: Dependencies): FastifyPluginAsyncZod {
         },
       },
     }, async (request) => dependencies.adminService.listAnalyses(request.query));
+
+    app.get('/analyses/:id', {
+      preHandler: app.authenticateAdmin,
+      schema: {
+        tags: ['Admin'],
+        security: [{ adminBearerAuth: [] }, { adminApiKey: [] }],
+        headers: adminHeadersSchema,
+        params: z.object({ id: z.uuid() }),
+        response: {
+          200: adminAnalysisDetailResponseSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+        },
+      },
+    }, async (request) => ({ analysis: await dependencies.adminService.getAnalysis(request.params.id) }));
 
     app.get('/meta', {
       preHandler: app.authenticateAdmin,

@@ -22,6 +22,11 @@ import { OtpCodeField } from '../components/otp-code-field';
 import { Badge, Button, InputField, Page, Panel, Stat } from '../components/ui';
 import { useAppStore } from '../store';
 import type { OtpChallenge } from '../types';
+import {
+  accountQueryKey,
+  clearAccountQueryCache,
+  sessionQueryKey,
+} from '../../shared/account-query-cache';
 
 type Translate = (russian: string, english: string) => string;
 
@@ -49,6 +54,7 @@ type PasswordForm = z.infer<ReturnType<typeof createPasswordSchema>>;
 
 export function AccountPage() {
   const account = useAppStore((state) => state.account);
+  const accountId = account?.id ?? null;
   const setAccount = useAppStore((state) => state.setAccount);
   const [passwordChallenge, setPasswordChallenge] = useState<OtpChallenge | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -70,13 +76,15 @@ export function AccountPage() {
   });
 
   const billingQuery = useQuery({
-    queryKey: ['billing'],
+    queryKey: accountQueryKey(accountId ?? 'anonymous', 'billing'),
     queryFn: desktop.billing.status,
+    enabled: Boolean(accountId),
   });
   const quotaQuery = useQuery({
-    queryKey: ['quota'],
+    queryKey: accountQueryKey(accountId ?? 'anonymous', 'quota'),
     queryFn: desktop.session.quota,
     initialData: account?.quota,
+    enabled: Boolean(accountId),
   });
   const otpMutation = useMutation({
     mutationFn: () => desktop.session.requestOtp({ purpose: 'password_change' }),
@@ -115,17 +123,19 @@ export function AccountPage() {
   const logoutMutation = useMutation({
     mutationFn: desktop.session.logout,
     onSuccess: async () => {
+      await clearAccountQueryCache(queryClient);
       setAccount(null);
-      queryClient.setQueryData(['session'], { authenticated: false, account: null });
-      await queryClient.cancelQueries();
+      queryClient.setQueryData(sessionQueryKey, { authenticated: false, account: null });
       navigate('/auth', { replace: true });
     },
   });
   const deleteMutation = useMutation({
     mutationFn: desktop.session.deleteAccount,
     onSuccess: async () => {
+      await clearAccountQueryCache(queryClient);
       setAccount(null);
       queryClient.clear();
+      queryClient.setQueryData(sessionQueryKey, { authenticated: false, account: null });
       navigate('/auth', { replace: true });
     },
   });

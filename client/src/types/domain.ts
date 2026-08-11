@@ -139,6 +139,7 @@ export type AnalysisResult = {
   id: string;
   serverId?: string;
   ownerScope?: string;
+  detailLevel?: 'summary';
   draft: Draft;
   recommendations: Recommendation[];
   patch: string;

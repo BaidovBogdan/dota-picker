@@ -346,6 +346,10 @@ describe('DraftEngine frame freshness', () => {
     const firstRequest = new Promise<void>((resolve) => {
       releaseFirst = resolve;
     });
+    let releaseRevision: () => void = () => undefined;
+    const revisionRequest = new Promise<void>((resolve) => {
+      releaseRevision = resolve;
+    });
     let analyzeCalls = 0;
     const revisions: number[] = [];
     const tokens: unknown[] = [];
@@ -358,6 +362,7 @@ describe('DraftEngine frame freshness', () => {
       reviseDesktop: async (...arguments_: unknown[]) => {
         revisions.push(arguments_[5] as number);
         tokens.push(arguments_[10]);
+        await revisionRequest;
         return completedResponse('live-analysis', [33, 44, 55], arguments_[5] as number, 1);
       },
     } as unknown as ApiClient;
@@ -369,6 +374,15 @@ describe('DraftEngine frame freshness', () => {
       currentImage = draftImage([11, 22, 0, 0, 0, 33, 44, 55, 0, 0]);
       releaseFirst();
 
+      await waitFor(() => revisions.length === 1);
+      assert.equal(engine.getState().latestAnalysisId, 'live-analysis');
+      assert.equal(engine.getState().phase, 'recognizing');
+      assert.deepEqual(
+        engine.getState().recognition?.recognized.map((pick) => pick.heroId),
+        [11, 22, 33, 44],
+      );
+
+      releaseRevision();
       await waitFor(() => engine.getState().latestAnalysis?.input.enemyHeroIds.length === 3);
       assert.equal(analyzeCalls, 1);
       assert.deepEqual(revisions, [2]);

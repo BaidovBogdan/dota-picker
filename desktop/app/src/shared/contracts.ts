@@ -362,8 +362,28 @@ export type Analysis = {
   createdAt: string;
 };
 
-export type HistoryPage = {
-  items: Analysis[];
+export type HistorySummary = {
+  id: string;
+  source: 'manual' | 'photo' | 'overwolf';
+  input: {
+    position: Position | null;
+    rank?: Rank | null;
+    enemyHeroIds: number[];
+  } | null;
+  result: {
+    patch: string | null;
+    recommendations: Array<{
+      hero: Hero;
+      score: number;
+      confidence: 'low' | 'medium' | 'high';
+    }>;
+  } | null;
+  createdAt: string;
+};
+
+export type HistorySummaryPage = {
+  view: 'summary';
+  items: HistorySummary[];
   nextCursor: string | null;
 };
 
@@ -517,7 +537,7 @@ export type DesktopBridge = {
     deleteAccount: () => Promise<void>;
   };
   data: {
-    history: (input?: z.infer<typeof paginationSchema>) => Promise<HistoryPage>;
+    history: (input?: z.infer<typeof paginationSchema>) => Promise<HistorySummaryPage>;
     analysis: (id: string) => Promise<{ analysis: Analysis }>;
     heroes: () => Promise<{ heroes: Hero[]; patch?: string; fetchedAt?: string }>;
     meta: (input?: z.infer<typeof metaQuerySchema>) => Promise<Record<string, unknown>>;

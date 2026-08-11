@@ -93,7 +93,37 @@ const heroPositionStatSchema = z.object({
   wins: z.number().int().nonnegative(),
   winRate: z.number().min(0).max(1),
   isApproximate: z.boolean(),
-  method: z.enum(['lane_role', 'lane_role_farm_priority']),
+  method: z.enum([
+    'lane_role',
+    'lane_role_farm_priority',
+    'lane_role_scenario',
+    'lane_role_scenario_approximation',
+  ]),
+});
+
+const draftDataHealthSchema = z.object({
+  snapshotId: z.uuid().nullable(),
+  snapshotVersion: z.literal(1),
+  source: z.enum([
+    'opendota_public_matches_explorer_positions',
+    'opendota_public_matches_lane_roles',
+  ]),
+  population: z.object({
+    id: z.enum(['ranked_all_pick', 'public_all_pick']),
+    version: z.literal(1),
+    audience: z.literal('opendota_recent_public_sample'),
+    lobbyTypes: z.array(z.number().int().nonnegative()).max(16),
+    gameModes: z.array(z.number().int().nonnegative()).min(1).max(32),
+    minimumMatches: z.number().int().positive(),
+  }),
+  fallbackFrom: z.enum(['ranked_all_pick', 'public_all_pick']).nullable(),
+  matchCount: z.number().int().nonnegative(),
+  minimumMatches: z.number().int().positive(),
+  rankMatchCounts: z.record(z.string(), z.number().int().nonnegative()),
+  generatedAt: z.iso.datetime().nullable(),
+  expiresAt: z.iso.datetime().nullable(),
+  availability: z.enum(['ready', 'collecting', 'unavailable']),
+  isStale: z.boolean(),
 });
 
 export const metaPositionResponseSchema = z.object({
@@ -101,10 +131,15 @@ export const metaPositionResponseSchema = z.object({
   patch: z.string().min(1),
   rank: rankBracketSchema.nullable(),
   rankFilter: z.enum(['average_match_rank', 'all_ranks']),
-  window: z.literal('current_patch_30d'),
+  window: z.enum([
+    'current_patch_30d',
+    'current_patch_parsed_lane_roles',
+    'rolling_lane_role_scenarios',
+  ]),
   minimumGames: z.number().int().positive(),
   fetchedAt: z.iso.datetime(),
   isStale: z.boolean(),
   availability: z.enum(['ready', 'collecting']),
   positionStats: z.array(heroPositionStatSchema),
+  dataHealth: draftDataHealthSchema.optional(),
 });

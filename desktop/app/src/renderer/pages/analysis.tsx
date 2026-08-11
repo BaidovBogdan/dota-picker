@@ -27,6 +27,8 @@ import {
   reasonName,
 } from '../format';
 import { useI18n } from '../i18n';
+import { useAppStore } from '../store';
+import { accountQueryKey } from '../../shared/account-query-cache';
 import { PositionLabel, RankLabel } from '../components/dota-taxonomy';
 import {
   AsyncState,
@@ -109,10 +111,11 @@ function Freshness({
 export function AnalysisPage() {
   const { language, locale, text } = useI18n();
   const { id } = useParams();
+  const accountId = useAppStore((state) => state.account?.id ?? null);
   const query = useQuery({
-    queryKey: ['analysis', id],
+    queryKey: accountQueryKey(accountId ?? 'anonymous', 'analysis', id ?? null),
     queryFn: () => desktop.data.analysis(id ?? ''),
-    enabled: Boolean(id),
+    enabled: Boolean(id && accountId),
   });
   const heroesQuery = useQuery({
     queryKey: ['heroes'],

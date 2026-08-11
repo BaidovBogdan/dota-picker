@@ -40,6 +40,7 @@ import { ModalPortal } from '../components/modal-portal';
 import { StatusScrub } from '../components/motion';
 import { AsyncState, Button, HeroIcon, Panel, TextLink } from '../components/ui';
 import { useAppStore } from '../store';
+import { accountQueryKey } from '../../shared/account-query-cache';
 import type { AssistantMode, EngineState, OverwolfBridgeState } from '../types';
 import {
   assistantModeOptionA11y,
@@ -50,6 +51,7 @@ import { activateOverwolfLive } from '../../shared/overwolf-connect-flow';
 
 export function DashboardPage() {
   const account = useAppStore((state) => state.account);
+  const accountId = account?.id ?? null;
   const engine = useAppStore((state) => state.engine);
   const preferences = useAppStore((state) => state.preferences);
   const setPreferences = useAppStore((state) => state.setPreferences);
@@ -64,14 +66,16 @@ export function DashboardPage() {
   useDialogAccessibility(overwolfConsentOpen, overwolfConsentRef);
 
   const quotaQuery = useQuery({
-    queryKey: ['quota'],
+    queryKey: accountQueryKey(accountId ?? 'anonymous', 'quota'),
     queryFn: desktop.session.quota,
     initialData: account?.quota,
+    enabled: Boolean(accountId),
     refetchInterval: 60_000,
   });
   const historyQuery = useQuery({
-    queryKey: ['history', 'dashboard'],
+    queryKey: accountQueryKey(accountId ?? 'anonymous', 'history', 'summary', 'dashboard'),
     queryFn: () => desktop.data.history({ limit: 6 }),
+    enabled: Boolean(accountId),
   });
   const overwolfQuery = useQuery({
     queryKey: ['overwolf-bridge'],
@@ -122,8 +126,11 @@ export function DashboardPage() {
     },
   });
 
-  const latest = historyQuery.data?.items[0];
-  const primaryHero = latest?.result.recommendations[0]?.hero;
+  const latest = historyQuery.data?.items.find((analysis) =>
+    Boolean(analysis.result?.recommendations[0]),
+  );
+  const latestRecommendation = latest?.result?.recommendations[0];
+  const primaryHero = latestRecommendation?.hero;
   const quota = quotaQuery.data ?? account?.quota;
   const remaining = quota?.remaining ?? 0;
   const limit = quota?.limit ?? 0;
@@ -602,9 +609,9 @@ export function DashboardPage() {
                 <strong>{heroName(primaryHero, language)}</strong>
                 <small>{formatRelative(latest.createdAt, language)}</small>
                 <span>
-                  {text('Оценка', 'Score')} {Math.round(latest.result.recommendations[0]?.score ?? 0)}
+                  {text('Оценка', 'Score')} {Math.round(latestRecommendation?.score ?? 0)}
                   <i />
-                  {text('Патч', 'Patch')} {latest.result.patch}
+                  {text('Патч', 'Patch')} {latest.result?.patch ?? '—'}
                 </span>
               </div>
               <ArrowSquareOut size={19} weight="duotone" aria-hidden />
@@ -775,13 +782,15 @@ export function DashboardPage() {
         </div>
         {historyQuery.isPending ? (
           <AsyncState status="loading" />
-        ) : historyQuery.data?.items.length ? (
+        ) : historyQuery.data?.items.some((analysis) =>
+          Boolean(analysis.result?.recommendations.length),
+        ) ? (
           <div
             className="feedback-carousel"
             aria-label={text('Недавние рекомендации', 'Recent recommendations')}
           >
             {historyQuery.data.items.map((analysis) => {
-              const recommendation = analysis.result.recommendations[0];
+              const recommendation = analysis.result?.recommendations[0];
               if (!recommendation) return null;
               return (
                 <Link
@@ -796,7 +805,7 @@ export function DashboardPage() {
                     <span>
                       {text('Оценка', 'Score')} {Math.round(recommendation.score)}
                       <i />
-                      {text('Патч', 'Patch')} {analysis.result.patch}
+                      {text('Патч', 'Patch')} {analysis.result?.patch ?? '—'}
                     </span>
                   </div>
                   <ArrowSquareOut size={18} weight="duotone" aria-hidden />

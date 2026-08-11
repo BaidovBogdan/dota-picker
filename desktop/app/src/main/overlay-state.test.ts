@@ -270,7 +270,7 @@ describe('createOverlayState position resolution', () => {
     });
   });
 
-  it('does not publish unresolved picks even after an orientation selection', () => {
+  it('publishes recognized visual groups immediately after an orientation selection', () => {
     const unresolved = engineState(null, 3);
     unresolved.latestAnalysis = null;
     unresolved.latestAnalysisId = null;
@@ -295,7 +295,10 @@ describe('createOverlayState position resolution', () => {
 
     const state = createOverlayState(unresolved, preferences, shortcut, new Map(), true);
 
-    assert.equal(state.picks.length, 0);
+    assert.deepEqual(
+      state.picks.map(({ side, slot, heroId }) => ({ side, slot, heroId })),
+      [{ side: 'ally', slot: 0, heroId: 27 }],
+    );
     assert.equal(state.draftOrientation.required, false);
   });
 });

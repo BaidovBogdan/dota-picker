@@ -37,7 +37,7 @@ export default function PickerScreen() {
   const isFocused = useIsFocused();
   const metaQuery = useQuery({
     queryKey: ['meta-snapshot', session?.userId, draftRank],
-    queryFn: () => getMetaSnapshot(draftRank),
+    queryFn: ({ signal }) => getMetaSnapshot(draftRank, signal),
     enabled: Boolean(session) && isFocused,
     staleTime: (query) => {
       if (isMetaSnapshotIncomplete(query.state.data)) return 0;

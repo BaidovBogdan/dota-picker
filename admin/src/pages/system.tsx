@@ -35,7 +35,7 @@ export function SystemPage({ resource, onRetry }: { resource: PageResource<Admin
 
       <div className="system-summary-grid">
         <Panel><span><Server size={18} /></span><div><small>API</small><strong>{system.summary.api.status === 'connected' ? 'Подключён' : system.summary.api.status}</strong></div></Panel>
-        <Panel><span><Database size={18} /></span><div><small>База данных</small><strong>{system.summary.database.status === 'connected' ? `Подключена · ${system.summary.database.latencyMs} мс` : 'Недоступна'}</strong></div></Panel>
+        <Panel><span><Database size={18} /></span><div><small>База данных</small><strong>{system.summary.database.status === 'connected' ? `Подключена · ${system.summary.database.latencyMs} мс` : 'Недоступна'}</strong>{system.summary.database.pool ? <small>Pool: {system.summary.database.pool.totalConnections}/{system.summary.database.pool.maxConnections} · idle {system.summary.database.pool.idleConnections} · wait {system.summary.database.pool.waitingRequests}</small> : null}</div></Panel>
         <Panel><span><Link2 size={18} /></span><div><small>Интеграции</small><strong>Подключено: {system.summary.connected} · готовы: {system.summary.connectable}</strong></div></Panel>
       </div>
 

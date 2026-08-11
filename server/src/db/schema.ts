@@ -12,6 +12,7 @@ import {
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
+import type { DraftSnapshotHero } from '../modules/heroes/heroes.types.js';
 
 export const accountKindEnum = pgEnum('account_kind', ['guest', 'user']);
 export const planEnum = pgEnum('plan', ['free', 'pro']);
@@ -20,6 +21,8 @@ export const analysisSourceEnum = pgEnum('analysis_source', ['manual', 'photo', 
 export const idempotencyStatusEnum = pgEnum('idempotency_status', ['in_progress', 'completed']);
 export const quotaReasonEnum = pgEnum('quota_reason', ['analysis', 'refund']);
 export const billingEventStatusEnum = pgEnum('billing_event_status', ['pending', 'processed']);
+export const draftSnapshotStatusEnum = pgEnum('draft_snapshot_status', ['building', 'ready', 'failed']);
+export const draftPairRelationEnum = pgEnum('draft_pair_relation', ['matchup', 'synergy']);
 export const otpPurposeEnum = pgEnum('otp_purpose', [
   'register',
   'login',
@@ -50,6 +53,7 @@ export const accounts = pgTable(
   (table) => [
     uniqueIndex('accounts_device_id_unique').on(table.deviceId),
     uniqueIndex('accounts_email_unique').on(table.email),
+    index('accounts_created_idx').on(table.createdAt, table.id),
     check('accounts_identity_check', sql`
       (${table.kind} = 'guest' and ${table.deviceId} is not null and ${table.email} is null and ${table.passwordHash} is null)
       or
@@ -126,6 +130,125 @@ export const analyses = pgTable(
   (table) => [
     index('analyses_account_created_idx').on(table.accountId, table.createdAt, table.id),
     index('analyses_account_status_created_idx').on(table.accountId, table.status, table.createdAt, table.id),
+    index('analyses_created_idx').on(table.createdAt, table.id),
+  ],
+);
+
+export const draftMetaSnapshots = pgTable(
+  'draft_meta_snapshots',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    patch: text('patch').notNull(),
+    population: text('population').notNull(),
+    populationVersion: integer('population_version').notNull().default(1),
+    snapshotVersion: integer('snapshot_version').notNull().default(1),
+    status: draftSnapshotStatusEnum('status').notNull().default('building'),
+    source: text('source').notNull().default('opendota_public_matches_explorer_positions'),
+    heroes: jsonb('heroes').$type<DraftSnapshotHero[]>().notNull().default(sql`'[]'::jsonb`),
+    matchCount: integer('match_count').notNull().default(0),
+    rankMatchCounts: jsonb('rank_match_counts')
+      .$type<Record<string, number>>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    generatedAt: timestamp('generated_at', { withTimezone: true }),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    failureCode: text('failure_code'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('draft_meta_snapshots_active_unique')
+      .on(table.patch, table.population)
+      .where(sql`${table.status} = 'building'`),
+    index('draft_meta_snapshots_ready_lookup_idx')
+      .on(table.patch, table.population, table.status, table.completedAt),
+    index('draft_meta_snapshots_expires_idx').on(table.expiresAt),
+    check('draft_meta_snapshots_match_count_check', sql`${table.matchCount} >= 0`),
+    check(
+      'draft_meta_snapshots_population_check',
+      sql`${table.population} in ('ranked_all_pick', 'public_all_pick')`,
+    ),
+    check('draft_meta_snapshots_population_version_check', sql`${table.populationVersion} = 1`),
+    check(
+      'draft_meta_snapshots_ready_fields_check',
+      sql`${table.status} <> 'ready' or (
+        ${table.generatedAt} is not null
+        and ${table.expiresAt} is not null
+        and ${table.completedAt} is not null
+        and ${table.expiresAt} >= ${table.generatedAt}
+        and jsonb_array_length(${table.heroes}) > 0
+      )`,
+    ),
+    check('draft_meta_snapshots_snapshot_version_check', sql`${table.snapshotVersion} = 1`),
+    check(
+      'draft_meta_snapshots_source_check',
+      sql`${table.source} in (
+        'opendota_public_matches_explorer_positions',
+        'opendota_public_matches_lane_roles'
+      )`,
+    ),
+    index('draft_meta_snapshots_population_ready_lookup_idx')
+      .on(table.population, table.status, table.completedAt),
+  ],
+);
+
+export const draftPairStats = pgTable(
+  'draft_pair_stats',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    snapshotId: uuid('snapshot_id')
+      .notNull()
+      .references(() => draftMetaSnapshots.id, { onDelete: 'cascade' }),
+    relation: draftPairRelationEnum('relation').notNull(),
+    selectedHeroId: integer('selected_hero_id').notNull(),
+    candidateHeroId: integer('candidate_hero_id').notNull(),
+    rankBucket: integer('rank_bucket').notNull().default(0),
+    games: integer('games').notNull(),
+    wins: integer('wins').notNull(),
+  },
+  (table) => [
+    uniqueIndex('draft_pair_stats_snapshot_unique')
+      .on(
+        table.snapshotId,
+        table.relation,
+        table.selectedHeroId,
+        table.candidateHeroId,
+        table.rankBucket,
+      ),
+    index('draft_pair_stats_snapshot_lookup_idx')
+      .on(table.snapshotId, table.relation, table.selectedHeroId, table.rankBucket),
+    check('draft_pair_stats_hero_check', sql`
+      ${table.selectedHeroId} > 0
+      and ${table.candidateHeroId} > 0
+      and ${table.selectedHeroId} <> ${table.candidateHeroId}
+    `),
+    check('draft_pair_stats_rank_bucket_check', sql`${table.rankBucket} between 0 and 8`),
+    check('draft_pair_stats_games_check', sql`${table.games} > 0 and ${table.wins} between 0 and ${table.games}`),
+  ],
+);
+
+export const draftPositionStats = pgTable(
+  'draft_position_stats',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    snapshotId: uuid('snapshot_id')
+      .notNull()
+      .references(() => draftMetaSnapshots.id, { onDelete: 'cascade' }),
+    heroId: integer('hero_id').notNull(),
+    position: integer('position').notNull(),
+    rankBucket: integer('rank_bucket').notNull().default(0),
+    games: integer('games').notNull(),
+    wins: integer('wins').notNull(),
+  },
+  (table) => [
+    uniqueIndex('draft_position_stats_snapshot_unique')
+      .on(table.snapshotId, table.heroId, table.position, table.rankBucket),
+    index('draft_position_stats_snapshot_lookup_idx')
+      .on(table.snapshotId, table.rankBucket, table.position),
+    check('draft_position_stats_hero_check', sql`${table.heroId} > 0`),
+    check('draft_position_stats_position_check', sql`${table.position} between 1 and 5`),
+    check('draft_position_stats_rank_bucket_check', sql`${table.rankBucket} between 0 and 8`),
+    check('draft_position_stats_games_check', sql`${table.games} > 0 and ${table.wins} between 0 and ${table.games}`),
   ],
 );
 
@@ -218,7 +341,10 @@ export const billingEvents = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [index('billing_events_account_created_idx').on(table.accountId, table.createdAt)],
+  (table) => [
+    index('billing_events_account_created_idx').on(table.accountId, table.createdAt),
+    index('billing_events_created_idx').on(table.createdAt, table.eventId),
+  ],
 );
 
 export const billingTombstones = pgTable(

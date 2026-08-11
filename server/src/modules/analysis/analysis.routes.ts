@@ -1,8 +1,9 @@
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import type { AppConfig } from '../../config/env.js';
+import { ConcurrencyLimiter } from '../../lib/concurrency-limiter.js';
 import { AppError, RateLimitError, UnauthorizedError } from '../../lib/errors.js';
-import { errorResponseSchema, idempotencyHeadersSchema, paginationQuerySchema } from '../../lib/schemas.js';
+import { errorResponseSchema, idempotencyHeadersSchema } from '../../lib/schemas.js';
 import type { OpenDotaAdapter } from '../heroes/opendota.adapter.js';
 import type { IdempotencyService } from '../idempotency/idempotency.service.js';
 import type { PhotoRecognizer } from '../photo/photo-recognizer.js';
@@ -18,6 +19,7 @@ import {
   desktopAnalysisQuerySchema,
   desktopAnalysisResponseSchema,
   historyDetailResponseSchema,
+  historyQuerySchema,
   historyResponseSchema,
   overwolfAnalysisResponseSchema,
 } from './analysis.schemas.js';
@@ -59,6 +61,22 @@ const maximumDesktopRevisionFrames = 24;
 
 export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZod {
   return async (app) => {
+    const recognitionLimiter = new ConcurrencyLimiter(dependencies.config.recognition.concurrency);
+    const recognize = async (...args: Parameters<typeof recognizeDraftImage>) => {
+      const release = recognitionLimiter.tryAcquire();
+      if (!release) {
+        throw new AppError(
+          503,
+          'RECOGNITION_BUSY',
+          'Image recognition is temporarily at capacity; retry shortly',
+        );
+      }
+      try {
+        return await recognizeDraftImage(...args);
+      } finally {
+        release();
+      }
+    };
     const desktopUserRateLimit = app.createRateLimit({
       max: 12,
       timeWindow: '1 minute',
@@ -203,7 +221,6 @@ export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZo
         }
         throw error;
       }
-      await dependencies.idempotencyService.complete(claim.id, claim.leaseToken, response);
       return response;
     });
 
@@ -240,37 +257,32 @@ export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZo
 
       let response;
       try {
-        const analysisResponse = await dependencies.analysisService.analyze(
+        response = await dependencies.analysisService.analyze(
           request.user.sub,
           request.body,
           {
             idempotencyRecordId: claim.id,
             leaseToken: claim.leaseToken,
             resourceId: claim.resourceId,
-          }
+          },
+          (analysisResponse) => ({
+            ...analysisResponse,
+            liveSession: issueLiveSession(
+              'overwolf-live-session',
+              request.user.sub,
+              request.user.kind,
+              request.user.ver,
+              analysisResponse.analysis.id,
+              0,
+            ),
+          }),
         );
-        response = {
-          ...analysisResponse,
-          liveSession: issueLiveSession(
-            'overwolf-live-session',
-            request.user.sub,
-            request.user.kind,
-            request.user.ver,
-            analysisResponse.analysis.id,
-            0
-          ),
-        };
       } catch (error) {
         if (!(error instanceof AnalysisConsistencyError)) {
           await dependencies.idempotencyService.abort(claim.id, claim.leaseToken);
         }
         throw error;
       }
-      await dependencies.idempotencyService.complete(
-        claim.id,
-        claim.leaseToken,
-        response
-      );
       return response;
     });
 
@@ -324,7 +336,7 @@ export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZo
 
       let response;
       try {
-        const revisionResponse = await dependencies.analysisService.reviseOverwolf(
+        response = await dependencies.analysisService.reviseOverwolf(
           request.user.sub,
           request.params.id,
           claims.revision,
@@ -333,29 +345,26 @@ export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZo
             idempotencyRecordId: claim.id,
             leaseToken: claim.leaseToken,
             resourceId: claim.resourceId,
-          }
+          },
+          (revisionResponse) => {
+            const { revision, ...analysisResponse } = revisionResponse;
+            return {
+              ...analysisResponse,
+              liveSession: issueLiveSession(
+                'overwolf-live-session',
+                request.user.sub,
+                request.user.kind,
+                request.user.ver,
+                request.params.id,
+                revision,
+              ),
+            };
+          },
         );
-        const { revision, ...analysisResponse } = revisionResponse;
-        response = {
-          ...analysisResponse,
-          liveSession: issueLiveSession(
-            'overwolf-live-session',
-            request.user.sub,
-            request.user.kind,
-            request.user.ver,
-            request.params.id,
-            revision
-          ),
-        };
       } catch (error) {
         await dependencies.idempotencyService.abort(claim.id, claim.leaseToken);
         throw error;
       }
-      await dependencies.idempotencyService.complete(
-        claim.id,
-        claim.leaseToken,
-        response
-      );
       return response;
     });
 
@@ -424,7 +433,7 @@ export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZo
 
       let response;
       try {
-        response = await recognizeDraftImage(
+        response = await recognize(
           upload,
           dependencies.photoAdapter,
           dependencies.metaAdapter,
@@ -544,7 +553,7 @@ export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZo
           );
         }
 
-        const recognition = await recognizeDraftImage(
+        const recognition = await recognize(
           upload,
           dependencies.photoAdapter,
           dependencies.metaAdapter,
@@ -592,41 +601,43 @@ export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZo
               leaseToken: sessionClaim.leaseToken,
               resourceId: sessionClaim.resourceId,
             },
+            (analysisResponse) => {
+              const analysisPosition = analysisResponse.analysis.input.position;
+              const completedRecognition = request.query.autoPosition
+                ? {
+                    ...recognition,
+                    detectedPosition: (
+                      analysisPosition !== request.query.position
+                      || recognition.detectedPosition === analysisPosition
+                    )
+                      ? analysisPosition
+                      : null,
+                  }
+                : recognition;
+              return {
+                status: 'completed' as const,
+                revision: request.query.revision,
+                frameHash: upload.frameHash,
+                recognition: completedRecognition,
+                ...analysisResponse,
+                liveSession: issueLiveSession(
+                  'desktop-live-session',
+                  request.user.sub,
+                  request.user.kind,
+                  request.user.ver,
+                  analysisResponse.analysis.id,
+                  0,
+                ),
+              };
+            },
+            [{
+              idempotencyRecordId: frameClaim.id,
+              leaseToken: frameClaim.leaseToken,
+              resourceId: frameClaim.resourceId,
+            }],
           );
           analysisCommitted = true;
-          const analysisPosition = analyzed.analysis.input.position;
-          const completedRecognition = request.query.autoPosition
-            ? {
-                ...recognition,
-                detectedPosition: (
-                  analysisPosition !== request.query.position
-                  || recognition.detectedPosition === analysisPosition
-                )
-                  ? analysisPosition
-                  : null,
-              }
-            : recognition;
-          response = {
-            status: 'completed' as const,
-            revision: request.query.revision,
-            frameHash: upload.frameHash,
-            recognition: completedRecognition,
-            analysis: analyzed.analysis,
-            quota: analyzed.quota,
-            liveSession: issueLiveSession(
-              'desktop-live-session',
-              request.user.sub,
-              request.user.kind,
-              request.user.ver,
-              analyzed.analysis.id,
-              0,
-            ),
-          };
-          await dependencies.idempotencyService.complete(
-            sessionClaim.id,
-            sessionClaim.leaseToken,
-            response,
-          );
+          response = analyzed;
         }
       } catch (error) {
         if (!(error instanceof AnalysisConsistencyError)) {
@@ -644,11 +655,13 @@ export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZo
         throw error;
       }
 
-      await dependencies.idempotencyService.complete(
-        frameClaim.id,
-        frameClaim.leaseToken,
-        response,
-      );
+      if (!analysisCommitted) {
+        await dependencies.idempotencyService.complete(
+          frameClaim.id,
+          frameClaim.leaseToken,
+          response,
+        );
+      }
       return desktopAnalysisResponseSchema.parse(response);
     });
 
@@ -737,7 +750,7 @@ export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZo
 
       let response;
       try {
-        const recognition = await recognizeDraftImage(
+        const recognition = await recognize(
           upload,
           dependencies.photoAdapter,
           dependencies.metaAdapter,
@@ -762,7 +775,7 @@ export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZo
           ),
           request.query.rank,
         );
-        const revisionResponse = await dependencies.analysisService.reviseDesktop(
+        response = await dependencies.analysisService.reviseDesktop(
           request.user.sub,
           request.params.id,
           claims.revision,
@@ -773,51 +786,51 @@ export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZo
             resourceId: frameClaim.resourceId,
           },
           maximumLiveRevisions,
-        );
-
-        if (decision.status === 'waiting') {
-          response = {
-            status: 'waiting' as const,
-            reason: decision.reason,
-            revision: request.query.revision,
-            frameHash: upload.frameHash,
-            recognition,
-            quota: revisionResponse.quota,
-          };
-        } else {
-          const analysisPosition = revisionResponse.analysis.input.position;
-          const completedRecognition = request.query.autoPosition
-            ? {
-                ...recognition,
-                detectedPosition: (
-                  analysisPosition !== request.query.position
-                  || recognition.detectedPosition === analysisPosition
-                )
-                  ? analysisPosition
-                  : null,
-              }
-            : recognition;
-          response = {
-            status: 'completed' as const,
-            revision: request.query.revision,
-            frameHash: upload.frameHash,
-            recognition: completedRecognition,
-            analysis: revisionResponse.analysis,
-            quota: revisionResponse.quota,
-            ...(revisionResponse.changed
+          (revisionResponse) => {
+            if (decision.status === 'waiting') {
+              return {
+                status: 'waiting' as const,
+                reason: decision.reason,
+                revision: request.query.revision,
+                frameHash: upload.frameHash,
+                recognition,
+                quota: revisionResponse.quota,
+              };
+            }
+            const analysisPosition = revisionResponse.analysis.input.position;
+            const completedRecognition = request.query.autoPosition
               ? {
-                  liveSession: issueLiveSession(
-                    'desktop-live-session',
-                    request.user.sub,
-                    request.user.kind,
-                    request.user.ver,
-                    request.params.id,
-                    revisionResponse.revision,
-                  ),
+                  ...recognition,
+                  detectedPosition: (
+                    analysisPosition !== request.query.position
+                    || recognition.detectedPosition === analysisPosition
+                  )
+                    ? analysisPosition
+                    : null,
                 }
-              : {}),
-          };
-        }
+              : recognition;
+            return {
+              status: 'completed' as const,
+              revision: request.query.revision,
+              frameHash: upload.frameHash,
+              recognition: completedRecognition,
+              analysis: revisionResponse.analysis,
+              quota: revisionResponse.quota,
+              ...(revisionResponse.changed
+                ? {
+                    liveSession: issueLiveSession(
+                      'desktop-live-session',
+                      request.user.sub,
+                      request.user.kind,
+                      request.user.ver,
+                      request.params.id,
+                      revisionResponse.revision,
+                    ),
+                  }
+                : {}),
+            };
+          },
+        );
       } catch (error) {
         await dependencies.idempotencyService.abort(
           frameClaim.id,
@@ -826,11 +839,6 @@ export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZo
         throw error;
       }
 
-      await dependencies.idempotencyService.complete(
-        frameClaim.id,
-        frameClaim.leaseToken,
-        response,
-      );
       return desktopAnalysisResponseSchema.parse(response);
     });
 
@@ -839,13 +847,14 @@ export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZo
       schema: {
         tags: ['Analyses'],
         security: [{ bearerAuth: [] }],
-        querystring: paginationQuerySchema,
+        querystring: historyQuerySchema,
         response: { 200: historyResponseSchema },
       },
     }, async (request) => dependencies.analysisService.history(
       request.user.sub,
       request.query.limit,
       request.query.cursor,
+      request.query.view,
     ));
 
     app.get('/history/:id', {
