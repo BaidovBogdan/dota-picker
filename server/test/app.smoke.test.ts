@@ -130,9 +130,15 @@ describe('application composition', () => {
 
     const catalog = await app.inject({ method: 'GET', url: '/v1/heroes' });
     const meta = await app.inject({ method: 'GET', url: '/v1/heroes/meta-positions' });
+    const notModified = await app.inject({
+      method: 'GET',
+      url: '/v1/heroes',
+      headers: { 'if-none-match': `W/${catalog.headers.etag}` },
+    });
 
     expect(catalog.statusCode).toBe(200);
     expect(catalog.json()).toMatchObject({ heroes: [{ id: 1 }], patch: '7.41' });
+    expect(notModified.statusCode).toBe(304);
     expect(meta.statusCode).toBe(200);
     expect(meta.json()).toMatchObject({
       heroes: [],

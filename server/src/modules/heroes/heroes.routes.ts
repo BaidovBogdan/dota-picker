@@ -35,7 +35,9 @@ function setPublicCache(
   const requestedEtags = request.headers['if-none-match']
     ?.split(',')
     .map((value) => value.trim());
-  if (requestedEtags?.includes('*') || requestedEtags?.includes(etag)) {
+  if (requestedEtags?.some((candidate) => (
+    candidate === '*' || candidate.replace(/^W\//, '') === etag
+  ))) {
     reply.code(304).send();
     return true;
   }
