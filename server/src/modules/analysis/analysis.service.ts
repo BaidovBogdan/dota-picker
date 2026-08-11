@@ -680,15 +680,15 @@ export class AnalysisService {
       draft.enemyHeroIds,
       draft.allyHeroIds,
     );
+    const pairAvailability = snapshot.pairScope?.availability;
+    const positionAvailability = snapshot.positionMeta?.availability;
     if (
-      (snapshot.pairScope !== null
-        && snapshot.pairScope.availability !== 'ready')
-      || (snapshot.positionMeta !== undefined
-        && snapshot.positionMeta.availability !== 'ready')
+      (pairAvailability !== undefined && pairAvailability !== 'ready')
+      || (positionAvailability !== undefined && positionAvailability !== 'ready')
     ) {
-      const pairAvailability = snapshot.pairScope?.availability ?? 'unavailable';
-      const positionAvailability = snapshot.positionMeta?.availability ?? 'unavailable';
-      const dataUnavailable = pairAvailability === 'unavailable'
+      const resolvedPairAvailability = pairAvailability ?? 'unavailable';
+      const resolvedPositionAvailability = positionAvailability ?? 'unavailable';
+      const dataUnavailable = resolvedPairAvailability === 'unavailable'
         || snapshot.dataHealth?.availability === 'unavailable';
       throw new AppError(
         503,
@@ -697,8 +697,8 @@ export class AnalysisService {
           ? 'Draft data snapshot is temporarily unavailable'
           : 'Draft data snapshot is collecting and no complete recommendation was persisted',
         {
-          pairAvailability,
-          positionAvailability,
+          pairAvailability: resolvedPairAvailability,
+          positionAvailability: resolvedPositionAvailability,
           dataHealth: snapshot.dataHealth ?? null,
           retryAfterSeconds: dataUnavailable ? 60 : 15,
           retryable: true,

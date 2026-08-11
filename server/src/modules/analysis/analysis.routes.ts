@@ -27,7 +27,9 @@ import { AnalysisConsistencyError, type AnalysisService } from './analysis.servi
 import { createDesktopDraft, resolveDesktopPosition } from './desktop-analysis.js';
 
 type Dependencies = {
-  config: AppConfig;
+  config: Omit<AppConfig, 'recognition'> & {
+    recognition?: AppConfig['recognition'];
+  };
   analysisService: AnalysisService;
   idempotencyService: IdempotencyService;
   photoAdapter: PhotoRecognizer;
@@ -61,7 +63,9 @@ const maximumDesktopRevisionFrames = 24;
 
 export function analysisRoutes(dependencies: Dependencies): FastifyPluginAsyncZod {
   return async (app) => {
-    const recognitionLimiter = new ConcurrencyLimiter(dependencies.config.recognition.concurrency);
+    const recognitionLimiter = new ConcurrencyLimiter(
+      dependencies.config.recognition?.concurrency ?? 2,
+    );
     const recognize = async (...args: Parameters<typeof recognizeDraftImage>) => {
       const release = recognitionLimiter.tryAcquire();
       if (!release) {
